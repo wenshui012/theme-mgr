@@ -2,7 +2,7 @@
 
 > SillyTavern 主题美化管理扩展 —— 让你的 100+ 主题不再混乱
 
-**作者：wenshui**
+**作者：温水**
 
 **感谢毛毛雨老师以及美化群各位二改老师，她们是本扩展得以出生的最大动力**
 **感谢毛毛雨老师的主题一键换图插件，UI方面多有参考**
@@ -40,10 +40,10 @@
 ### 方法二：手动安装
 
 1. 下载本仓库的 zip 文件
-2. 解压到 `SillyTavern/data/default-user/extensions/` 目录下
+2. 解压到 `/SillyTavern/public/scripts/extensions/third-party/` 目录下
 3. 确保目录结构为：
    ```
-   extensions/
+   third-party/
    └── theme-manager/
        ├── index.js
        └── manifest.json
