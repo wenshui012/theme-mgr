@@ -1,6 +1,7 @@
 {
   "display_name": "美化管理 v2.5",
-  "version": "2.5.0",
+  "version": "2.5.1",
+  "author": "wenshui",
   "js": "index.js",
   "description": "v2.5: 对接ST主题API，一键切换主题，分类/标签/收藏/排序/批量操作/预览截图管理"
 }

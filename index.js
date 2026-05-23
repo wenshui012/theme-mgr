@@ -548,6 +548,7 @@
     }
 
     // ── 打开全屏主界面 ────────────────────────────────────────
+    var _popupReady = false;
     function openPopup() {
         if (document.querySelector('.tm-overlay')) return;
         injectStyles();
@@ -587,6 +588,10 @@
             '</div>';
 
         document.body.appendChild(ov);
+
+        // 防止悬浮球点击穿透到卡片上，延迟 350ms 才允许卡片交互
+        _popupReady = false;
+        setTimeout(function () { _popupReady = true; }, 350);
 
         // 绑定事件
         ov.querySelector('#tm-x').addEventListener('click', closePopup);
@@ -795,6 +800,7 @@
         } else {
             area.querySelectorAll('.tm-card').forEach(function (card) {
                 card.addEventListener('click', function (e) {
+                    if (!_popupReady) return;
                     if (e.target.closest('.tm-card-menu')) return;
                     var name = card.dataset.name;
                     var dd = load();
