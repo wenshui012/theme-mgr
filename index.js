@@ -114,13 +114,6 @@
 
     function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
 
-    function hashHue(text) {
-        var h = 0;
-        text = String(text || '');
-        for (var i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) % 360;
-        return h;
-    }
-
     // ── ST 主题列表获取（多策略）──────────────────────────────
     function fetchThemeList(cb) {
         var found = false;
@@ -897,8 +890,8 @@
             '.tm-card-info{padding:5px 7px 6px;background:var(--tm-card-bg,rgba(127,127,127,.06));min-height:36px;box-sizing:border-box;}',
             '.tm-card-name{font-size:.8em;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tm-text,#eee);}',
             '.tm-card-tag{font-size:.68em;line-height:1.2;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tm-text,#aaa);opacity:.5;}',
-            '.tm-card-noimg{display:flex;align-items:center;justify-content:center;width:100%;height:100%;}',
-            '.tm-card-noimg i{font-size:2em;opacity:.15;color:inherit;}',
+            '.tm-card-noimg{display:flex;flex-direction:column;align-items:center;gap:6px;opacity:.3;font-size:.75em;width:100%;height:100%;justify-content:center;}',
+            '.tm-card-noimg i{font-size:2em;}',
             '.tm-card.no-img{background:rgba(127,127,127,.08);}',
             '.tm-badge-on{position:absolute;top:5px;right:5px;width:20px;height:20px;border-radius:50%;background:var(--SmartThemeQuoteColor,#7c6daf);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.6em;box-shadow:0 2px 6px rgba(0,0,0,.3);}',
             '.tm-badge-star{position:absolute;top:5px;left:5px;font-size:.85em;color:#f0b860;filter:drop-shadow(0 1px 3px rgba(0,0,0,.5));}',
@@ -1233,8 +1226,6 @@
                 (searchQuery ? '没有匹配「' + esc(searchQuery) + '」的主题' : (curCat !== '__all__' ? '该分类暂无主题' : '没有找到主题，请点击底栏刷新按钮')) +
                 '</span></div>';
         } else {
-            var gridOverlay = document.querySelector('.tm-overlay');
-            var isDarkGrid = gridOverlay ? gridOverlay.classList.contains('tm-dark') : darkMode;
             list.forEach(function (name) {
                 var meta = d.themeMeta[name] || {};
                 var isActive = curTheme === name;
@@ -1244,22 +1235,14 @@
                 var starBadge = (meta.starred && !batchMode) ? '<div class="tm-badge-star"><i class="fa-solid fa-star"></i></div>' : '';
                 var freqBadge = (d.showFreq !== false && (meta.useCount || 0) > 5 && !batchMode) ? '<div class="tm-badge-freq">' + meta.useCount + '次</div>' : '';
 
-                var noImage = !meta.imageData;
-                var imgContent;
-                if (meta.imageData) {
-                    imgContent = '<img src="' + esc(meta.imageData) + '" alt="' + esc(name) + '" />';
-                } else {
-                    var hue = hashHue(name);
-                    var gradStyle = isDarkGrid
-                        ? 'background:linear-gradient(135deg,hsl(' + hue + ',25%,22%),hsl(' + ((hue + 40) % 360) + ',20%,16%));'
-                        : 'background:linear-gradient(135deg,hsl(' + hue + ',35%,80%),hsl(' + ((hue + 40) % 360) + ',30%,70%));';
-                    imgContent = '<div class="tm-card-noimg" style="' + gradStyle + '"><i class="fa-solid fa-palette"></i></div>';
-                }
+                var imgContent = meta.imageData
+                    ? '<img src="' + meta.imageData + '" alt="' + esc(name) + '" />'
+                    : '<div class="tm-card-noimg"><i class="fa-solid fa-palette"></i><span>' + esc(name.slice(0, 6)) + '</span></div>';
 
                 var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-name="' + esc(name) + '" title="操作"><i class="fa-solid fa-ellipsis"></i></button>';
                 var tagText = (meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || '');
 
-                html += '<div class="tm-card' + (isActive ? ' on' : '') + (bsel ? ' batch-sel' : '') + (noImage ? ' no-img' : '') + '" data-name="' + esc(name) + '">' +
+                html += '<div class="tm-card' + (isActive ? ' on' : '') + (bsel ? ' batch-sel' : '') + (meta.imageData ? '' : ' no-img') + '" data-name="' + esc(name) + '">' +
                     '<div class="tm-card-img">' + checkBox + imgContent + badge + starBadge + freqBadge + menuBtn + '</div>' +
                     '<div class="tm-card-info"><div class="tm-card-name">' + esc(name) + '</div>' +
                     (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
