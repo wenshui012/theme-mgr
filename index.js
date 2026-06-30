@@ -496,8 +496,12 @@
             '.tm-tag-add-row{display:flex;gap:6px;margin-top:6px;}',
             '.tm-tag-add-row input{flex:1;background:rgba(127,127,127,.08);border:1px solid rgba(127,127,127,.2);border-radius:8px;color:inherit;padding:6px 10px;font-size:.82em;font-family:inherit;box-sizing:border-box;}',
             '.tm-tag-add-row input:focus{outline:none;border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
-            '.tm-cat-item{display:flex;align-items:center;gap:8px;padding:9px 12px;background:rgba(127,127,127,.06);border-radius:9px;border:1px solid rgba(127,127,127,.1);transition:all .15s;margin-bottom:7px;}',
+            '.tm-cat-item{display:flex;align-items:center;gap:8px;padding:9px 12px;background:rgba(127,127,127,.06);border-radius:9px;border:1px solid rgba(127,127,127,.1);transition:none;margin-bottom:7px;}',
             '.tm-cat-item:hover{background:rgba(127,127,127,.11);}',
+            '.tm-cat-item.drag-over-top{border-top:2px solid var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-cat-item.drag-over-bottom{border-bottom:2px solid var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-cat-item.dragging{opacity:.3;}',
+            '.tm-drag-handle{opacity:.35;cursor:grab;padding:0 6px;font-size:.9em;touch-action:none;}',
             '.tm-cat-name{flex:1;font-size:.88em;}',
             '.tm-cat-count{font-size:.74em;opacity:.45;}',
             '.tm-cat-add-row{display:flex;gap:8px;}',
@@ -1055,9 +1059,7 @@
             ? '<div class="tm-empty"><i class="fa-solid fa-tags"></i><span>还没有分类</span></div>'
             : d.categories.map(function (cat, idx) {
                 var n = 0; for (var k in d.themeMeta) { if (d.themeMeta[k].category === cat) n++; }
-                return '<div class="tm-cat-item"><span class="tm-cat-name">' + esc(cat) + '</span><span class="tm-cat-count">' + n + '个</span>' +
-                    (idx > 0 ? '<button class="tm-btn-sm tm-cat-up" data-idx="' + idx + '"><i class="fa-solid fa-arrow-up"></i></button>' : '') +
-                    (idx < d.categories.length - 1 ? '<button class="tm-btn-sm tm-cat-down" data-idx="' + idx + '"><i class="fa-solid fa-arrow-down"></i></button>' : '') +
+                return '<div class="tm-cat-item" data-idx="' + idx + '"><span class="tm-drag-handle" draggable="true" data-idx="' + idx + '"><i class="fa-solid fa-grip-vertical"></i></span><span class="tm-cat-name">' + esc(cat) + '</span><span class="tm-cat-count">' + n + '个</span>' +
                     '<button class="tm-btn-sm tm-cat-ren" data-idx="' + idx + '"><i class="fa-solid fa-pen"></i></button>' +
                     '<button class="tm-btn-sm tm-cat-del" data-idx="' + idx + '"><i class="fa-solid fa-trash"></i></button></div>';
             }).join('');
@@ -1070,6 +1072,65 @@
         ].join(''));
 
         var inp = sheet.querySelector('#tm-newcat');
+        var dragFrom = null;
+        var dragTo = null;
+        var dragGhost = null;
+        var touchOffsetY = 0;
+
+        function clearDropMarks() {
+            sheet.querySelectorAll('.tm-cat-item').forEach(function (item) {
+                item.classList.remove('drag-over-top', 'drag-over-bottom');
+            });
+        }
+        function clearDragState() {
+            clearDropMarks();
+            sheet.querySelectorAll('.tm-cat-item').forEach(function (item) {
+                item.classList.remove('dragging');
+            });
+            if (dragGhost && dragGhost.parentNode) dragGhost.parentNode.removeChild(dragGhost);
+            dragGhost = null;
+        }
+        function getInsertIndex(item, clientY) {
+            var idx = parseInt(item.dataset.idx, 10);
+            var rect = item.getBoundingClientRect();
+            return clientY > rect.top + rect.height / 2 ? idx + 1 : idx;
+        }
+        function markInsert(item, clientY) {
+            var rect = item.getBoundingClientRect();
+            clearDropMarks();
+            item.classList.add(clientY > rect.top + rect.height / 2 ? 'drag-over-bottom' : 'drag-over-top');
+        }
+        function moveCategory(from, to) {
+            var dd = load();
+            if (from === null || to === null || from < 0 || from >= dd.categories.length) return;
+            if (to < 0) to = 0;
+            if (to > dd.categories.length) to = dd.categories.length;
+            if (to === from || to === from + 1) return;
+            var cat = dd.categories.splice(from, 1)[0];
+            if (to > from) to--;
+            dd.categories.splice(to, 0, cat);
+            save(dd); closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('已调整顺序');
+        }
+        function updateTouchInsert(clientY) {
+            var items = sheet.querySelectorAll('.tm-cat-item');
+            var last = null;
+            clearDropMarks();
+            for (var i = 0; i < items.length; i++) {
+                var item = items[i];
+                var rect = item.getBoundingClientRect();
+                last = item;
+                if (clientY < rect.top + rect.height / 2) {
+                    dragTo = parseInt(item.dataset.idx, 10);
+                    item.classList.add('drag-over-top');
+                    return;
+                }
+            }
+            if (last) {
+                dragTo = parseInt(last.dataset.idx, 10) + 1;
+                last.classList.add('drag-over-bottom');
+            }
+        }
+
         sheet.querySelector('#tm-newadd').addEventListener('click', function () {
             var name = inp.value.trim(); if (!name) return;
             var dd = load();
@@ -1077,6 +1138,78 @@
             else toast('分类已存在', true);
         });
         inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') sheet.querySelector('#tm-newadd').click(); });
+        sheet.querySelectorAll('.tm-drag-handle').forEach(function (handle) {
+            handle.addEventListener('dragstart', function (e) {
+                dragFrom = parseInt(handle.dataset.idx, 10);
+                dragTo = dragFrom;
+                handle.closest('.tm-cat-item').classList.add('dragging');
+                if (e.dataTransfer) {
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', String(dragFrom));
+                }
+            });
+            handle.addEventListener('dragend', function () {
+                clearDragState();
+                dragFrom = null; dragTo = null;
+            });
+            handle.addEventListener('touchstart', function (e) {
+                if (!e.touches || !e.touches.length) return;
+                e.preventDefault();
+                dragFrom = parseInt(handle.dataset.idx, 10);
+                dragTo = dragFrom;
+                var touch = e.touches[0];
+                var item = handle.closest('.tm-cat-item');
+                var rect = item.getBoundingClientRect();
+                touchOffsetY = touch.clientY - rect.top;
+                dragGhost = item.cloneNode(true);
+                dragGhost.style.position = 'fixed';
+                dragGhost.style.left = rect.left + 'px';
+                dragGhost.style.top = rect.top + 'px';
+                dragGhost.style.width = rect.width + 'px';
+                dragGhost.style.margin = '0';
+                dragGhost.style.pointerEvents = 'none';
+                dragGhost.style.opacity = '.8';
+                dragGhost.style.zIndex = '99';
+                sheet.appendChild(dragGhost);
+                item.classList.add('dragging');
+                updateTouchInsert(touch.clientY);
+            }, { passive: false });
+            handle.addEventListener('touchmove', function (e) {
+                if (!e.touches || !e.touches.length || dragFrom === null) return;
+                e.preventDefault();
+                var touch = e.touches[0];
+                if (dragGhost) dragGhost.style.top = (touch.clientY - touchOffsetY) + 'px';
+                updateTouchInsert(touch.clientY);
+            }, { passive: false });
+            handle.addEventListener('touchend', function (e) {
+                if (dragFrom === null) return;
+                e.preventDefault();
+                var from = dragFrom; var to = dragTo;
+                clearDragState();
+                dragFrom = null; dragTo = null;
+                moveCategory(from, to);
+            }, { passive: false });
+            handle.addEventListener('touchcancel', function () {
+                clearDragState();
+                dragFrom = null; dragTo = null;
+            });
+        });
+        sheet.querySelectorAll('.tm-cat-item').forEach(function (item) {
+            item.addEventListener('dragover', function (e) {
+                if (dragFrom === null) return;
+                e.preventDefault();
+                dragTo = getInsertIndex(item, e.clientY);
+                markInsert(item, e.clientY);
+            });
+            item.addEventListener('drop', function (e) {
+                if (dragFrom === null) return;
+                e.preventDefault();
+                var from = dragFrom; var to = getInsertIndex(item, e.clientY);
+                clearDragState();
+                dragFrom = null; dragTo = null;
+                moveCategory(from, to);
+            });
+        });
         sheet.querySelectorAll('.tm-cat-ren').forEach(function (btn) {
             btn.addEventListener('click', function () {
                 var dd = load(); var idx = parseInt(btn.dataset.idx); var old = dd.categories[idx];
@@ -1084,15 +1217,6 @@
                 nw = nw.trim(); dd.categories[idx] = nw;
                 for (var k in dd.themeMeta) { if (dd.themeMeta[k].category === old) dd.themeMeta[k].category = nw; }
                 save(dd); closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('已重命名');
-            });
-        });
-        sheet.querySelectorAll('.tm-cat-up,.tm-cat-down').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                var dd = load(); var idx = parseInt(btn.dataset.idx);
-                var target = btn.classList.contains('tm-cat-up') ? idx - 1 : idx + 1;
-                if (target < 0 || target >= dd.categories.length) return;
-                var tmp = dd.categories[idx]; dd.categories[idx] = dd.categories[target]; dd.categories[target] = tmp;
-                save(dd); closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('已调整顺序');
             });
         });
         sheet.querySelectorAll('.tm-cat-del').forEach(function (btn) {
