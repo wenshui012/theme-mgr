@@ -991,6 +991,7 @@
             '<div class="tm-btn-row" style="margin-top:8px">' +
             '<button class="tm-btn tm-btn-outline" id="tm-exp"><i class="fa-solid fa-download"></i> 导出标注</button>' +
             '<button class="tm-btn tm-btn-outline" id="tm-imp"><i class="fa-solid fa-upload"></i> 导入标注</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-imp-theme"><i class="fa-solid fa-file-import"></i> 导入美化</button>' +
             '<button class="tm-btn tm-btn-danger" id="tm-clear">清空标注</button>' +
             '</div>',
             '<div class="tm-hint" style="margin-top:8px">※ 主题文件本身由 ST 管理，这里只导出/导入你添加的分类、标签、截图等附加信息</div>',
@@ -1036,6 +1037,41 @@
                             if (imported.categories) imported.categories.forEach(function (c) { if (dd.categories.indexOf(c) === -1) dd.categories.push(c); });
                             save(dd); renderCatbar(); renderGrid(); toast('✅ 导入成功');
                         } else { toast('文件格式不正确', true); }
+                    } catch (err) { toast('解析失败', true); }
+                };
+                reader.readAsText(inp.files[0], 'utf-8');
+            });
+            inp.click();
+        });
+        sheet.querySelector('#tm-imp-theme').addEventListener('click', function () {
+            var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
+            inp.addEventListener('change', function () {
+                if (!inp.files[0]) return;
+                var reader = new FileReader();
+                reader.onload = function (e) {
+                    try {
+                        var theme = JSON.parse(e.target.result);
+                        if (!theme || !theme.name || !String(theme.name).trim()) { toast('主题文件缺少 name 字段', true); return; }
+                        theme.name = String(theme.name).trim();
+                        if (typeof theme.custom_css === 'string' && /@import/i.test(theme.custom_css)) {
+                            if (!confirm('检测到 custom_css 中包含 @import。\n导入外部样式可能带来加载失败或安全风险，仍要继续吗？')) return;
+                        }
+                        if (stThemeList.indexOf(theme.name) !== -1) {
+                            if (!confirm('主题「' + theme.name + '」已存在，继续导入将覆盖同名主题。是否继续？')) return;
+                        }
+                        fetch('/api/themes/save', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(theme),
+                        })
+                            .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r; })
+                            .then(function () {
+                                fetchThemeList(function () {
+                                    renderCatbar(); renderGrid(); renderBottomStatus();
+                                    toast('✅ 已导入美化：' + theme.name);
+                                });
+                            })
+                            .catch(function () { toast('导入美化失败', true); });
                     } catch (err) { toast('解析失败', true); }
                 };
                 reader.readAsText(inp.files[0], 'utf-8');
