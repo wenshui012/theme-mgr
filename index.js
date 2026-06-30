@@ -262,18 +262,45 @@
             });
     }
 
-    function fillBackgroundSelect(sel, selectedName) {
-        if (!sel) return;
+    function buildBackgroundBindHtml(backgroundName) {
+        var thumb = backgroundName
+            ? '<div class="tm-bg-bind-thumb" style="background-image:' + esc(getBackgroundCssUrl(backgroundName)) + '"></div>'
+            : '<div class="tm-bg-bind-thumb empty"><i class="fa-regular fa-image"></i></div>';
+        var title = backgroundName ? esc(backgroundName) : '不绑定背景';
+        var sub = backgroundName ? '点击更换绑定壁纸' : '点击选择 ST 已导入壁纸';
+        return thumb +
+            '<div class="tm-bg-bind-info"><div class="tm-bg-bind-name">' + title + '</div><div class="tm-bg-bind-sub">' + sub + '</div></div>' +
+            '<i class="fa-solid fa-chevron-right"></i>';
+    }
+
+    function openBackgroundPickerSheet(selectedName, onPick) {
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-image"></i>选择绑定背景</div>',
+            '<div class="tm-bg-picker-list" id="tm-bg-picker-list"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取壁纸…</span></div></div>',
+        ].join(''));
+        var list = sheet.querySelector('#tm-bg-picker-list');
+
+        function choose(name) {
+            if (onPick) onPick(name);
+            closeSheet(sheet);
+        }
+
         getBackgroundList(function (backgrounds) {
-            var html = '<option value="">不绑定背景</option>';
+            var html = '<button type="button" class="tm-bg-picker-card' + (!selectedName ? ' on' : '') + '" data-bg="">' +
+                '<div class="tm-bg-picker-thumb empty"><i class="fa-regular fa-image"></i></div>' +
+                '<div class="tm-bg-picker-name">不绑定背景</div><i class="fa-solid fa-circle-check"></i></button>';
             backgrounds.forEach(function (name) {
-                html += '<option value="' + esc(name) + '"' + (selectedName === name ? ' selected' : '') + '>' + esc(name) + '</option>';
+                html += '<button type="button" class="tm-bg-picker-card' + (selectedName === name ? ' on' : '') + '" data-bg="' + esc(name) + '">' +
+                    '<div class="tm-bg-picker-thumb" style="background-image:' + esc(getBackgroundCssUrl(name)) + '"></div>' +
+                    '<div class="tm-bg-picker-name">' + esc(name) + '</div><i class="fa-solid fa-circle-check"></i></button>';
             });
-            if (selectedName && backgrounds.indexOf(selectedName) === -1) {
-                html += '<option value="' + esc(selectedName) + '" selected>' + esc(selectedName) + '（未在 ST 壁纸列表中找到）</option>';
+            if (backgrounds.length === 0) {
+                html += '<div class="tm-empty"><i class="fa-regular fa-image"></i><span>还没有可绑定的 ST 壁纸</span></div>';
             }
-            sel.innerHTML = html;
-            sel.disabled = false;
+            list.innerHTML = html;
+            list.querySelectorAll('.tm-bg-picker-card').forEach(function (card) {
+                card.addEventListener('click', function () { choose(card.dataset.bg || ''); });
+            });
         });
     }
 
@@ -934,6 +961,25 @@
             '.tm-field input:focus,.tm-field select:focus,.tm-field textarea:focus{outline:none;border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-frow{display:flex;gap:7px;align-items:stretch;}',
             '.tm-frow select{flex:1;}',
+            '.tm-bg-bind-card{width:100%;display:grid;grid-template-columns:72px minmax(0,1fr) 18px;gap:10px;align-items:center;padding:8px;border-radius:8px;border:1px solid rgba(127,127,127,.2);background:rgba(127,127,127,.08);color:inherit;text-align:left;font-family:inherit;cursor:pointer;}',
+            '.tm-bg-bind-card:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.12);}',
+            '.tm-bg-bind-thumb{height:48px;border-radius:7px;background-size:cover;background-position:center;background-color:rgba(127,127,127,.14);border:1px solid rgba(127,127,127,.14);display:flex;align-items:center;justify-content:center;overflow:hidden;}',
+            '.tm-bg-bind-thumb.empty{background:repeating-linear-gradient(45deg,rgba(127,127,127,.08),rgba(127,127,127,.08) 8px,rgba(127,127,127,.16) 8px,rgba(127,127,127,.16) 16px);}',
+            '.tm-bg-bind-thumb i{opacity:.4;font-size:1.2em;}',
+            '.tm-bg-bind-info{min-width:0;}',
+            '.tm-bg-bind-name{font-size:.88em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            '.tm-bg-bind-sub{font-size:.72em;opacity:.48;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            '.tm-bg-bind-card>i{opacity:.35;}',
+            '.tm-bg-picker-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;padding-bottom:8px;}',
+            '.tm-bg-picker-card{position:relative;display:flex;flex-direction:column;gap:6px;padding:7px;border-radius:8px;border:2px solid transparent;background:rgba(127,127,127,.06);color:inherit;font-family:inherit;text-align:left;cursor:pointer;min-width:0;}',
+            '.tm-bg-picker-card:hover{background:rgba(127,127,127,.11);}',
+            '.tm-bg-picker-card.on{border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-bg-picker-thumb{width:100%;aspect-ratio:4/3;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(127,127,127,.12);border:1px solid rgba(127,127,127,.12);display:flex;align-items:center;justify-content:center;overflow:hidden;}',
+            '.tm-bg-picker-thumb.empty{background:repeating-linear-gradient(45deg,rgba(127,127,127,.08),rgba(127,127,127,.08) 8px,rgba(127,127,127,.16) 8px,rgba(127,127,127,.16) 16px);}',
+            '.tm-bg-picker-thumb i{opacity:.38;font-size:1.6em;}',
+            '.tm-bg-picker-name{font-size:.75em;font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            '.tm-bg-picker-card>i{position:absolute;top:9px;right:9px;color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(0,0,0,.35);border-radius:50%;opacity:0;}',
+            '.tm-bg-picker-card.on>i{opacity:1;}',
             '.tm-imgarea{width:100%;height:160px;background:rgba(127,127,127,.06);border:2px dashed rgba(127,127,127,.25);border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .18s;}',
             '.tm-imgarea:hover,.tm-imgarea.drag{border-color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.1);}',
             '.tm-imgph{display:flex;flex-direction:column;align-items:center;gap:6px;opacity:.4;font-size:.82em;pointer-events:none;}',
@@ -1348,13 +1394,14 @@
         var meta = getMeta(d, themeName);
         var editImgData = meta.imageData || null;
         var editTags = (meta.tags || []).slice();
+        var editBackgroundName = meta.backgroundName || '';
         var catOpts = '<option value="">无分类</option>' +
             d.categories.map(function (c) { return '<option value="' + esc(c) + '"' + (meta.category === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
 
         var sheet = createSheet([
             '<div class="tm-sheet-title"><i class="fa-solid fa-pen"></i>编辑：' + esc(themeName) + '</div>',
             '<div class="tm-field"><label>分类</label><div class="tm-frow"><select id="tm-dcat">' + catOpts + '</select><button class="tm-btn tm-btn-outline" id="tm-dnewcat" style="white-space:nowrap;font-size:.8em;padding:7px 10px">+ 新建</button></div></div>',
-            '<div class="tm-field"><label>绑定背景</label><select id="tm-dbg">' + (meta.backgroundName ? '<option value="' + esc(meta.backgroundName) + '" selected>' + esc(meta.backgroundName) + '（已绑定）</option>' : '<option value="">不绑定背景</option>') + '</select></div>',
+            '<div class="tm-field"><label>绑定背景</label><button type="button" class="tm-bg-bind-card" id="tm-bg-bind">' + buildBackgroundBindHtml(editBackgroundName) + '</button></div>',
             '<div class="tm-field"><label>作者</label><input type="text" id="tm-dauthor" placeholder="主题作者名" value="' + esc(meta.author || '') + '" /></div>',
             '<div class="tm-field"><label>备注</label><textarea id="tm-ddesc" rows="2" placeholder="主题特点、适用场景等">' + esc(meta.description || '') + '</textarea></div>',
             '<div class="tm-field"><label>标签</label><div class="tm-tags-wrap" id="tm-tags-wrap"></div>' +
@@ -1367,7 +1414,15 @@
             '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-dcancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-dsave">保存</button></div>',
         ].join(''));
 
-        fillBackgroundSelect(sheet.querySelector('#tm-dbg'), meta.backgroundName || '');
+        function renderBackgroundBind() {
+            sheet.querySelector('#tm-bg-bind').innerHTML = buildBackgroundBindHtml(editBackgroundName);
+        }
+        sheet.querySelector('#tm-bg-bind').addEventListener('click', function () {
+            openBackgroundPickerSheet(editBackgroundName, function (name) {
+                editBackgroundName = name || '';
+                renderBackgroundBind();
+            });
+        });
 
         // 标签
         function renderTagChips() {
@@ -1421,7 +1476,7 @@
             m.category = sheet.querySelector('#tm-dcat').value;
             m.author = sheet.querySelector('#tm-dauthor').value.trim();
             m.description = sheet.querySelector('#tm-ddesc').value.trim();
-            m.backgroundName = sheet.querySelector('#tm-dbg').value;
+            m.backgroundName = editBackgroundName;
             m.tags = editTags.slice();
             m.imageData = editImgData;
             save(dd); closeSheet(sheet); toast('✨ 已保存'); renderCatbar(); renderGrid();
