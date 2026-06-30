@@ -1059,19 +1059,44 @@
                         if (stThemeList.indexOf(theme.name) !== -1) {
                             if (!confirm('主题「' + theme.name + '」已存在，继续导入将覆盖同名主题。是否继续？')) return;
                         }
-                        fetch('/api/themes/save', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(theme),
-                        })
+                        fetch('/csrf-token')
+                            .then(function (r) { if (!r.ok) throw new Error('csrf ' + r.status); return r.json(); })
+                            .then(function (tokenData) {
+                                return fetch('/api/themes/save', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': tokenData.token },
+                                    body: JSON.stringify(theme),
+                                });
+                            })
                             .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r; })
                             .then(function () {
+                                var themeEl = document.getElementById('themes');
+                                if (themeEl && themeEl.tagName === 'SELECT') {
+                                    var hasOption = false;
+                                    for (var i = 0; i < themeEl.options.length; i++) {
+                                        if (themeEl.options[i].value === theme.name || themeEl.options[i].textContent === theme.name) { hasOption = true; break; }
+                                    }
+                                    if (!hasOption) {
+                                        var opt = document.createElement('option'); opt.value = theme.name; opt.textContent = theme.name; themeEl.appendChild(opt);
+                                    }
+                                } else if (themeEl && themeEl.tagName === 'INPUT' && themeEl.getAttribute('list')) {
+                                    var dl = document.getElementById(themeEl.getAttribute('list'));
+                                    if (dl && dl.options) {
+                                        var hasDlOption = false;
+                                        for (var j = 0; j < dl.options.length; j++) {
+                                            if (dl.options[j].value === theme.name || dl.options[j].textContent === theme.name) { hasDlOption = true; break; }
+                                        }
+                                        if (!hasDlOption) {
+                                            var dlOpt = document.createElement('option'); dlOpt.value = theme.name; dl.appendChild(dlOpt);
+                                        }
+                                    }
+                                }
                                 fetchThemeList(function () {
                                     renderCatbar(); renderGrid(); renderBottomStatus();
                                     toast('✅ 已导入美化：' + theme.name);
                                 });
                             })
-                            .catch(function () { toast('导入美化失败', true); });
+                            .catch(function (err) { toast('导入美化失败：' + err.message, true); });
                     } catch (err) { toast('解析失败', true); }
                 };
                 reader.readAsText(inp.files[0], 'utf-8');
