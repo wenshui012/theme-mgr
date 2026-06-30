@@ -84,6 +84,9 @@
     //   themeMeta: { "主题名": { category, tags[], starred, imageData, useCount, lastUsed, author, description } },
     //   categories: [],
     //   showBall: true,
+    //   fabImage: '',
+    //   fabSize: 38,
+    //   fabPos: null,
     //   sortMode: 'name'
     // }
     function ensureDefaults(d) {
@@ -93,6 +96,9 @@
         if (typeof d.themeMeta !== 'object' || !d.themeMeta) d.themeMeta = {};
         if (!Array.isArray(d.categories)) d.categories = [];
         if (typeof d.sortMode !== 'string') d.sortMode = 'name';
+        if (typeof d.fabImage !== 'string') d.fabImage = '';
+        if (typeof d.fabSize !== 'number') d.fabSize = 38;
+        if (!d.fabPos || typeof d.fabPos.top !== 'number' || typeof d.fabPos.left !== 'number') d.fabPos = null;
         return d;
     }
 
@@ -102,6 +108,9 @@
             categories: [],
             showBall: true,
             showFreq: true,
+            fabImage: '',
+            fabSize: 38,
+            fabPos: null,
             sortMode: 'name'
         };
     }
@@ -947,6 +956,8 @@
             '.tm-divider{height:1px;background:rgba(127,127,127,.12);margin:6px 0 12px;}',
             '.tm-hint{font-size:.76em;opacity:.5;line-height:1.4;}',
             '.tm-btn-row{display:flex;gap:8px;flex-wrap:wrap;}',
+            '.tm-data-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px;}',
+            '.tm-data-grid .tm-btn{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;padding:8px 5px;font-size:.78em;line-height:1.2;white-space:nowrap;}',
             '.tm-btn{padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:.87em;font-weight:600;transition:.18s;font-family:inherit;}',
             '.tm-btn-safe{background:var(--SmartThemeQuoteColor,#7c6daf);color:#fff;}',
             '.tm-btn-safe:hover{filter:brightness(1.1);}',
@@ -959,6 +970,13 @@
             '.tm-field input[type=text],.tm-field select,.tm-field textarea{background:rgba(127,127,127,.08);border:1px solid rgba(127,127,127,.2);border-radius:8px;color:inherit;padding:9px 11px;font-size:.9em;width:100%;box-sizing:border-box;font-family:inherit;}',
             '.tm-field textarea{resize:none;}',
             '.tm-field input:focus,.tm-field select:focus,.tm-field textarea:focus{outline:none;border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-fab-custom-row{display:flex;align-items:center;gap:10px;}',
+            '.tm-fab-preview{width:48px;height:48px;overflow:hidden;display:flex;align-items:center;justify-content:center;flex-shrink:0;}',
+            '.tm-fab-preview img{width:100%;height:100%;object-fit:contain;}',
+            '.tm-fab-default-preview{width:100%;height:100%;border-radius:50%;background:var(--SmartThemeQuoteColor,#7c6daf);display:flex;align-items:center;justify-content:center;color:#fff;}',
+            '.tm-fab-custom-actions{display:flex;gap:6px;flex:1;flex-wrap:wrap;}',
+            '.tm-fab-custom-actions .tm-btn{font-size:.8em;flex:1 1 120px;}',
+            '.tm-range{width:100%;accent-color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-frow{display:flex;gap:7px;align-items:stretch;}',
             '.tm-frow select{flex:1;}',
             '.tm-bg-bind-card{width:100%;display:grid;grid-template-columns:72px minmax(0,1fr) 18px;gap:10px;align-items:center;padding:8px;border-radius:8px;border:1px solid rgba(127,127,127,.2);background:rgba(127,127,127,.08);color:inherit;text-align:left;font-family:inherit;cursor:pointer;}',
@@ -1497,15 +1515,29 @@
             '<div class="tm-sec-title">显示</div>',
             '<div class="tm-row-inline"><label>显示悬浮球</label><input type="checkbox" class="tm-chk" id="tm-show-ball" ' + (d.showBall !== false ? 'checked' : '') + ' /></div>',
             '<div class="tm-row-inline" style="margin-top:6px"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>',
+            '<div class="tm-sec-title">悬浮球自定义</div>',
+            '<div class="tm-field"><label>自定义图片 <span class="tm-hint">支持 gif 动图、透明底 png</span></label>' +
+            '<div class="tm-fab-custom-row">' +
+            '<div class="tm-fab-preview" id="tm-fab-preview">' +
+            (d.fabImage ? '<img src="' + esc(d.fabImage) + '" />' : '<div class="tm-fab-default-preview"><i class="fa-solid fa-palette"></i></div>') +
+            '</div>' +
+            '<div class="tm-fab-custom-actions">' +
+            '<button class="tm-btn tm-btn-outline" id="tm-fab-pick"><i class="fa-solid fa-image"></i> 选择图片</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-fab-reset" style="' + (d.fabImage ? '' : 'opacity:.35;pointer-events:none;') + '"><i class="fa-solid fa-rotate-left"></i> 恢复默认</button>' +
+            '</div>' +
+            '<input type="file" id="tm-fab-file" accept="image/*" style="display:none" />' +
+            '</div></div>',
+            '<div class="tm-field"><label>悬浮球大小：<span id="tm-fab-size-val">' + (d.fabSize || 38) + 'px</span></label>' +
+            '<input type="range" class="tm-range" id="tm-fab-size" min="28" max="64" value="' + (d.fabSize || 38) + '" /></div>',
             '<div class="tm-divider"></div>',
             '<div class="tm-sec-title">数据</div>',
             '<div class="tm-storage-info">ST 共有 ' + stThemeList.length + ' 个主题 / 已标注 ' + metaCount + ' 个 / ' + imgCount + ' 张截图</div>',
-            '<div class="tm-btn-row" style="margin-top:8px">' +
-            '<button class="tm-btn tm-btn-outline" id="tm-exp"><i class="fa-solid fa-download"></i> 导出标注</button>' +
-            '<button class="tm-btn tm-btn-outline" id="tm-imp"><i class="fa-solid fa-upload"></i> 导入标注</button>' +
+            '<div class="tm-data-grid">' +
             '<button class="tm-btn tm-btn-outline" id="tm-imp-theme"><i class="fa-solid fa-file-import"></i> 导入美化</button>' +
             '<button class="tm-btn tm-btn-outline" id="tm-imp-theme-batch"><i class="fa-solid fa-upload"></i> 批量导入美化</button>' +
             '<button class="tm-btn tm-btn-outline" id="tm-exp-theme-bundle"><i class="fa-solid fa-file-export"></i> 导出美化包</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-exp"><i class="fa-solid fa-download"></i> 导出标注</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-imp"><i class="fa-solid fa-upload"></i> 导入标注</button>' +
             '<button class="tm-btn tm-btn-danger" id="tm-clear">清空标注</button>' +
             '</div>',
             '<div class="tm-hint" style="margin-top:8px">※ 标注只包含分类、标签、截图等附加信息；美化包会打包 ST 当前所有主题 JSON</div>',
@@ -1513,11 +1545,58 @@
 
         sheet.querySelector('#tm-show-ball').addEventListener('change', function () {
             var dd = load(); dd.showBall = this.checked; save(dd);
+            removeFab();
             if (dd.showBall) injectFab();
-            else { var fab = document.getElementById(FAB_ID); if (fab) fab.parentNode.removeChild(fab); }
         });
         sheet.querySelector('#tm-show-freq').addEventListener('change', function () {
             var dd = load(); dd.showFreq = this.checked; save(dd); renderGrid();
+        });
+        var fabFileInp = sheet.querySelector('#tm-fab-file');
+        var fabResetBtn = sheet.querySelector('#tm-fab-reset');
+        function updateFabPreview(imgSrc) {
+            var prev = sheet.querySelector('#tm-fab-preview');
+            if (!prev) return;
+            if (imgSrc) {
+                prev.innerHTML = '<img src="' + esc(imgSrc) + '" />';
+                fabResetBtn.style.opacity = '';
+                fabResetBtn.style.pointerEvents = '';
+            } else {
+                prev.innerHTML = '<div class="tm-fab-default-preview"><i class="fa-solid fa-palette"></i></div>';
+                fabResetBtn.style.opacity = '.35';
+                fabResetBtn.style.pointerEvents = 'none';
+            }
+        }
+        function refreshFab() {
+            removeFab();
+            var dd = load();
+            if (dd.showBall !== false) injectFab();
+        }
+        sheet.querySelector('#tm-fab-pick').addEventListener('click', function () { fabFileInp.click(); });
+        fabFileInp.addEventListener('change', function () {
+            var file = fabFileInp.files[0]; if (!file) return;
+            var reader = new FileReader();
+            reader.onload = function (e) {
+                var dataUrl = e.target.result;
+                var dd = load(); dd.fabImage = dataUrl; save(dd);
+                updateFabPreview(dataUrl);
+                refreshFab();
+                toast('✨ 悬浮球已更新');
+            };
+            reader.readAsDataURL(file);
+        });
+        fabResetBtn.addEventListener('click', function () {
+            var dd = load(); dd.fabImage = ''; save(dd);
+            updateFabPreview('');
+            refreshFab();
+            toast('悬浮球已恢复默认');
+        });
+        sheet.querySelector('#tm-fab-size').addEventListener('input', function () {
+            var val = parseInt(this.value);
+            if (!val || val < 28) val = 28;
+            if (val > 64) val = 64;
+            sheet.querySelector('#tm-fab-size-val').textContent = val + 'px';
+            var dd = load(); dd.fabSize = val; save(dd);
+            refreshFab();
         });
         sheet.querySelector('#tm-exp').addEventListener('click', function () {
             var d2 = load();
@@ -1854,37 +1933,71 @@
 
     // ── FAB ──────────────────────────────────────────────────
     var fabResizeHandler = null;
+    function removeFab() {
+        var fab = document.getElementById(FAB_ID);
+        if (fab && fab.parentNode) fab.parentNode.removeChild(fab);
+        if (fabResizeHandler) {
+            window.removeEventListener('resize', fabResizeHandler);
+            fabResizeHandler = null;
+        }
+    }
+
     function injectFab() {
         if (document.getElementById(FAB_ID)) return;
         var d = load(); if (d.showBall === false) return;
         var container = document.createElement('div'); container.id = FAB_ID;
-        var MAIN_SIZE = 38;
+        var MAIN_SIZE = d.fabSize || 38;
         var accent = 'var(--SmartThemeQuoteColor,#7c6daf)';
 
         function posFab() {
             var vh = window.innerHeight || document.documentElement.clientHeight;
             var vw = window.innerWidth || document.documentElement.clientWidth;
+            var dd = load();
+            var mainTop, mainLeft;
+            if (dd.fabPos && typeof dd.fabPos.top === 'number' && typeof dd.fabPos.left === 'number') {
+                mainTop = Math.max(0, Math.min(dd.fabPos.top, vh - MAIN_SIZE));
+                mainLeft = Math.max(0, Math.min(dd.fabPos.left, vw - MAIN_SIZE));
+            } else {
+                mainTop = vh - 80 - MAIN_SIZE;
+                mainLeft = vw - 16 - MAIN_SIZE;
+                if (mainTop < 10) mainTop = 10;
+                if (mainLeft < 10) mainLeft = 10;
+            }
             container.setAttribute('style',
-                'position:fixed !important;top:' + (vh - 80 - MAIN_SIZE) + 'px !important;left:' + (vw - 16 - MAIN_SIZE) + 'px !important;' +
-                'z-index:2147483647 !important;display:flex !important;align-items:center !important;pointer-events:none !important;');
+                'position:fixed !important;top:' + mainTop + 'px !important;left:' + mainLeft + 'px !important;' +
+                'z-index:2147483647 !important;display:flex !important;align-items:center !important;' +
+                'pointer-events:none !important;margin:0 !important;padding:0 !important;');
         }
 
-        var mainBtn = document.createElement('div');
-        mainBtn.innerHTML = '<i class="fa-solid fa-palette" style="pointer-events:none;font-size:1.1em;"></i>';
-        mainBtn.setAttribute('style',
-            'width:' + MAIN_SIZE + 'px !important;height:' + MAIN_SIZE + 'px !important;border-radius:50% !important;' +
-            'background:' + accent + ' !important;color:#fff !important;border:none !important;cursor:pointer !important;' +
-            'display:flex !important;align-items:center !important;justify-content:center !important;' +
-            'box-shadow:0 4px 16px rgba(0,0,0,.35) !important;opacity:.9 !important;pointer-events:auto !important;');
+        var mainBtn;
+        if (d.fabImage) {
+            mainBtn = document.createElement('img');
+            mainBtn.src = d.fabImage;
+            mainBtn.setAttribute('style',
+                'width:' + MAIN_SIZE + 'px !important;height:' + MAIN_SIZE + 'px !important;' +
+                'cursor:pointer !important;display:block !important;pointer-events:auto !important;' +
+                'object-fit:contain !important;touch-action:none !important;' +
+                'filter:drop-shadow(0 2px 6px rgba(0,0,0,.25)) !important;');
+        } else {
+            mainBtn = document.createElement('div');
+            mainBtn.innerHTML = '<i class="fa-solid fa-palette" style="pointer-events:none;font-size:' + Math.max(0.7, MAIN_SIZE / 35) + 'em;"></i>';
+            mainBtn.setAttribute('style',
+                'width:' + MAIN_SIZE + 'px !important;height:' + MAIN_SIZE + 'px !important;border-radius:50% !important;' +
+                'background:' + accent + ' !important;color:#fff !important;border:none !important;cursor:pointer !important;' +
+                'display:flex !important;align-items:center !important;justify-content:center !important;' +
+                'box-shadow:0 4px 16px rgba(0,0,0,.35) !important;opacity:.9 !important;pointer-events:auto !important;' +
+                'touch-action:none !important;');
+        }
+        mainBtn.id = 'tm-fab-main-btn';
         container.appendChild(mainBtn);
 
         var _ds = { sx: 0, sy: 0, ox: 0, oy: 0, moved: false, handled: false };
-        mainBtn.addEventListener('touchstart', function (e) {
-            var t = e.touches[0]; var rect = container.getBoundingClientRect();
-            _ds.sx = t.clientX; _ds.sy = t.clientY; _ds.ox = rect.left; _ds.oy = rect.top; _ds.moved = false;
-        }, { passive: true });
-        mainBtn.addEventListener('touchmove', function (e) {
-            var t = e.touches[0]; var dx = t.clientX - _ds.sx, dy = t.clientY - _ds.sy;
+        function startDrag(x, y) {
+            var rect = container.getBoundingClientRect();
+            _ds.sx = x; _ds.sy = y; _ds.ox = rect.left; _ds.oy = rect.top; _ds.moved = false;
+        }
+        function moveDrag(x, y) {
+            var dx = x - _ds.sx, dy = y - _ds.sy;
             if (Math.abs(dx) > 5 || Math.abs(dy) > 5) _ds.moved = true;
             if (_ds.moved) {
                 var nx = Math.max(0, Math.min(_ds.ox + dx, window.innerWidth - MAIN_SIZE));
@@ -1892,9 +2005,49 @@
                 container.style.setProperty('left', nx + 'px', 'important');
                 container.style.setProperty('top', ny + 'px', 'important');
             }
+        }
+        function saveFabPos() {
+            var rect = container.getBoundingClientRect();
+            var dd = load();
+            dd.fabPos = { top: Math.round(rect.top), left: Math.round(rect.left) };
+            save(dd);
+        }
+
+        mainBtn.addEventListener('touchstart', function (e) {
+            var t = e.touches[0];
+            startDrag(t.clientX, t.clientY);
         }, { passive: true });
-        mainBtn.addEventListener('touchend', function () { if (!_ds.moved) { _ds.handled = true; openPopup(); } });
-        mainBtn.addEventListener('click', function () {
+        mainBtn.addEventListener('touchmove', function (e) {
+            var t = e.touches[0];
+            moveDrag(t.clientX, t.clientY);
+        }, { passive: true });
+        mainBtn.addEventListener('touchend', function (e) {
+            if (!_ds.moved) {
+                _ds.handled = true;
+                e.preventDefault();
+                setTimeout(function () { openPopup(); }, 50);
+            } else {
+                saveFabPos();
+            }
+        });
+
+        mainBtn.addEventListener('mousedown', function (e) {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            startDrag(e.clientX, e.clientY);
+            document.addEventListener('mousemove', mouseMove);
+            document.addEventListener('mouseup', mouseUp);
+        });
+        function mouseMove(e) {
+            moveDrag(e.clientX, e.clientY);
+        }
+        function mouseUp() {
+            document.removeEventListener('mousemove', mouseMove);
+            document.removeEventListener('mouseup', mouseUp);
+            if (_ds.moved) saveFabPos();
+        }
+        mainBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
             if (_ds.handled) { _ds.handled = false; return; }
             if (_ds.moved) { _ds.moved = false; return; }
             openPopup();
