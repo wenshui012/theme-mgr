@@ -625,6 +625,29 @@
         });
     }
 
+    function cleanThemeMetaForBundle(meta) {
+        var out = {};
+        if (!meta) return out;
+        if (meta.category) out.category = meta.category;
+        if (Array.isArray(meta.tags) && meta.tags.length > 0) out.tags = meta.tags.slice();
+        if (meta.author) out.author = meta.author;
+        if (meta.description) out.description = meta.description;
+        if (meta.backgroundName) out.backgroundName = meta.backgroundName;
+        return out;
+    }
+
+    function buildThemeMetaForBundle(themes) {
+        var d = load();
+        var meta = {};
+        themes.forEach(function (theme) {
+            if (!theme || !theme.name) return;
+            var m = d.themeMeta[theme.name];
+            var clean = cleanThemeMetaForBundle(m);
+            if (Object.keys(clean).length > 0) meta[theme.name] = clean;
+        });
+        return meta;
+    }
+
     function extractThemeObjects(parsed, sourceName) {
         var raw = [];
         if (parsed && Array.isArray(parsed.themes)) raw = parsed.themes;
@@ -636,6 +659,157 @@
             if (!theme || !theme.name || !String(theme.name).trim()) throw new Error(sourceName + ' 第 ' + (idx + 1) + ' 个主题缺少 name');
             theme.name = String(theme.name).trim();
             return theme;
+        });
+    }
+
+    function extractThemeImportPayload(parsed, sourceName) {
+        var themes = extractThemeObjects(parsed, sourceName);
+        var metaSrc = {};
+        var cats = [];
+
+        if (parsed && parsed.themeMeta && typeof parsed.themeMeta === 'object') metaSrc = parsed.themeMeta;
+        else if (parsed && parsed.meta && parsed.meta.themeMeta && typeof parsed.meta.themeMeta === 'object') metaSrc = parsed.meta.themeMeta;
+
+        if (parsed && Array.isArray(parsed.categories)) cats = parsed.categories.slice();
+        else if (parsed && parsed.meta && Array.isArray(parsed.meta.categories)) cats = parsed.meta.categories.slice();
+
+        var metaByName = {};
+        themes.forEach(function (theme) {
+            var m = metaSrc[theme.name];
+            if (m) metaByName[theme.name] = cleanThemeMetaForBundle(m);
+        });
+
+        return { themes: themes, themeMeta: metaByName, categories: cats, sourceName: sourceName };
+    }
+
+    function mergeThemePayload(target, payload) {
+        payload.themes.forEach(function (theme) { target.themes.push(theme); });
+        for (var name in payload.themeMeta) target.themeMeta[name] = payload.themeMeta[name];
+        payload.categories.forEach(function (cat) {
+            if (cat && target.categories.indexOf(cat) === -1) target.categories.push(cat);
+        });
+        return target;
+    }
+
+    function mergeImportedThemeMeta(themeNames, metaByName, categories) {
+        if ((!metaByName || Object.keys(metaByName).length === 0) && (!categories || categories.length === 0)) return;
+        var dd = load();
+        (categories || []).forEach(function (cat) {
+            if (cat && dd.categories.indexOf(cat) === -1) dd.categories.push(cat);
+        });
+        themeNames.forEach(function (name) {
+            var imp = metaByName ? metaByName[name] : null;
+            if (!imp) return;
+            var existing = getMeta(dd, name);
+            if (!Array.isArray(existing.tags)) existing.tags = [];
+            if (!existing.category && imp.category) existing.category = imp.category;
+            if (imp.tags) imp.tags.forEach(function (t) { if (existing.tags.indexOf(t) === -1) existing.tags.push(t); });
+            if (!existing.author && imp.author) existing.author = imp.author;
+            if (!existing.description && imp.description) existing.description = imp.description;
+            if (!existing.backgroundName && imp.backgroundName) existing.backgroundName = imp.backgroundName;
+        });
+        save(dd);
+    }
+
+    function getThemeImportCategoryInfo(payload) {
+        var order = [];
+        var counts = {};
+        var uncatCount = 0;
+        function addCat(cat) {
+            if (!cat || order.indexOf(cat) !== -1) return;
+            order.push(cat);
+            if (counts[cat] === undefined) counts[cat] = 0;
+        }
+        payload.categories.forEach(function (cat) { if (cat) addCat(String(cat)); });
+        payload.themes.forEach(function (theme) {
+            var meta = payload.themeMeta[theme.name] || {};
+            var cat = meta.category ? String(meta.category) : '';
+            if (cat) {
+                addCat(cat);
+                counts[cat] = (counts[cat] || 0) + 1;
+            } else {
+                uncatCount++;
+            }
+        });
+        return { categories: order.filter(function (cat) { return (counts[cat] || 0) > 0; }), counts: counts, uncatCount: uncatCount };
+    }
+
+    function importThemePayload(payload, opts) {
+        opts = opts || {};
+        var info = getThemeImportCategoryInfo(payload);
+        var hasCategoryChoice = info.categories.length > 0;
+        if (hasCategoryChoice) {
+            openThemeImportCategorySheet(payload, opts);
+        } else {
+            importThemeObjects(payload.themes, {
+                failText: opts.failText,
+                metaByName: payload.themeMeta,
+                categories: payload.categories,
+            });
+        }
+    }
+
+    function openThemeImportCategorySheet(payload, opts) {
+        opts = opts || {};
+        var info = getThemeImportCategoryInfo(payload);
+        if (info.categories.length === 0) { importThemePayload(payload, opts); return; }
+
+        var rows = '';
+        info.categories.forEach(function (cat) {
+            rows += '<label class="tm-import-cat-item"><input type="checkbox" class="tm-chk tm-import-cat-check" data-cat="' + esc(cat) + '" checked />' +
+                '<span>' + esc(cat) + '</span><small>' + (info.counts[cat] || 0) + ' 个美化</small></label>';
+        });
+        if (info.uncatCount > 0) {
+            rows += '<label class="tm-import-cat-item"><input type="checkbox" class="tm-chk tm-import-uncat-check" checked />' +
+                '<span>未分类</span><small>' + info.uncatCount + ' 个美化</small></label>';
+        }
+
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-filter"></i>选择导入分类</div>',
+            '<div class="tm-hint">只会导入勾选分类下的美化；分类来自美化包附带的管理器标注。</div>',
+            '<div class="tm-import-cat-tools">' +
+            '<button class="tm-btn-sm" id="tm-import-cat-all">全选</button>' +
+            '<button class="tm-btn-sm" id="tm-import-cat-none">全不选</button>' +
+            '</div>',
+            '<div class="tm-import-cat-list">' + rows + '</div>',
+            '<div class="tm-edit-foot">' +
+            '<button class="tm-btn tm-btn-outline" id="tm-import-cat-cancel">取消</button>' +
+            '<button class="tm-btn tm-btn-safe" id="tm-import-cat-ok">导入选中</button>' +
+            '</div>',
+        ].join(''));
+
+        sheet.querySelector('#tm-import-cat-all').addEventListener('click', function () {
+            sheet.querySelectorAll('.tm-import-cat-check,.tm-import-uncat-check').forEach(function (chk) { chk.checked = true; });
+        });
+        sheet.querySelector('#tm-import-cat-none').addEventListener('click', function () {
+            sheet.querySelectorAll('.tm-import-cat-check,.tm-import-uncat-check').forEach(function (chk) { chk.checked = false; });
+        });
+        sheet.querySelector('#tm-import-cat-cancel').addEventListener('click', function () { closeSheet(sheet); });
+        sheet.querySelector('#tm-import-cat-ok').addEventListener('click', function () {
+            var selected = {};
+            var selectedCats = [];
+            sheet.querySelectorAll('.tm-import-cat-check').forEach(function (chk) {
+                if (chk.checked) { selected[chk.dataset.cat] = true; selectedCats.push(chk.dataset.cat); }
+            });
+            var uncat = sheet.querySelector('.tm-import-uncat-check');
+            var includeUncat = !!(uncat && uncat.checked);
+            var selectedThemes = [];
+            var selectedMeta = {};
+            payload.themes.forEach(function (theme) {
+                var meta = payload.themeMeta[theme.name] || {};
+                var cat = meta.category || '';
+                if ((cat && selected[cat]) || (!cat && includeUncat)) {
+                    selectedThemes.push(theme);
+                    if (payload.themeMeta[theme.name]) selectedMeta[theme.name] = payload.themeMeta[theme.name];
+                }
+            });
+            if (selectedThemes.length === 0) { toast('请至少选择一个分类', true); return; }
+            closeSheet(sheet);
+            importThemeObjects(selectedThemes, {
+                failText: opts.failText,
+                metaByName: selectedMeta,
+                categories: selectedCats,
+            });
         });
     }
 
@@ -677,6 +851,8 @@
                         syncThemeOption(res.theme.name);
                     } else failCount++;
                 });
+                var okNames = results.filter(function (res) { return res.ok; }).map(function (res) { return res.theme.name; });
+                if (okNames.length > 0) mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories);
                 fetchThemeList(function () {
                     renderCatbar(); renderGrid(); renderBottomStatus();
                     if (failCount > 0) toast('导入完成：成功 ' + okCount + ' 个，失败 ' + failCount + ' 个', true);
@@ -910,10 +1086,13 @@
             '.tm-card-check{position:absolute;top:5px;left:5px;width:22px;height:22px;border-radius:50%;border:2px solid rgba(255,255,255,.6);background:rgba(0,0,0,.3);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;font-size:.6em;color:transparent;cursor:pointer;transition:all .15s;z-index:1;}',
             '.tm-card-check.checked{background:var(--SmartThemeQuoteColor,#7c6daf);border-color:var(--SmartThemeQuoteColor,#7c6daf);color:#fff;}',
             '.tm-card.batch-sel{border-color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.85;}',
-            '.tm-batch-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:8px;background:rgba(127,127,127,.06);border-radius:10px;border:1px solid rgba(127,127,127,.1);flex-wrap:wrap;}',
-            '.tm-batch-info{font-size:.82em;opacity:.7;white-space:nowrap;}',
-            '.tm-batch-acts{display:flex;gap:5px;flex:1;justify-content:flex-end;flex-wrap:wrap;}',
-            '.tm-batch-btn{padding:5px 10px;border-radius:8px;font-size:.75em;cursor:pointer;border:1px solid rgba(127,127,127,.15);background:rgba(127,127,127,.06);color:inherit;font-family:inherit;transition:.15s;white-space:nowrap;}',
+            '.tm-batch-area{flex-shrink:0;}',
+            '.tm-batch-bar{display:flex;align-items:center;gap:6px;padding:8px 12px;background:rgba(124,109,175,.06);border-bottom:1px solid rgba(124,109,175,.15);flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;}',
+            '.tm-batch-bar::-webkit-scrollbar{display:none;}',
+            '.tm-batch-info{font-size:.82em;font-weight:600;color:var(--SmartThemeQuoteColor,#7c6daf);white-space:nowrap;flex-shrink:0;}',
+            '.tm-batch-divider{width:1px;height:16px;background:rgba(127,127,127,.25);flex-shrink:0;margin:0 2px;}',
+            '.tm-batch-acts{display:flex;gap:5px;flex-shrink:0;flex-wrap:nowrap;}',
+            '.tm-batch-btn{padding:5px 10px;border-radius:6px;font-size:.78em;cursor:pointer;border:1px solid rgba(127,127,127,.2);background:rgba(127,127,127,.07);color:inherit;font-family:inherit;transition:.15s;white-space:nowrap;flex-shrink:0;}',
             '.tm-batch-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.1);}',
             '.tm-batch-btn.danger{border-color:#e57373;color:#e57373;}',
             '.tm-batch-btn.danger:hover{background:#e57373;color:#fff;}',
@@ -977,6 +1156,11 @@
             '.tm-fab-custom-actions{display:flex;gap:6px;flex:1;flex-wrap:wrap;}',
             '.tm-fab-custom-actions .tm-btn{font-size:.8em;flex:1 1 120px;}',
             '.tm-range{width:100%;accent-color:var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-import-cat-list{display:flex;flex-direction:column;gap:7px;margin:8px 0 12px;max-height:42vh;overflow:auto;}',
+            '.tm-import-cat-item{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;background:rgba(127,127,127,.06);border:1px solid rgba(127,127,127,.1);}',
+            '.tm-import-cat-item span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.88em;}',
+            '.tm-import-cat-item small{opacity:.45;font-size:.75em;white-space:nowrap;}',
+            '.tm-import-cat-tools{display:flex;gap:8px;justify-content:flex-end;margin-bottom:8px;}',
             '.tm-frow{display:flex;gap:7px;align-items:stretch;}',
             '.tm-frow select{flex:1;}',
             '.tm-bg-bind-card{width:100%;display:grid;grid-template-columns:72px minmax(0,1fr) 18px;gap:10px;align-items:center;padding:8px;border-radius:8px;border:1px solid rgba(127,127,127,.2);background:rgba(127,127,127,.08);color:inherit;text-align:left;font-family:inherit;cursor:pointer;}',
@@ -1095,6 +1279,7 @@
             '<button class="tm-sort-chip" data-sort="starred">收藏优先</button>' +
             '</div>' +
             '<div class="tm-catbar" id="tm-catbar" style="display:none"></div>' +
+            '<div class="tm-batch-area" id="tm-batch-area"></div>' +
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>' +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status" id="tm-bottom-status"></div>' +
@@ -1200,6 +1385,7 @@
     // ── 网格 ─────────────────────────────────────────────────
     function renderGrid() {
         var area = document.getElementById('tm-grid-area'); if (!area) return;
+        var batchArea = document.getElementById('tm-batch-area');
         var d = load();
         var curTheme = getCurrentThemeName();
 
@@ -1225,9 +1411,11 @@
 
         list = sortThemes(list, d.sortMode || 'name', d);
 
-        var html = '';
-        if (batchMode) {
-            html += '<div class="tm-batch-bar"><span class="tm-batch-info">已选 <b id="tm-batch-count">' + batchSelected.length + '</b> 个</span>' +
+        if (batchArea) {
+            if (batchMode) {
+                batchArea.style.display = '';
+                batchArea.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">已选 <b id="tm-batch-count">' + batchSelected.length + '</b> 个</span>' +
+                '<div class="tm-batch-divider"></div>' +
                 '<div class="tm-batch-acts">' +
                 '<button class="tm-batch-btn" id="tm-batch-selall">全选</button>' +
                 '<button class="tm-batch-btn" id="tm-batch-none">取消</button>' +
@@ -1235,8 +1423,13 @@
                 '<button class="tm-batch-btn" id="tm-batch-star"><i class="fa-solid fa-star"></i> 收藏</button>' +
                 '<button class="tm-batch-btn" id="tm-batch-tag"><i class="fa-solid fa-tag"></i> 标签</button>' +
                 '</div></div>';
+            } else {
+                batchArea.style.display = 'none';
+                batchArea.innerHTML = '';
+            }
         }
 
+        var html = '';
         html += '<div class="tm-grid">';
 
         if (list.length === 0) {
@@ -1273,12 +1466,13 @@
 
         // 事件绑定
         if (batchMode) {
-            var selall = area.querySelector('#tm-batch-selall');
-            var selnone = area.querySelector('#tm-batch-none');
+            var batchRoot = batchArea || area;
+            var selall = batchRoot.querySelector('#tm-batch-selall');
+            var selnone = batchRoot.querySelector('#tm-batch-none');
             if (selall) selall.addEventListener('click', function () { batchSelected = list.slice(); renderGrid(); });
             if (selnone) selnone.addEventListener('click', function () { batchSelected = []; renderGrid(); });
 
-            var bcatBtn = area.querySelector('#tm-batch-cat');
+            var bcatBtn = batchRoot.querySelector('#tm-batch-cat');
             if (bcatBtn) bcatBtn.addEventListener('click', function () {
                 if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
                 var dd = load(); var cats = dd.categories || [];
@@ -1291,7 +1485,7 @@
                 save(dd); toast('✅ 已将 ' + batchSelected.length + ' 个移到「' + cats[ci] + '」'); batchSelected = []; renderGrid();
             });
 
-            var bstarBtn = area.querySelector('#tm-batch-star');
+            var bstarBtn = batchRoot.querySelector('#tm-batch-star');
             if (bstarBtn) bstarBtn.addEventListener('click', function () {
                 if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
                 var dd = load();
@@ -1299,7 +1493,7 @@
                 save(dd); toast('⭐ 已切换收藏'); batchSelected = []; renderGrid();
             });
 
-            var btagBtn = area.querySelector('#tm-batch-tag');
+            var btagBtn = batchRoot.querySelector('#tm-batch-tag');
             if (btagBtn) btagBtn.addEventListener('click', function () {
                 if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
                 var tag = prompt('为所选主题添加标签：'); if (!tag || !tag.trim()) return; tag = tag.trim();
@@ -1316,7 +1510,7 @@
                     var chk = card.querySelector('.tm-card-check');
                     if (chk) chk.classList.toggle('checked', batchSelected.indexOf(name) !== -1);
                     card.classList.toggle('batch-sel', batchSelected.indexOf(name) !== -1);
-                    var cnt = area.querySelector('#tm-batch-count');
+                    var cnt = document.getElementById('tm-batch-count');
                     if (cnt) cnt.textContent = batchSelected.length;
                 });
             });
@@ -1501,6 +1695,37 @@
         });
     }
 
+    function mergeImportedAnnotations(imported) {
+        var dd = load();
+        var importedCount = 0;
+
+        for (var k in imported.themeMeta) {
+            var imp = imported.themeMeta[k] || {};
+            if (!dd.themeMeta[k]) {
+                dd.themeMeta[k] = imp;
+                if (!Array.isArray(dd.themeMeta[k].tags)) dd.themeMeta[k].tags = [];
+            } else {
+                var existing = getMeta(dd, k);
+                if (!Array.isArray(existing.tags)) existing.tags = [];
+                if (!existing.imageData && imp.imageData) existing.imageData = imp.imageData;
+                if (!existing.category && imp.category) existing.category = imp.category;
+                if (!existing.backgroundName && imp.backgroundName) existing.backgroundName = imp.backgroundName;
+                if (imp.tags) imp.tags.forEach(function (t) { if (existing.tags.indexOf(t) === -1) existing.tags.push(t); });
+                if (!existing.author && imp.author) existing.author = imp.author;
+                if (!existing.description && imp.description) existing.description = imp.description;
+            }
+            importedCount++;
+        }
+
+        if (imported.categories) imported.categories.forEach(function (c) { if (dd.categories.indexOf(c) === -1) dd.categories.push(c); });
+
+        save(dd);
+        renderCatbar();
+        renderGrid();
+        renderBottomStatus();
+        toast('✅ 导入成功：' + importedCount + ' 个标注');
+    }
+
     // ── 设置 ─────────────────────────────────────────────────
     function openSettingsSheet() {
         var d = load();
@@ -1540,7 +1765,7 @@
             '<button class="tm-btn tm-btn-outline" id="tm-imp"><i class="fa-solid fa-upload"></i> 导入标注</button>' +
             '<button class="tm-btn tm-btn-danger" id="tm-clear">清空标注</button>' +
             '</div>',
-            '<div class="tm-hint" style="margin-top:8px">※ 标注只包含分类、标签、截图等附加信息；美化包会打包 ST 当前所有主题 JSON</div>',
+            '<div class="tm-hint" style="margin-top:8px">※ 标注只包含分类、标签、截图等附加信息；美化包会打包 ST 当前所有主题 JSON，并附带分类等轻量标注</div>',
         ].join(''));
 
         sheet.querySelector('#tm-show-ball').addEventListener('change', function () {
@@ -1616,20 +1841,7 @@
                     try {
                         var imported = JSON.parse(e.target.result);
                         if (imported.themeMeta) {
-                            var dd = load();
-                            for (var k in imported.themeMeta) {
-                                if (!dd.themeMeta[k]) dd.themeMeta[k] = imported.themeMeta[k];
-                                else {
-                                    var existing = dd.themeMeta[k]; var imp = imported.themeMeta[k];
-                                    if (!existing.imageData && imp.imageData) existing.imageData = imp.imageData;
-                                    if (!existing.category && imp.category) existing.category = imp.category;
-                                    if (!existing.backgroundName && imp.backgroundName) existing.backgroundName = imp.backgroundName;
-                                    if (imp.tags) imp.tags.forEach(function (t) { if (existing.tags.indexOf(t) === -1) existing.tags.push(t); });
-                                    if (!existing.author && imp.author) existing.author = imp.author;
-                                }
-                            }
-                            if (imported.categories) imported.categories.forEach(function (c) { if (dd.categories.indexOf(c) === -1) dd.categories.push(c); });
-                            save(dd); renderCatbar(); renderGrid(); toast('✅ 导入成功');
+                            mergeImportedAnnotations(imported);
                         } else { toast('文件格式不正确', true); }
                     } catch (err) { toast('解析失败', true); }
                 };
@@ -1644,10 +1856,9 @@
                 var reader = new FileReader();
                 reader.onload = function (e) {
                     try {
-                        var theme = JSON.parse(e.target.result);
-                        if (!theme || !theme.name || !String(theme.name).trim()) { toast('主题文件缺少 name 字段', true); return; }
-                        theme.name = String(theme.name).trim();
-                        importThemeObjects([theme], { failText: '导入美化失败' });
+                        var parsed = JSON.parse(e.target.result);
+                        var payload = extractThemeImportPayload(parsed, inp.files[0].name);
+                        importThemePayload(payload, { failText: '导入美化失败' });
                     } catch (err) { toast('解析失败', true); }
                 };
                 reader.readAsText(inp.files[0], 'utf-8');
@@ -1664,19 +1875,19 @@
                         .then(function (res) { return { file: file, data: res.data }; })
                         .catch(function (err) { return { file: file, error: err }; });
                 })).then(function (results) {
-                    var themes = [];
+                    var payload = { themes: [], themeMeta: {}, categories: [] };
                     var errors = [];
                     results.forEach(function (res) {
                         if (res.error) { errors.push(res.error.message); return; }
                         try {
-                            themes = themes.concat(extractThemeObjects(res.data, res.file.name));
+                            mergeThemePayload(payload, extractThemeImportPayload(res.data, res.file.name));
                         } catch (err) { errors.push(err.message); }
                     });
                     if (errors.length > 0) {
                         console.warn('[美化管理] 批量导入解析错误:', errors);
                         if (!confirm('有 ' + errors.length + ' 个文件/主题解析失败，将跳过它们继续导入其余内容。是否继续？')) return;
                     }
-                    importThemeObjects(themes, { failText: '批量导入美化失败' });
+                    importThemePayload(payload, { failText: '批量导入美化失败' });
                 });
             });
             inp.click();
@@ -1690,6 +1901,8 @@
                     version: 1,
                     exportedAt: new Date().toISOString(),
                     themes: themes,
+                    categories: load().categories.slice(),
+                    themeMeta: buildThemeMetaForBundle(themes),
                 };
                 downloadJsonFile('theme-mgr-themes-' + new Date().toISOString().slice(0, 10) + '.json', bundle);
                 toast('✅ 已导出美化包：' + themes.length + ' 个');
