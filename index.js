@@ -24,6 +24,7 @@
     var importedThemeCache = {};
     var fullThemeCache = {};
     var importedThemeSelectSyncBound = false;
+    var backgroundListCache = null;
 
     function getPopupLayer() {
         var slot = document.getElementById('tm-popup-slot');
@@ -106,7 +107,8 @@
     }
 
     function getMeta(d, name) {
-        if (!d.themeMeta[name]) d.themeMeta[name] = { category: '', tags: [], starred: false, imageData: null, useCount: 0, lastUsed: 0, author: '', description: '' };
+        if (!d.themeMeta[name]) d.themeMeta[name] = { category: '', tags: [], starred: false, imageData: null, useCount: 0, lastUsed: 0, author: '', description: '', backgroundName: '' };
+        if (d.themeMeta[name].backgroundName === undefined) d.themeMeta[name].backgroundName = '';
         return d.themeMeta[name];
     }
 
@@ -230,6 +232,85 @@
     function setColorPicker(selector, value) {
         var el = document.querySelector(selector);
         if (el) el.setAttribute('color', value);
+    }
+
+    function getBackgroundCssUrl(backgroundName) {
+        return 'url("backgrounds/' + encodeURIComponent(backgroundName) + '")';
+    }
+
+    function getBackgroundList(cb) {
+        if (backgroundListCache) { cb(backgroundListCache); return; }
+        getPostHeaders()
+            .then(function (headers) {
+                return fetch('/api/backgrounds/all', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({}),
+                });
+            })
+            .then(function (r) { if (!r.ok) throw new Error('backgrounds ' + r.status); return r.json(); })
+            .then(function (data) {
+                var images = data && Array.isArray(data.images) ? data.images : [];
+                backgroundListCache = images.map(function (img) {
+                    return typeof img === 'string' ? img : img.filename;
+                }).filter(function (name) { return !!name; }).sort(function (a, b) { return a.localeCompare(b); });
+                cb(backgroundListCache);
+            })
+            .catch(function (err) {
+                console.warn('[美化管理] 读取背景列表失败:', err);
+                cb([]);
+            });
+    }
+
+    function fillBackgroundSelect(sel, selectedName) {
+        if (!sel) return;
+        getBackgroundList(function (backgrounds) {
+            var html = '<option value="">不绑定背景</option>';
+            backgrounds.forEach(function (name) {
+                html += '<option value="' + esc(name) + '"' + (selectedName === name ? ' selected' : '') + '>' + esc(name) + '</option>';
+            });
+            if (selectedName && backgrounds.indexOf(selectedName) === -1) {
+                html += '<option value="' + esc(selectedName) + '" selected>' + esc(selectedName) + '（未在 ST 壁纸列表中找到）</option>';
+            }
+            sel.innerHTML = html;
+            sel.disabled = false;
+        });
+    }
+
+    function applyBoundBackground(themeName, cb) {
+        var d = load();
+        var meta = d.themeMeta[themeName];
+        var backgroundName = meta && meta.backgroundName ? meta.backgroundName : '';
+        if (!backgroundName) { if (cb) cb(true); return; }
+
+        var url = getBackgroundCssUrl(backgroundName);
+        Promise.all([import('/scripts/backgrounds.js'), import('/script.js')])
+            .then(function (mods) {
+                var bgMod = mods[0];
+                var scriptMod = mods[1];
+                if (bgMod.background_settings) {
+                    bgMod.background_settings.name = backgroundName;
+                    bgMod.background_settings.url = url;
+                }
+                var bg = document.getElementById('bg1');
+                if (bg) bg.style.backgroundImage = url;
+                setControlValue('#background_fitting', bgMod.background_settings && bgMod.background_settings.fitting ? bgMod.background_settings.fitting : '');
+                if (scriptMod && typeof scriptMod.saveSettingsDebounced === 'function') scriptMod.saveSettingsDebounced();
+                if (cb) cb(true);
+            })
+            .catch(function (err) {
+                console.warn('[美化管理] 应用绑定背景失败:', err);
+                var bg = document.getElementById('bg1');
+                if (bg) bg.style.backgroundImage = url;
+                if (cb) cb(true);
+            });
+    }
+
+    function finishApplyTheme(themeName, cb, ok) {
+        if (!ok) { if (cb) cb(false); return; }
+        applyBoundBackground(themeName, function () {
+            if (cb) cb(true);
+        });
     }
 
     function setThemeControlValue(themeName) {
@@ -391,7 +472,11 @@
             getThemeObjectByName(name, function (theme) {
                 if (!theme) return;
                 applyImportedThemeObject(theme, function (ok) {
-                    if (ok) { renderGrid(); renderBottomStatus(); }
+                    if (ok) {
+                        applyBoundBackground(name, function () {
+                            renderGrid(); renderBottomStatus();
+                        });
+                    }
                 });
             });
         }, true);
@@ -570,7 +655,7 @@
     function applyTheme(themeName, cb) {
         var logs = [];
         if (importedThemeCache[themeName]) {
-            applyImportedThemeObject(importedThemeCache[themeName], cb);
+            applyImportedThemeObject(importedThemeCache[themeName], function (ok) { finishApplyTheme(themeName, cb, ok); });
             return;
         }
 
@@ -588,7 +673,7 @@
                             themeEl.selectedIndex = i;
                             themeEl.dispatchEvent(new Event('change', { bubbles: true }));
                             logs.push('SELECT 已选中 index=' + i + '，已触发 change');
-                            if (cb) cb(true);
+                            finishApplyTheme(themeName, cb, true);
                             return;
                         }
                     }
@@ -600,7 +685,7 @@
                     themeEl.dispatchEvent(new Event('input', { bubbles: true }));
                     themeEl.dispatchEvent(new Event('change', { bubbles: true }));
                     logs.push('INPUT 已设值并触发 input+change');
-                    if (cb) cb(true);
+                    finishApplyTheme(themeName, cb, true);
                     return;
                 }
             } else {
@@ -621,13 +706,13 @@
                 if (typeof ctx.executeSlashCommands === 'function') {
                     ctx.executeSlashCommands('/theme ' + themeName);
                     logs.push('executeSlashCommands 已调用');
-                    if (cb) cb(true);
+                    finishApplyTheme(themeName, cb, true);
                     return;
                 }
                 if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
                     ctx.executeSlashCommandsWithOptions('/theme ' + themeName);
                     logs.push('executeSlashCommandsWithOptions 已调用');
-                    if (cb) cb(true);
+                    finishApplyTheme(themeName, cb, true);
                     return;
                 }
 
@@ -638,7 +723,7 @@
                     try {
                         ctx.SlashCommandParser.execute('/theme ' + themeName);
                         logs.push('SlashCommandParser.execute 已调用');
-                        if (cb) cb(true);
+                        finishApplyTheme(themeName, cb, true);
                         return;
                     } catch (e2) { logs.push('SlashCommandParser.execute 失败: ' + e2.message); }
                 }
@@ -1224,6 +1309,7 @@
                 ? '<div class="tm-ctx-item" style="opacity:.5"><i class="fa-solid fa-circle-check"></i>当前正在使用</div>'
                 : '<div class="tm-ctx-item" id="tm-ctx-apply"><i class="fa-solid fa-circle-check"></i>应用主题</div>',
             meta.imageData ? '<div class="tm-ctx-item" id="tm-ctx-view"><i class="fa-solid fa-expand"></i>查看截图</div>' : '',
+            meta.backgroundName ? '<div class="tm-ctx-item" style="opacity:.75"><i class="fa-solid fa-image"></i>背景：' + esc(meta.backgroundName) + '</div>' : '',
             '<div class="tm-ctx-item" id="tm-ctx-star"><i class="fa-solid fa-star"></i>' + (meta.starred ? '取消收藏' : '加入收藏') + '</div>',
             '<div class="tm-ctx-item" id="tm-ctx-edit"><i class="fa-solid fa-pen"></i>编辑信息</div>',
         ].join(''));
@@ -1268,6 +1354,7 @@
         var sheet = createSheet([
             '<div class="tm-sheet-title"><i class="fa-solid fa-pen"></i>编辑：' + esc(themeName) + '</div>',
             '<div class="tm-field"><label>分类</label><div class="tm-frow"><select id="tm-dcat">' + catOpts + '</select><button class="tm-btn tm-btn-outline" id="tm-dnewcat" style="white-space:nowrap;font-size:.8em;padding:7px 10px">+ 新建</button></div></div>',
+            '<div class="tm-field"><label>绑定背景</label><select id="tm-dbg">' + (meta.backgroundName ? '<option value="' + esc(meta.backgroundName) + '" selected>' + esc(meta.backgroundName) + '（已绑定）</option>' : '<option value="">不绑定背景</option>') + '</select></div>',
             '<div class="tm-field"><label>作者</label><input type="text" id="tm-dauthor" placeholder="主题作者名" value="' + esc(meta.author || '') + '" /></div>',
             '<div class="tm-field"><label>备注</label><textarea id="tm-ddesc" rows="2" placeholder="主题特点、适用场景等">' + esc(meta.description || '') + '</textarea></div>',
             '<div class="tm-field"><label>标签</label><div class="tm-tags-wrap" id="tm-tags-wrap"></div>' +
@@ -1279,6 +1366,8 @@
             (editImgData ? '<button class="tm-btn tm-btn-danger" id="tm-dclr" style="font-size:.8em">删除图片</button>' : '') + '</div></div>',
             '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-dcancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-dsave">保存</button></div>',
         ].join(''));
+
+        fillBackgroundSelect(sheet.querySelector('#tm-dbg'), meta.backgroundName || '');
 
         // 标签
         function renderTagChips() {
@@ -1332,6 +1421,7 @@
             m.category = sheet.querySelector('#tm-dcat').value;
             m.author = sheet.querySelector('#tm-dauthor').value.trim();
             m.description = sheet.querySelector('#tm-ddesc').value.trim();
+            m.backgroundName = sheet.querySelector('#tm-dbg').value;
             m.tags = editTags.slice();
             m.imageData = editImgData;
             save(dd); closeSheet(sheet); toast('✨ 已保存'); renderCatbar(); renderGrid();
@@ -1399,6 +1489,7 @@
                                     var existing = dd.themeMeta[k]; var imp = imported.themeMeta[k];
                                     if (!existing.imageData && imp.imageData) existing.imageData = imp.imageData;
                                     if (!existing.category && imp.category) existing.category = imp.category;
+                                    if (!existing.backgroundName && imp.backgroundName) existing.backgroundName = imp.backgroundName;
                                     if (imp.tags) imp.tags.forEach(function (t) { if (existing.tags.indexOf(t) === -1) existing.tags.push(t); });
                                     if (!existing.author && imp.author) existing.author = imp.author;
                                 }
