@@ -1056,6 +1056,8 @@
             : d.categories.map(function (cat, idx) {
                 var n = 0; for (var k in d.themeMeta) { if (d.themeMeta[k].category === cat) n++; }
                 return '<div class="tm-cat-item"><span class="tm-cat-name">' + esc(cat) + '</span><span class="tm-cat-count">' + n + '个</span>' +
+                    (idx > 0 ? '<button class="tm-btn-sm tm-cat-up" data-idx="' + idx + '"><i class="fa-solid fa-arrow-up"></i></button>' : '') +
+                    (idx < d.categories.length - 1 ? '<button class="tm-btn-sm tm-cat-down" data-idx="' + idx + '"><i class="fa-solid fa-arrow-down"></i></button>' : '') +
                     '<button class="tm-btn-sm tm-cat-ren" data-idx="' + idx + '"><i class="fa-solid fa-pen"></i></button>' +
                     '<button class="tm-btn-sm tm-cat-del" data-idx="' + idx + '"><i class="fa-solid fa-trash"></i></button></div>';
             }).join('');
@@ -1082,6 +1084,15 @@
                 nw = nw.trim(); dd.categories[idx] = nw;
                 for (var k in dd.themeMeta) { if (dd.themeMeta[k].category === old) dd.themeMeta[k].category = nw; }
                 save(dd); closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('已重命名');
+            });
+        });
+        sheet.querySelectorAll('.tm-cat-up,.tm-cat-down').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var dd = load(); var idx = parseInt(btn.dataset.idx);
+                var target = btn.classList.contains('tm-cat-up') ? idx - 1 : idx + 1;
+                if (target < 0 || target >= dd.categories.length) return;
+                var tmp = dd.categories[idx]; dd.categories[idx] = dd.categories[target]; dd.categories[target] = tmp;
+                save(dd); closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('已调整顺序');
             });
         });
         sheet.querySelectorAll('.tm-cat-del').forEach(function (btn) {
