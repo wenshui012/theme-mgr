@@ -404,15 +404,20 @@
         bindImportedThemeSelectSync();
     }
 
-    function getThemeObjectByName(themeName, cb) {
-        if (importedThemeCache[themeName]) { cb(importedThemeCache[themeName]); return; }
-        if (fullThemeCache[themeName]) { cb(fullThemeCache[themeName]); return; }
-        fetch('/csrf-token')
+    function getPostHeaders() {
+        return fetch('/csrf-token')
             .then(function (r) { if (!r.ok) throw new Error('csrf ' + r.status); return r.json(); })
             .then(function (tokenData) {
+                return { 'Content-Type': 'application/json', 'X-CSRF-Token': tokenData.token };
+            });
+    }
+
+    function getAllThemeObjects(cb) {
+        getPostHeaders()
+            .then(function (headers) {
                 return fetch('/api/settings/get', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': tokenData.token },
+                    headers: headers,
                     body: JSON.stringify({}),
                     cache: 'no-cache',
                 });
@@ -420,20 +425,146 @@
             .then(function (r) { if (!r.ok) throw new Error('settings ' + r.status); return r.json(); })
             .then(function (data) {
                 var themes = data && Array.isArray(data.themes) ? data.themes : [];
-                var found = null;
-                themes.forEach(function (theme) {
-                    if (theme && theme.name) {
-                        fullThemeCache[theme.name] = theme;
-                        if (theme.name === themeName) found = theme;
-                    }
-                });
-                if (found) rememberImportedTheme(found);
-                cb(found);
+                themes.forEach(function (theme) { if (theme && theme.name) fullThemeCache[theme.name] = theme; });
+                cb(themes);
             })
             .catch(function (err) {
                 console.warn('[美化管理] 获取完整主题失败:', err);
-                cb(null);
+                cb(null, err);
             });
+    }
+
+    function getThemeObjectByName(themeName, cb) {
+        if (importedThemeCache[themeName]) { cb(importedThemeCache[themeName]); return; }
+        if (fullThemeCache[themeName]) { cb(fullThemeCache[themeName]); return; }
+        getAllThemeObjects(function (themes) {
+            var found = null;
+            if (themes) {
+                themes.forEach(function (theme) {
+                    if (theme && theme.name === themeName) found = theme;
+                });
+            }
+            if (found) rememberImportedTheme(found);
+            cb(found);
+        });
+    }
+
+    function syncThemeOption(themeName) {
+        var themeEl = document.getElementById('themes');
+        if (themeEl && themeEl.tagName === 'SELECT') {
+            var hasOption = false;
+            for (var i = 0; i < themeEl.options.length; i++) {
+                if (themeEl.options[i].value === themeName || themeEl.options[i].textContent === themeName) { hasOption = true; break; }
+            }
+            if (!hasOption) {
+                var opt = document.createElement('option'); opt.value = themeName; opt.textContent = themeName; themeEl.appendChild(opt);
+            }
+        } else if (themeEl && themeEl.tagName === 'INPUT' && themeEl.getAttribute('list')) {
+            var dl = document.getElementById(themeEl.getAttribute('list'));
+            if (dl && dl.options) {
+                var hasDlOption = false;
+                for (var j = 0; j < dl.options.length; j++) {
+                    if (dl.options[j].value === themeName || dl.options[j].textContent === themeName) { hasDlOption = true; break; }
+                }
+                if (!hasDlOption) {
+                    var dlOpt = document.createElement('option'); dlOpt.value = themeName; dl.appendChild(dlOpt);
+                }
+            }
+        }
+    }
+
+    function saveThemeToServer(theme, headers) {
+        return fetch('/api/themes/save', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(theme),
+        }).then(function (r) {
+            if (!r.ok) throw new Error(theme.name + ': status ' + r.status);
+            return theme;
+        });
+    }
+
+    function downloadJsonFile(filename, data) {
+        var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a'); a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click();
+        setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
+    }
+
+    function readJsonFile(file) {
+        return new Promise(function (resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function (e) {
+                try { resolve({ file: file, data: JSON.parse(e.target.result) }); }
+                catch (err) { reject(new Error(file.name + ' 解析失败')); }
+            };
+            reader.onerror = function () { reject(new Error(file.name + ' 读取失败')); };
+            reader.readAsText(file, 'utf-8');
+        });
+    }
+
+    function extractThemeObjects(parsed, sourceName) {
+        var raw = [];
+        if (parsed && Array.isArray(parsed.themes)) raw = parsed.themes;
+        else if (Array.isArray(parsed)) raw = parsed;
+        else if (parsed && parsed.name) raw = [parsed];
+        else throw new Error(sourceName + ' 缺少 name 或 themes 字段');
+
+        return raw.map(function (theme, idx) {
+            if (!theme || !theme.name || !String(theme.name).trim()) throw new Error(sourceName + ' 第 ' + (idx + 1) + ' 个主题缺少 name');
+            theme.name = String(theme.name).trim();
+            return theme;
+        });
+    }
+
+    function importThemeObjects(themes, opts) {
+        opts = opts || {};
+        if (!themes || themes.length === 0) { toast('没有可导入的美化', true); return; }
+
+        var byName = {};
+        var dupInImport = [];
+        themes.forEach(function (theme) {
+            if (byName[theme.name]) dupInImport.push(theme.name);
+            byName[theme.name] = theme;
+        });
+        var finalThemes = Object.keys(byName).map(function (name) { return byName[name]; });
+
+        if (dupInImport.length > 0 && !confirm('导入内容中有 ' + dupInImport.length + ' 个重名美化，将以最后出现的为准。是否继续？')) return;
+
+        var importThemes = finalThemes.filter(function (theme) { return typeof theme.custom_css === 'string' && /@import/i.test(theme.custom_css); });
+        if (importThemes.length > 0 && !confirm('检测到 ' + importThemes.length + ' 个美化的 custom_css 中包含 @import。\n导入外部样式可能带来加载失败或安全风险，仍要继续吗？')) return;
+
+        var existing = finalThemes.filter(function (theme) { return stThemeList.indexOf(theme.name) !== -1; });
+        if (existing.length > 0 && !confirm('检测到 ' + existing.length + ' 个同名美化，继续导入将覆盖已有主题。是否继续？')) return;
+
+        getPostHeaders()
+            .then(function (headers) {
+                return Promise.all(finalThemes.map(function (theme) {
+                    return saveThemeToServer(theme, headers)
+                        .then(function () { return { ok: true, theme: theme }; })
+                        .catch(function (err) { return { ok: false, theme: theme, error: err }; });
+                }));
+            })
+            .then(function (results) {
+                var okCount = 0;
+                var failCount = 0;
+                results.forEach(function (res) {
+                    if (res.ok) {
+                        okCount++;
+                        rememberImportedTheme(res.theme);
+                        syncThemeOption(res.theme.name);
+                    } else failCount++;
+                });
+                fetchThemeList(function () {
+                    renderCatbar(); renderGrid(); renderBottomStatus();
+                    if (failCount > 0) toast('导入完成：成功 ' + okCount + ' 个，失败 ' + failCount + ' 个', true);
+                    else if (okCount === 1 && results[0] && results[0].theme) toast('✅ 已导入美化：' + results[0].theme.name);
+                    else toast('✅ 已导入美化：' + okCount + ' 个');
+                });
+                if (failCount > 0) console.warn('[美化管理] 批量导入失败项:', results.filter(function (r) { return !r.ok; }));
+            })
+            .catch(function (err) { toast((opts.failText || '导入美化失败') + '：' + err.message, true); });
     }
 
     function applyTheme(themeName, cb) {
@@ -1228,9 +1359,11 @@
             '<button class="tm-btn tm-btn-outline" id="tm-exp"><i class="fa-solid fa-download"></i> 导出标注</button>' +
             '<button class="tm-btn tm-btn-outline" id="tm-imp"><i class="fa-solid fa-upload"></i> 导入标注</button>' +
             '<button class="tm-btn tm-btn-outline" id="tm-imp-theme"><i class="fa-solid fa-file-import"></i> 导入美化</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-imp-theme-batch"><i class="fa-solid fa-upload"></i> 批量导入美化</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-exp-theme-bundle"><i class="fa-solid fa-file-export"></i> 导出美化包</button>' +
             '<button class="tm-btn tm-btn-danger" id="tm-clear">清空标注</button>' +
             '</div>',
-            '<div class="tm-hint" style="margin-top:8px">※ 主题文件本身由 ST 管理，这里只导出/导入你添加的分类、标签、截图等附加信息</div>',
+            '<div class="tm-hint" style="margin-top:8px">※ 标注只包含分类、标签、截图等附加信息；美化包会打包 ST 当前所有主题 JSON</div>',
         ].join(''));
 
         sheet.querySelector('#tm-show-ball').addEventListener('change', function () {
@@ -1289,56 +1422,53 @@
                         var theme = JSON.parse(e.target.result);
                         if (!theme || !theme.name || !String(theme.name).trim()) { toast('主题文件缺少 name 字段', true); return; }
                         theme.name = String(theme.name).trim();
-                        if (typeof theme.custom_css === 'string' && /@import/i.test(theme.custom_css)) {
-                            if (!confirm('检测到 custom_css 中包含 @import。\n导入外部样式可能带来加载失败或安全风险，仍要继续吗？')) return;
-                        }
-                        if (stThemeList.indexOf(theme.name) !== -1) {
-                            if (!confirm('主题「' + theme.name + '」已存在，继续导入将覆盖同名主题。是否继续？')) return;
-                        }
-                        fetch('/csrf-token')
-                            .then(function (r) { if (!r.ok) throw new Error('csrf ' + r.status); return r.json(); })
-                            .then(function (tokenData) {
-                                return fetch('/api/themes/save', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': tokenData.token },
-                                    body: JSON.stringify(theme),
-                                });
-                            })
-                            .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r; })
-                            .then(function () {
-                                rememberImportedTheme(theme);
-                                var themeEl = document.getElementById('themes');
-                                if (themeEl && themeEl.tagName === 'SELECT') {
-                                    var hasOption = false;
-                                    for (var i = 0; i < themeEl.options.length; i++) {
-                                        if (themeEl.options[i].value === theme.name || themeEl.options[i].textContent === theme.name) { hasOption = true; break; }
-                                    }
-                                    if (!hasOption) {
-                                        var opt = document.createElement('option'); opt.value = theme.name; opt.textContent = theme.name; themeEl.appendChild(opt);
-                                    }
-                                } else if (themeEl && themeEl.tagName === 'INPUT' && themeEl.getAttribute('list')) {
-                                    var dl = document.getElementById(themeEl.getAttribute('list'));
-                                    if (dl && dl.options) {
-                                        var hasDlOption = false;
-                                        for (var j = 0; j < dl.options.length; j++) {
-                                            if (dl.options[j].value === theme.name || dl.options[j].textContent === theme.name) { hasDlOption = true; break; }
-                                        }
-                                        if (!hasDlOption) {
-                                            var dlOpt = document.createElement('option'); dlOpt.value = theme.name; dl.appendChild(dlOpt);
-                                        }
-                                    }
-                                }
-                                fetchThemeList(function () {
-                                    renderCatbar(); renderGrid(); renderBottomStatus();
-                                    toast('✅ 已导入美化：' + theme.name);
-                                });
-                            })
-                            .catch(function (err) { toast('导入美化失败：' + err.message, true); });
+                        importThemeObjects([theme], { failText: '导入美化失败' });
                     } catch (err) { toast('解析失败', true); }
                 };
                 reader.readAsText(inp.files[0], 'utf-8');
             });
             inp.click();
+        });
+        sheet.querySelector('#tm-imp-theme-batch').addEventListener('click', function () {
+            var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json'; inp.multiple = true;
+            inp.addEventListener('change', function () {
+                var files = Array.prototype.slice.call(inp.files || []);
+                if (files.length === 0) return;
+                Promise.all(files.map(function (file) {
+                    return readJsonFile(file)
+                        .then(function (res) { return { file: file, data: res.data }; })
+                        .catch(function (err) { return { file: file, error: err }; });
+                })).then(function (results) {
+                    var themes = [];
+                    var errors = [];
+                    results.forEach(function (res) {
+                        if (res.error) { errors.push(res.error.message); return; }
+                        try {
+                            themes = themes.concat(extractThemeObjects(res.data, res.file.name));
+                        } catch (err) { errors.push(err.message); }
+                    });
+                    if (errors.length > 0) {
+                        console.warn('[美化管理] 批量导入解析错误:', errors);
+                        if (!confirm('有 ' + errors.length + ' 个文件/主题解析失败，将跳过它们继续导入其余内容。是否继续？')) return;
+                    }
+                    importThemeObjects(themes, { failText: '批量导入美化失败' });
+                });
+            });
+            inp.click();
+        });
+        sheet.querySelector('#tm-exp-theme-bundle').addEventListener('click', function () {
+            getAllThemeObjects(function (themes, err) {
+                if (!themes) { toast('导出美化包失败：' + (err ? err.message : '无法读取主题'), true); return; }
+                if (themes.length === 0) { toast('没有可导出的美化', true); return; }
+                var bundle = {
+                    type: 'theme-mgr-theme-bundle',
+                    version: 1,
+                    exportedAt: new Date().toISOString(),
+                    themes: themes,
+                };
+                downloadJsonFile('theme-mgr-themes-' + new Date().toISOString().slice(0, 10) + '.json', bundle);
+                toast('✅ 已导出美化包：' + themes.length + ' 个');
+            });
         });
         sheet.querySelector('#tm-clear').addEventListener('click', function () {
             if (!confirm('确定清空所有标注数据（分类、标签、截图）？\n主题文件本身不受影响。')) return;
