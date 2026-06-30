@@ -21,6 +21,9 @@
 
     // 缓存主题列表
     var stThemeList = [];
+    var importedThemeCache = {};
+    var fullThemeCache = {};
+    var importedThemeSelectSyncBound = false;
 
     function getPopupLayer() {
         var slot = document.getElementById('tm-popup-slot');
@@ -204,8 +207,241 @@
         return '';
     }
 
+    function setControlValue(selector, value) {
+        var el = document.querySelector(selector);
+        if (el) el.value = value;
+    }
+
+    function setControlChecked(selector, value) {
+        var el = document.querySelector(selector);
+        if (el) el.checked = !!value;
+    }
+
+    function setControlDisabled(selector, value) {
+        var el = document.querySelector(selector);
+        if (el) el.disabled = !!value;
+    }
+
+    function setControlOpacity(selector, value) {
+        var el = document.querySelector(selector);
+        if (el) el.style.opacity = value;
+    }
+
+    function setColorPicker(selector, value) {
+        var el = document.querySelector(selector);
+        if (el) el.setAttribute('color', value);
+    }
+
+    function setThemeControlValue(themeName) {
+        var themeEl = document.getElementById('themes');
+        if (!themeEl) return;
+        try {
+            if (themeEl.tagName === 'INPUT') {
+                var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                if (setter) setter.call(themeEl, themeName); else themeEl.value = themeName;
+            } else {
+                themeEl.value = themeName;
+            }
+        } catch (e) { themeEl.value = themeName; }
+    }
+
+    function applyThemeVisuals(theme) {
+        var root = document.documentElement;
+        var body = document.body;
+        function has(key) { return theme[key] !== undefined; }
+        function cssVar(name, value) { root.style.setProperty(name, String(value)); }
+        function bodyClass(cls, value) { body.classList.toggle(cls, !!value); }
+
+        if (has('main_text_color')) {
+            cssVar('--SmartThemeBodyColor', theme.main_text_color);
+            setColorPicker('#main-text-color-picker', theme.main_text_color);
+            var match = String(theme.main_text_color).match(/\(([^)]+)\)/);
+            if (match) {
+                var parts = match[1].split(',');
+                if (parts.length >= 4) {
+                    cssVar('--SmartThemeCheckboxBgColorR', parts[0]);
+                    cssVar('--SmartThemeCheckboxBgColorG', parts[1]);
+                    cssVar('--SmartThemeCheckboxBgColorB', parts[2]);
+                    cssVar('--SmartThemeCheckboxBgColorA', parts[3]);
+                }
+            }
+        }
+        if (has('italics_text_color')) { cssVar('--SmartThemeEmColor', theme.italics_text_color); setColorPicker('#italics-color-picker', theme.italics_text_color); }
+        if (has('underline_text_color')) { cssVar('--SmartThemeUnderlineColor', theme.underline_text_color); setColorPicker('#underline-color-picker', theme.underline_text_color); }
+        if (has('quote_text_color')) { cssVar('--SmartThemeQuoteColor', theme.quote_text_color); setColorPicker('#quote-color-picker', theme.quote_text_color); }
+        if (has('blur_tint_color')) {
+            cssVar('--SmartThemeBlurTintColor', theme.blur_tint_color);
+            setColorPicker('#blur-tint-color-picker', theme.blur_tint_color);
+            var metaThemeColor = document.querySelector('meta[name=theme-color]');
+            if (metaThemeColor) metaThemeColor.setAttribute('content', theme.blur_tint_color);
+        }
+        if (has('chat_tint_color')) { cssVar('--SmartThemeChatTintColor', theme.chat_tint_color); setColorPicker('#chat-tint-color-picker', theme.chat_tint_color); }
+        if (has('user_mes_blur_tint_color')) { cssVar('--SmartThemeUserMesBlurTintColor', theme.user_mes_blur_tint_color); setColorPicker('#user-mes-blur-tint-color-picker', theme.user_mes_blur_tint_color); }
+        if (has('bot_mes_blur_tint_color')) { cssVar('--SmartThemeBotMesBlurTintColor', theme.bot_mes_blur_tint_color); setColorPicker('#bot-mes-blur-tint-color-picker', theme.bot_mes_blur_tint_color); }
+        if (has('shadow_color')) { cssVar('--SmartThemeShadowColor', theme.shadow_color); setColorPicker('#shadow-color-picker', theme.shadow_color); }
+        if (has('border_color')) { cssVar('--SmartThemeBorderColor', theme.border_color); setColorPicker('#border-color-picker', theme.border_color); }
+
+        if (has('blur_strength')) { cssVar('--blurStrength', theme.blur_strength); setControlValue('#blur_strength', theme.blur_strength); setControlValue('#blur_strength_counter', theme.blur_strength); }
+        if (has('shadow_width')) { cssVar('--shadowWidth', theme.shadow_width); setControlValue('#shadow_width', theme.shadow_width); setControlValue('#shadow_width_counter', theme.shadow_width); }
+        if (has('font_scale')) { cssVar('--fontScale', theme.font_scale); setControlValue('#font_scale', theme.font_scale); setControlValue('#font_scale_counter', theme.font_scale); }
+        if (has('chat_width')) { cssVar('--sheldWidth', theme.chat_width + 'vw'); setControlValue('#chat_width_slider', theme.chat_width); setControlValue('#chat_width_slider_counter', theme.chat_width); }
+
+        if (has('custom_css')) {
+            setControlValue('#customCSS', theme.custom_css);
+            var style = document.getElementById('custom-style');
+            if (!style) {
+                style = document.createElement('style');
+                style.setAttribute('type', 'text/css');
+                style.setAttribute('id', 'custom-style');
+                document.head.appendChild(style);
+            }
+            style.innerHTML = theme.custom_css;
+        }
+
+        if (has('fast_ui_mode')) {
+            bodyClass('no-blur', theme.fast_ui_mode);
+            setControlChecked('#fast_ui_mode', theme.fast_ui_mode);
+            setControlOpacity('#blur-strength-block', theme.fast_ui_mode ? '0.2' : '1');
+            setControlDisabled('#blur_strength', theme.fast_ui_mode);
+        }
+        if (has('waifuMode')) { bodyClass('waifuMode', theme.waifuMode); setControlChecked('#waifuMode', theme.waifuMode); }
+        if (has('noShadows')) {
+            bodyClass('noShadows', theme.noShadows);
+            setControlChecked('#noShadowsmode', theme.noShadows);
+            setControlOpacity('#shadow-width-block', theme.noShadows ? '0.2' : '1');
+            setControlDisabled('#shadow_width', theme.noShadows);
+        }
+        if (has('avatar_style')) {
+            body.classList.toggle('big-avatars', Number(theme.avatar_style) === 1);
+            body.classList.toggle('square-avatars', Number(theme.avatar_style) === 2);
+            body.classList.toggle('rounded-avatars', Number(theme.avatar_style) === 3);
+            setControlValue('#avatar_style', theme.avatar_style);
+        }
+        if (has('chat_display')) {
+            var chatDisplay = Number(theme.chat_display);
+            body.classList.toggle('bubblechat', chatDisplay === 1);
+            body.classList.toggle('documentstyle', chatDisplay === 2);
+            setControlValue('#chat_display', theme.chat_display);
+        }
+        if (has('toastr_position') && window.toastr) {
+            window.toastr.options.positionClass = theme.toastr_position;
+            setControlValue('#toastr_position', theme.toastr_position);
+        }
+
+        if (has('hotswap_enabled')) { body.classList.toggle('no-hotswap', !theme.hotswap_enabled); setControlChecked('#hotswapEnabled', theme.hotswap_enabled); }
+        if (has('timer_enabled')) { body.classList.toggle('no-timer', !theme.timer_enabled); setControlChecked('#messageTimerEnabled', theme.timer_enabled); }
+        if (has('timestamps_enabled')) { body.classList.toggle('no-timestamps', !theme.timestamps_enabled); setControlChecked('#messageTimestampsEnabled', theme.timestamps_enabled); }
+        if (has('timestamp_model_icon')) { body.classList.toggle('no-modelIcons', !theme.timestamp_model_icon); setControlChecked('#messageModelIconEnabled', theme.timestamp_model_icon); }
+        if (has('message_token_count_enabled')) { body.classList.toggle('no-tokenCount', !theme.message_token_count_enabled); setControlChecked('#messageTokensEnabled', theme.message_token_count_enabled); }
+        if (has('mesIDDisplay_enabled')) { body.classList.toggle('no-mesIDDisplay', !theme.mesIDDisplay_enabled); setControlChecked('#mesIDDisplayEnabled', theme.mesIDDisplay_enabled); }
+        if (has('hideChatAvatars_enabled')) { bodyClass('hideChatAvatars', theme.hideChatAvatars_enabled); setControlChecked('#hideChatAvatarsEnabled', theme.hideChatAvatars_enabled); }
+        if (has('expand_message_actions')) { bodyClass('expandMessageActions', theme.expand_message_actions); setControlChecked('#expandMessageActions', theme.expand_message_actions); }
+        if (has('reduced_motion')) { bodyClass('reduced-motion', theme.reduced_motion); setControlChecked('#reduced_motion', theme.reduced_motion); }
+        if (has('compact_input_area')) {
+            var sendForm = document.getElementById('send_form');
+            if (sendForm) sendForm.classList.toggle('compact', !!theme.compact_input_area);
+            setControlChecked('#compact_input_area', theme.compact_input_area);
+        }
+        if (has('show_swipe_num_all_messages')) { bodyClass('swipeAllMessages', theme.show_swipe_num_all_messages); setControlChecked('#show_swipe_num_all_messages', theme.show_swipe_num_all_messages); }
+        if (has('click_to_edit')) setControlChecked('#click_to_edit', theme.click_to_edit);
+        if (has('media_display')) setControlValue('#media_display', theme.media_display);
+    }
+
+    function applyImportedThemeObject(theme, cb) {
+        if (!theme || !theme.name) { if (cb) cb(false); return; }
+        setThemeControlValue(theme.name);
+        Promise.all([import('/scripts/power-user.js'), import('/script.js')])
+            .then(function (mods) {
+                var puMod = mods[0];
+                var scriptMod = mods[1];
+                if (puMod.power_user) {
+                    for (var key in theme) {
+                        if (key === 'name') continue;
+                        if (Object.prototype.hasOwnProperty.call(puMod.power_user, key)) puMod.power_user[key] = theme[key];
+                    }
+                    puMod.power_user.theme = theme.name;
+                }
+                applyThemeVisuals(theme);
+                if (scriptMod && typeof scriptMod.saveSettingsDebounced === 'function') scriptMod.saveSettingsDebounced();
+                if (cb) cb(true);
+            })
+            .catch(function (err) {
+                console.warn('[美化管理] 直接应用导入主题失败，尝试仅应用视觉样式:', err);
+                applyThemeVisuals(theme);
+                if (cb) cb(true);
+            });
+    }
+
+    function getThemeNameFromControl(themeEl) {
+        if (!themeEl) return '';
+        if (themeEl.tagName === 'SELECT') {
+            var opt = themeEl.options[themeEl.selectedIndex];
+            return opt ? String(opt.value || opt.textContent || '').trim() : '';
+        }
+        return String(themeEl.value || '').trim();
+    }
+
+    function bindImportedThemeSelectSync() {
+        if (importedThemeSelectSyncBound) return;
+        importedThemeSelectSyncBound = true;
+        document.addEventListener('change', function (e) {
+            if (!e.target || e.target.id !== 'themes') return;
+            var name = getThemeNameFromControl(e.target);
+            if (!name) return;
+            getThemeObjectByName(name, function (theme) {
+                if (!theme) return;
+                applyImportedThemeObject(theme, function (ok) {
+                    if (ok) { renderGrid(); renderBottomStatus(); }
+                });
+            });
+        }, true);
+    }
+
+    function rememberImportedTheme(theme) {
+        if (!theme || !theme.name) return;
+        importedThemeCache[theme.name] = theme;
+        fullThemeCache[theme.name] = theme;
+        bindImportedThemeSelectSync();
+    }
+
+    function getThemeObjectByName(themeName, cb) {
+        if (importedThemeCache[themeName]) { cb(importedThemeCache[themeName]); return; }
+        if (fullThemeCache[themeName]) { cb(fullThemeCache[themeName]); return; }
+        fetch('/csrf-token')
+            .then(function (r) { if (!r.ok) throw new Error('csrf ' + r.status); return r.json(); })
+            .then(function (tokenData) {
+                return fetch('/api/settings/get', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': tokenData.token },
+                    body: JSON.stringify({}),
+                    cache: 'no-cache',
+                });
+            })
+            .then(function (r) { if (!r.ok) throw new Error('settings ' + r.status); return r.json(); })
+            .then(function (data) {
+                var themes = data && Array.isArray(data.themes) ? data.themes : [];
+                var found = null;
+                themes.forEach(function (theme) {
+                    if (theme && theme.name) {
+                        fullThemeCache[theme.name] = theme;
+                        if (theme.name === themeName) found = theme;
+                    }
+                });
+                if (found) rememberImportedTheme(found);
+                cb(found);
+            })
+            .catch(function (err) {
+                console.warn('[美化管理] 获取完整主题失败:', err);
+                cb(null);
+            });
+    }
+
     function applyTheme(themeName, cb) {
         var logs = [];
+        if (importedThemeCache[themeName]) {
+            applyImportedThemeObject(importedThemeCache[themeName], cb);
+            return;
+        }
 
         // 方式1：模拟用户在 #themes 输入框/下拉框中选择，然后触发 change 事件
         // 这是最可靠的方式——直接模拟用户操作
@@ -1070,6 +1306,7 @@
                             })
                             .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r; })
                             .then(function () {
+                                rememberImportedTheme(theme);
                                 var themeEl = document.getElementById('themes');
                                 if (themeEl && themeEl.tagName === 'SELECT') {
                                     var hasOption = false;
@@ -1425,6 +1662,7 @@
 
     // ── 启动 ──────────────────────────────────────────────────
     injectStyles();
+    bindImportedThemeSelectSync();
     setTimeout(injectBtn, 500);
     setInterval(injectBtn, 2000);
     setTimeout(injectFab, 1500);
