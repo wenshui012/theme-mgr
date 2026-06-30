@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v2.5",
-  "version": "2.5.1",
+  "display_name": "美化管理 v3.0",
+  "version": "3.0.0",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v2.5: 对接ST主题API，一键切换主题，分类/标签/收藏/排序/批量操作/预览截图管理"
+  "description": "v3.0: 支持美化批量导入导出、导入分类选择、主题绑定背景、自定义悬浮球和完整标注管理"
 }
