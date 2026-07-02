@@ -524,6 +524,126 @@
         bindImportedThemeSelectSync();
     }
 
+    var THEME_COMPAT_FIELDS = [
+        'blur_strength', 'main_text_color', 'italics_text_color', 'underline_text_color',
+        'quote_text_color', 'blur_tint_color', 'chat_tint_color', 'user_mes_blur_tint_color',
+        'bot_mes_blur_tint_color', 'shadow_color', 'shadow_width', 'border_color',
+        'font_scale', 'fast_ui_mode', 'waifuMode', 'avatar_style', 'chat_display',
+        'toastr_position', 'noShadows', 'chat_width', 'timer_enabled', 'timestamps_enabled',
+        'timestamp_model_icon', 'mesIDDisplay_enabled', 'hideChatAvatars_enabled',
+        'message_token_count_enabled', 'expand_message_actions', 'hotswap_enabled',
+        'custom_css', 'reduced_motion', 'compact_input_area', 'show_swipe_num_all_messages',
+        'click_to_edit', 'media_display'
+    ];
+
+    function cloneThemeValue(value) {
+        if (value === undefined) return undefined;
+        if (value === null || typeof value !== 'object') return value;
+        try { return JSON.parse(JSON.stringify(value)); } catch (e) { return value; }
+    }
+
+    function getFallbackThemeDefaults() {
+        var rootStyle = getComputedStyle(document.documentElement);
+        function cssVar(name, fallback) {
+            var value = rootStyle.getPropertyValue(name).trim();
+            return value || fallback;
+        }
+        return {
+            blur_strength: 10,
+            main_text_color: cssVar('--SmartThemeBodyColor', 'rgba(220, 220, 210, 1)'),
+            italics_text_color: cssVar('--SmartThemeEmColor', 'rgba(145, 145, 145, 1)'),
+            underline_text_color: cssVar('--SmartThemeUnderlineColor', 'rgba(188, 231, 207, 1)'),
+            quote_text_color: cssVar('--SmartThemeQuoteColor', 'rgba(225, 138, 36, 1)'),
+            blur_tint_color: cssVar('--SmartThemeBlurTintColor', 'rgba(23, 23, 23, 1)'),
+            chat_tint_color: cssVar('--SmartThemeChatTintColor', 'rgba(23, 23, 23, 1)'),
+            user_mes_blur_tint_color: cssVar('--SmartThemeUserMesBlurTintColor', 'rgba(23, 23, 23, 1)'),
+            bot_mes_blur_tint_color: cssVar('--SmartThemeBotMesBlurTintColor', 'rgba(23, 23, 23, 1)'),
+            shadow_color: cssVar('--SmartThemeShadowColor', 'rgba(0, 0, 0, 1)'),
+            shadow_width: 2,
+            border_color: cssVar('--SmartThemeBorderColor', 'rgba(0, 0, 0, 1)'),
+            font_scale: 1,
+            fast_ui_mode: true,
+            waifuMode: false,
+            avatar_style: 0,
+            chat_display: 0,
+            toastr_position: 'toast-top-center',
+            noShadows: false,
+            chat_width: 50,
+            timer_enabled: true,
+            timestamps_enabled: true,
+            timestamp_model_icon: false,
+            mesIDDisplay_enabled: false,
+            hideChatAvatars_enabled: false,
+            message_token_count_enabled: false,
+            expand_message_actions: false,
+            hotswap_enabled: true,
+            custom_css: '',
+            reduced_motion: false,
+            compact_input_area: true,
+            show_swipe_num_all_messages: false,
+            click_to_edit: false,
+            media_display: 'list'
+        };
+    }
+
+    function getThemeCompatDefaults(cb) {
+        var defaults = getFallbackThemeDefaults();
+        import('/scripts/power-user.js')
+            .then(function (mod) {
+                var pu = mod && mod.power_user;
+                if (pu) {
+                    THEME_COMPAT_FIELDS.forEach(function (key) {
+                        if (Object.prototype.hasOwnProperty.call(pu, key)) defaults[key] = cloneThemeValue(pu[key]);
+                    });
+                }
+                cb(defaults);
+            })
+            .catch(function () { cb(defaults); });
+    }
+
+    function getMissingThemeFields(theme) {
+        if (!theme || typeof theme !== 'object') return THEME_COMPAT_FIELDS.slice();
+        return THEME_COMPAT_FIELDS.filter(function (key) {
+            return theme[key] === undefined;
+        });
+    }
+
+    function normalizeThemeObject(theme, defaults, existingTheme) {
+        var normalized = {};
+        THEME_COMPAT_FIELDS.forEach(function (key) {
+            if (defaults[key] !== undefined) normalized[key] = cloneThemeValue(defaults[key]);
+        });
+        if (existingTheme && typeof existingTheme === 'object') {
+            for (var oldKey in existingTheme) normalized[oldKey] = cloneThemeValue(existingTheme[oldKey]);
+        }
+        for (var key in theme) normalized[key] = cloneThemeValue(theme[key]);
+        normalized.name = String(theme.name || '').trim();
+        if (typeof normalized.custom_css !== 'string') normalized.custom_css = normalized.custom_css == null ? '' : String(normalized.custom_css);
+        return normalized;
+    }
+
+    function normalizeThemeObjects(themes, cb) {
+        getThemeCompatDefaults(function (defaults) {
+            getAllThemeObjects(function (existingThemes) {
+                var existingByName = {};
+                (existingThemes || []).forEach(function (theme) {
+                    if (theme && theme.name) existingByName[theme.name] = theme;
+                });
+                var fixedCount = 0;
+                var missingTotal = 0;
+                var normalized = themes.map(function (theme) {
+                    var missing = getMissingThemeFields(theme);
+                    if (missing.length > 0) {
+                        fixedCount++;
+                        missingTotal += missing.length;
+                    }
+                    return normalizeThemeObject(theme, defaults, existingByName[theme.name]);
+                });
+                cb(normalized, { fixedCount: fixedCount, missingTotal: missingTotal });
+            });
+        });
+    }
+
     function getPostHeaders() {
         return fetch('/csrf-token')
             .then(function (r) { if (!r.ok) throw new Error('csrf ' + r.status); return r.json(); })
@@ -846,35 +966,38 @@
         var existing = finalThemes.filter(function (theme) { return stThemeList.indexOf(theme.name) !== -1; });
         if (existing.length > 0 && !confirm('检测到 ' + existing.length + ' 个同名美化，继续导入将覆盖已有主题。是否继续？')) return;
 
-        getPostHeaders()
-            .then(function (headers) {
-                return Promise.all(finalThemes.map(function (theme) {
-                    return saveThemeToServer(theme, headers)
-                        .then(function () { return { ok: true, theme: theme }; })
-                        .catch(function (err) { return { ok: false, theme: theme, error: err }; });
-                }));
-            })
-            .then(function (results) {
-                var okCount = 0;
-                var failCount = 0;
-                results.forEach(function (res) {
-                    if (res.ok) {
-                        okCount++;
-                        rememberImportedTheme(res.theme);
-                        syncThemeOption(res.theme.name);
-                    } else failCount++;
-                });
-                var okNames = results.filter(function (res) { return res.ok; }).map(function (res) { return res.theme.name; });
-                if (okNames.length > 0) mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories, opts.forceCategory);
-                fetchThemeList(function () {
-                    renderCatbar(); renderGrid(); renderBottomStatus();
-                    if (failCount > 0) toast('导入完成：成功 ' + okCount + ' 个，失败 ' + failCount + ' 个', true);
-                    else if (okCount === 1 && results[0] && results[0].theme) toast('✅ 已导入美化：' + results[0].theme.name);
-                    else toast('✅ 已导入美化：' + okCount + ' 个');
-                });
-                if (failCount > 0) console.warn('[美化管理] 批量导入失败项:', results.filter(function (r) { return !r.ok; }));
-            })
-            .catch(function (err) { toast((opts.failText || '导入美化失败') + '：' + err.message, true); });
+        normalizeThemeObjects(finalThemes, function (normalizedThemes, compatInfo) {
+            getPostHeaders()
+                .then(function (headers) {
+                    return Promise.all(normalizedThemes.map(function (theme) {
+                        return saveThemeToServer(theme, headers)
+                            .then(function () { return { ok: true, theme: theme }; })
+                            .catch(function (err) { return { ok: false, theme: theme, error: err }; });
+                    }));
+                })
+                .then(function (results) {
+                    var okCount = 0;
+                    var failCount = 0;
+                    results.forEach(function (res) {
+                        if (res.ok) {
+                            okCount++;
+                            rememberImportedTheme(res.theme);
+                            syncThemeOption(res.theme.name);
+                        } else failCount++;
+                    });
+                    var okNames = results.filter(function (res) { return res.ok; }).map(function (res) { return res.theme.name; });
+                    if (okNames.length > 0) mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories, opts.forceCategory);
+                    fetchThemeList(function () {
+                        renderCatbar(); renderGrid(); renderBottomStatus();
+                        var fixedText = compatInfo && compatInfo.fixedCount > 0 ? '，已补齐 ' + compatInfo.fixedCount + ' 个不完整美化' : '';
+                        if (failCount > 0) toast('导入完成：成功 ' + okCount + ' 个，失败 ' + failCount + ' 个' + fixedText, true);
+                        else if (okCount === 1 && results[0] && results[0].theme) toast('✅ 已导入美化：' + results[0].theme.name + fixedText);
+                        else toast('✅ 已导入美化：' + okCount + ' 个' + fixedText);
+                    });
+                    if (failCount > 0) console.warn('[美化管理] 批量导入失败项:', results.filter(function (r) { return !r.ok; }));
+                })
+                .catch(function (err) { toast((opts.failText || '导入美化失败') + '：' + err.message, true); });
+        });
     }
 
     function applyTheme(themeName, cb) {
@@ -1909,16 +2032,19 @@
             getAllThemeObjects(function (themes, err) {
                 if (!themes) { toast('导出美化包失败：' + (err ? err.message : '无法读取主题'), true); return; }
                 if (themes.length === 0) { toast('没有可导出的美化', true); return; }
-                var bundle = {
-                    type: 'theme-mgr-theme-bundle',
-                    version: 1,
-                    exportedAt: new Date().toISOString(),
-                    themes: themes,
-                    categories: load().categories.slice(),
-                    themeMeta: buildThemeMetaForBundle(themes),
-                };
-                downloadJsonFile('theme-mgr-themes-' + new Date().toISOString().slice(0, 10) + '.json', bundle);
-                toast('✅ 已导出美化包：' + themes.length + ' 个');
+                normalizeThemeObjects(themes, function (normalizedThemes, compatInfo) {
+                    var bundle = {
+                        type: 'theme-mgr-theme-bundle',
+                        version: 1,
+                        exportedAt: new Date().toISOString(),
+                        themes: normalizedThemes,
+                        categories: load().categories.slice(),
+                        themeMeta: buildThemeMetaForBundle(normalizedThemes),
+                    };
+                    downloadJsonFile('theme-mgr-themes-' + new Date().toISOString().slice(0, 10) + '.json', bundle);
+                    var fixedText = compatInfo && compatInfo.fixedCount > 0 ? '，已补齐 ' + compatInfo.fixedCount + ' 个不完整美化' : '';
+                    toast('✅ 已导出美化包：' + normalizedThemes.length + ' 个' + fixedText);
+                });
             });
         });
         sheet.querySelector('#tm-clear').addEventListener('click', function () {
