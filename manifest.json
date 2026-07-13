@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v3.0",
-  "version": "3.0.0",
+  "display_name": "美化管理 v3.5",
+  "version": "3.5.0",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v3.0: 支持美化批量导入导出、导入分类选择、主题绑定背景、自定义悬浮球和完整标注管理"
+  "description": "v3.5: 后端存储图片与标注、截图裁剪、分类导出、主网格/背景缩放改名、主题改名删除同步酒馆"
 }
