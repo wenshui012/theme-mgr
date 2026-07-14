@@ -2901,9 +2901,13 @@
         var btn = document.getElementById(BTN_ID); if (!btn) return;
         var curTheme = getCurrentThemeName();
         var span = btn.querySelector('span');
+        var title = curTheme ? (LAUNCHER_NAME + '：' + curTheme) : LAUNCHER_NAME;
+        var inner = btn.querySelector('.list-group-item');
         if (span) span.textContent = LAUNCHER_NAME;
-        btn.title = curTheme ? (LAUNCHER_NAME + '：' + curTheme) : LAUNCHER_NAME;
+        btn.title = title;
+        if (inner) inner.title = title;
         btn.style.color = curTheme ? 'var(--SmartThemeQuoteColor)' : '';
+        if (inner) inner.style.color = curTheme ? 'var(--SmartThemeQuoteColor)' : '';
     }
 
     function findMenu() {
@@ -2924,7 +2928,12 @@
         if (curTheme) btn.style.color = 'var(--SmartThemeQuoteColor)';
         if (menu.id === 'extensionsMenu') {
             btn.className = 'extension_container interactable';
-            btn.innerHTML = '<div class="fa-fw fa-solid fa-palette extensionsMenuExtensionButton"></div><span>' + esc(LAUNCHER_NAME) + '</span>';
+            btn.tabIndex = 0;
+            btn.innerHTML =
+                '<div class="list-group-item flex-container flexGap5 interactable" role="listitem" tabindex="0" title="' + esc(btn.title) + '">' +
+                '<div class="fa-fw fa-solid fa-palette extensionsMenuExtensionButton"></div>' +
+                '<span>' + esc(LAUNCHER_NAME) + '</span>' +
+                '</div>';
         } else {
             btn.className = 'list-group-item flex-container flexGap5 interactable';
             btn.innerHTML = '<i class="fa-solid fa-palette"></i><span>' + esc(LAUNCHER_NAME) + '</span>';
