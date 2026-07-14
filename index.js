@@ -17,11 +17,15 @@
     var IMG_QUALITY = 0.8;
     var FAB_ID = 'tm-fab-main';
 
-    var TM_VERSION = '3.5.1';
+    var TM_VERSION = '3.5.2';
     var MODULE_VERSION = TM_VERSION;
     var storageApi = null;
     var imageToolsApi = null;
     var styleApi = null;
+    var supportReady = false;
+    var supportFailed = false;
+    var pendingOpenAfterReady = false;
+    var launcherInjectStarted = false;
     var fabOpen = false;
     var darkMode = false;
 
@@ -92,7 +96,9 @@
         loadSupportScripts(function (ok) {
             var modules = window.ThemeMgrModules || {};
             if (!ok || !modules.createStorage || !modules.imageTools || !modules.injectStyles) {
+                supportFailed = true;
                 console.error('[美化管理] 支持模块初始化失败');
+                updateBtn();
                 return;
             }
             storageApi = modules.createStorage({
@@ -109,7 +115,13 @@
             });
             imageToolsApi = modules.imageTools;
             styleApi = modules.injectStyles;
+            supportReady = true;
+            supportFailed = false;
             cb();
+            if (pendingOpenAfterReady) {
+                pendingOpenAfterReady = false;
+                setTimeout(openPopup, 50);
+            }
         });
     }
 
@@ -2901,13 +2913,30 @@
         var btn = document.getElementById(BTN_ID); if (!btn) return;
         var curTheme = getCurrentThemeName();
         var span = btn.querySelector('span');
-        var title = curTheme ? (LAUNCHER_NAME + '：' + curTheme) : LAUNCHER_NAME;
+        var status = supportFailed ? '（模块加载失败）' : (!supportReady ? '（加载中）' : '');
+        var title = curTheme ? (LAUNCHER_NAME + status + '：' + curTheme) : (LAUNCHER_NAME + status);
         var inner = btn.querySelector('.list-group-item');
         if (span) span.textContent = LAUNCHER_NAME;
         btn.title = title;
         if (inner) inner.title = title;
         btn.style.color = curTheme ? 'var(--SmartThemeQuoteColor)' : '';
         if (inner) inner.style.color = curTheme ? 'var(--SmartThemeQuoteColor)' : '';
+    }
+
+    function openLauncher() {
+        if (supportReady) {
+            openPopup();
+            return;
+        }
+        if (supportFailed) {
+            var failedMsg = '美化管理器模块加载失败，请确认 theme-mgr/src 里有 storage.js、image-tools.js、styles.js，然后刷新或重启酒馆。';
+            try { alert(failedMsg); } catch (e) {}
+            return;
+        }
+        pendingOpenAfterReady = true;
+        try {
+            toast('美化管理器正在加载，请稍等一下…');
+        } catch (e2) {}
     }
 
     function findMenu() {
@@ -2938,16 +2967,24 @@
             btn.className = 'list-group-item flex-container flexGap5 interactable';
             btn.innerHTML = '<i class="fa-solid fa-palette"></i><span>' + esc(LAUNCHER_NAME) + '</span>';
         }
-        btn.addEventListener('click', openPopup);
+        btn.addEventListener('click', openLauncher);
         menu.appendChild(btn);
+    }
+
+    function startLauncherInjection() {
+        if (launcherInjectStarted) return;
+        launcherInjectStarted = true;
+        setTimeout(injectBtn, 0);
+        setTimeout(injectBtn, 250);
+        setTimeout(injectBtn, 750);
+        setInterval(injectBtn, 2000);
     }
 
     // ── 启动 ──────────────────────────────────────────────────
     function startThemeManager() {
         injectStyles();
         bindImportedThemeSelectSync();
-        setTimeout(injectBtn, 500);
-        setInterval(injectBtn, 2000);
+        startLauncherInjection();
         setTimeout(injectFab, 1500);
         setInterval(function () { if (!document.getElementById(FAB_ID)) injectFab(); }, 3000);
 
@@ -2962,6 +2999,7 @@
         });
     }
 
+    startLauncherInjection();
     setupSupportModules(startThemeManager);
 
 })();
