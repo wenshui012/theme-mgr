@@ -5,6 +5,7 @@
 (function () {
 
     var SCRIPT_NAME = '美化管理';
+    var LAUNCHER_NAME = '美化管理器';
     var BTN_ID = 'theme-mgr-ext-btn';
     var DB_NAME = 'theme_mgr_db';
     var DB_VERSION = 1;
@@ -16,7 +17,7 @@
     var IMG_QUALITY = 0.8;
     var FAB_ID = 'tm-fab-main';
 
-    var TM_VERSION = '3.5.0';
+    var TM_VERSION = '3.5.1';
     var MODULE_VERSION = TM_VERSION;
     var storageApi = null;
     var imageToolsApi = null;
@@ -2900,7 +2901,8 @@
         var btn = document.getElementById(BTN_ID); if (!btn) return;
         var curTheme = getCurrentThemeName();
         var span = btn.querySelector('span');
-        if (span) span.textContent = curTheme || SCRIPT_NAME;
+        if (span) span.textContent = LAUNCHER_NAME;
+        btn.title = curTheme ? (LAUNCHER_NAME + '：' + curTheme) : LAUNCHER_NAME;
         btn.style.color = curTheme ? 'var(--SmartThemeQuoteColor)' : '';
     }
 
@@ -2913,13 +2915,20 @@
     }
 
     function injectBtn() {
-        if (document.getElementById(BTN_ID)) return;
+        if (document.getElementById(BTN_ID)) { updateBtn(); return; }
         var menu = findMenu(); if (!menu) return;
         var curTheme = getCurrentThemeName();
         var btn = document.createElement('div');
-        btn.id = BTN_ID; btn.className = 'list-group-item flex-container flexGap5 interactable'; btn.title = SCRIPT_NAME;
+        btn.id = BTN_ID;
+        btn.title = curTheme ? (LAUNCHER_NAME + '：' + curTheme) : LAUNCHER_NAME;
         if (curTheme) btn.style.color = 'var(--SmartThemeQuoteColor)';
-        btn.innerHTML = '<i class="fa-solid fa-palette"></i><span>' + esc(curTheme || SCRIPT_NAME) + '</span>';
+        if (menu.id === 'extensionsMenu') {
+            btn.className = 'extension_container interactable';
+            btn.innerHTML = '<div class="fa-fw fa-solid fa-palette extensionsMenuExtensionButton"></div><span>' + esc(LAUNCHER_NAME) + '</span>';
+        } else {
+            btn.className = 'list-group-item flex-container flexGap5 interactable';
+            btn.innerHTML = '<i class="fa-solid fa-palette"></i><span>' + esc(LAUNCHER_NAME) + '</span>';
+        }
         btn.addEventListener('click', openPopup);
         menu.appendChild(btn);
     }
