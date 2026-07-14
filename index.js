@@ -17,13 +17,14 @@
     var IMG_QUALITY = 0.8;
     var FAB_ID = 'tm-fab-main';
 
-    var TM_VERSION = '3.5.2';
+    var TM_VERSION = '3.5.3';
     var MODULE_VERSION = TM_VERSION;
     var storageApi = null;
     var imageToolsApi = null;
     var styleApi = null;
     var supportReady = false;
     var supportFailed = false;
+    var supportErrorText = '';
     var pendingOpenAfterReady = false;
     var launcherInjectStarted = false;
     var fabOpen = false;
@@ -39,28 +40,28 @@
 
     function getExtensionBaseUrl() {
         var script = document.currentScript;
-        if (script && script.src) return script.src.replace(/[^/]*$/, '');
+        if (script && script.src && isThemeManagerIndex(script.src)) return script.src.replace(/index\.js(?:\?.*)?$/, '');
 
-        function isLikelyExtensionIndex(src) {
+        function isThemeManagerIndex(src) {
             return /\/index\.js(?:\?|$)/.test(src) &&
-                (/\/(?:theme-mgr|theme-manager)\//.test(src) || /\/extensions\//.test(src) || /\/third-party\//.test(src));
+                /\/(?:theme-mgr|theme-manager)\//.test(src);
         }
 
         var scripts = document.getElementsByTagName('script');
         for (var i = scripts.length - 1; i >= 0; i--) {
             var src = scripts[i].src || '';
-            if (src && isLikelyExtensionIndex(src)) return src.replace(/index\.js(?:\?.*)?$/, '');
+            if (src && isThemeManagerIndex(src)) return src.replace(/index\.js(?:\?.*)?$/, '');
         }
 
         try {
             var entries = performance.getEntriesByType('resource') || [];
             for (var j = entries.length - 1; j >= 0; j--) {
                 var name = entries[j].name || '';
-                if (name && isLikelyExtensionIndex(name)) return name.replace(/index\.js(?:\?.*)?$/, '');
+                if (name && isThemeManagerIndex(name)) return name.replace(/index\.js(?:\?.*)?$/, '');
             }
         } catch (e) {}
 
-        return './';
+        return '/scripts/extensions/third-party/theme-mgr/';
     }
 
     function loadSupportScript(baseUrl, rel, cb) {
@@ -74,6 +75,7 @@
         s.dataset.themeMgrModule = rel;
         s.onload = function () { cb(true); };
         s.onerror = function () {
+            supportErrorText = '无法加载：' + src;
             console.error('[美化管理] 模块加载失败:', src);
             cb(false);
         };
@@ -97,7 +99,14 @@
             var modules = window.ThemeMgrModules || {};
             if (!ok || !modules.createStorage || !modules.imageTools || !modules.injectStyles) {
                 supportFailed = true;
-                console.error('[美化管理] 支持模块初始化失败');
+                if (!supportErrorText) {
+                    var missing = [];
+                    if (!modules.createStorage) missing.push('storage.js');
+                    if (!modules.imageTools) missing.push('image-tools.js');
+                    if (!modules.injectStyles) missing.push('styles.js');
+                    supportErrorText = missing.length ? ('模块未注册：' + missing.join('、')) : '支持模块初始化失败';
+                }
+                console.error('[美化管理] 支持模块初始化失败:', supportErrorText);
                 updateBtn();
                 return;
             }
@@ -2929,7 +2938,7 @@
             return;
         }
         if (supportFailed) {
-            var failedMsg = '美化管理器模块加载失败，请确认 theme-mgr/src 里有 storage.js、image-tools.js、styles.js，然后刷新或重启酒馆。';
+            var failedMsg = '美化管理器模块加载失败：' + (supportErrorText || '未知原因') + '\n\n请更新到 v3.5.3 后刷新/重启酒馆。';
             try { alert(failedMsg); } catch (e) {}
             return;
         }
