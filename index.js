@@ -22,6 +22,9 @@
     var storageApi = null;
     var imageToolsApi = null;
     var styleApi = null;
+    var themeSchema = null;
+    var themeApi = null;
+    var themeRuntime = null;
     var supportReady = false;
     var supportFailed = false;
     var supportErrorText = '';
@@ -33,9 +36,7 @@
     // 缓存主题列表
     var stThemeList = [];
     var importedThemeCache = {};
-    var fullThemeCache = {};
     var renamedNativeThemeCache = {};
-    var themeApplyRequestId = 0;
     var importedThemeSelectSyncBound = false;
     var backgroundListCache = null;
     var IMAGE_FIELD_KEYS = { imageData: true, thumbData: true, previewData: true, fabImage: true };
@@ -86,7 +87,10 @@
 
     function loadSupportScripts(cb) {
         var baseUrl = getExtensionBaseUrl();
-        var files = ['src/storage.js', 'src/image-tools.js', 'src/styles.js'];
+        var files = [
+            'src/theme-schema.js', 'src/theme-api.js', 'src/theme-runtime.js',
+            'src/storage.js', 'src/image-tools.js', 'src/styles.js'
+        ];
         var idx = 0;
         function next(ok) {
             if (ok === false) { cb(false); return; }
@@ -99,19 +103,26 @@
     function setupSupportModules(cb) {
         loadSupportScripts(function (ok) {
             var modules = window.ThemeMgrModules || {};
-            if (!ok || !modules.createStorage || !modules.imageTools || !modules.injectStyles) {
+            if (!ok || !modules.themeSchema || !modules.createThemeApi || !modules.createThemeRuntime ||
+                !modules.createStorage || !modules.imageTools || !modules.injectStyles) {
                 supportFailed = true;
                 if (!supportErrorText) {
                     var missing = [];
                     if (!modules.createStorage) missing.push('storage.js');
                     if (!modules.imageTools) missing.push('image-tools.js');
                     if (!modules.injectStyles) missing.push('styles.js');
+                    if (!modules.themeSchema) missing.push('theme-schema.js');
+                    if (!modules.createThemeApi) missing.push('theme-api.js');
+                    if (!modules.createThemeRuntime) missing.push('theme-runtime.js');
                     supportErrorText = missing.length ? ('模块未注册：' + missing.join('、')) : '支持模块初始化失败';
                 }
                 console.error('[美化管理] 支持模块初始化失败:', supportErrorText);
                 updateBtn();
                 return;
             }
+            themeSchema = modules.themeSchema;
+            themeApi = modules.createThemeApi({ schema: themeSchema });
+            themeRuntime = modules.createThemeRuntime({ schema: themeSchema, api: themeApi });
             storageApi = modules.createStorage({
                 DB_NAME: DB_NAME,
                 DB_VERSION: DB_VERSION,
@@ -561,7 +572,7 @@
     }
 
     function finishApplyTheme(themeName, cb, ok, requestId) {
-        var isCurrent = function () { return !requestId || requestId === themeApplyRequestId; };
+        var isCurrent = function () { return themeRuntime.isApplyCurrent(requestId); };
         if (!isCurrent()) { if (cb) cb(false, 'superseded'); return; }
         if (!ok) { if (cb) cb(false); return; }
         applyBoundBackground(themeName, function (backgroundOk, reason) {
@@ -742,14 +753,7 @@
     }
 
     function hydrateRenamedNativeTheme(theme) {
-        try {
-            if (typeof window.baibaokuHydrateTheme !== 'function') return false;
-            window.baibaokuHydrateTheme(cloneThemeValue(theme));
-            return true;
-        } catch (err) {
-            console.warn('[美化管理] 刷新酒馆原生主题缓存失败:', err);
-            return false;
-        }
+        return themeRuntime.hydrate(theme);
     }
 
     function getThemeNameFromControl(themeEl) {
@@ -794,61 +798,18 @@
     function rememberImportedTheme(theme) {
         if (!theme || !theme.name) return;
         importedThemeCache[theme.name] = theme;
-        fullThemeCache[theme.name] = theme;
+        themeRuntime.remember(theme);
         bindImportedThemeSelectSync();
     }
 
-    var THEME_COMPAT_FIELDS = [
-        'blur_strength', 'main_text_color', 'italics_text_color', 'underline_text_color',
-        'quote_text_color', 'blur_tint_color', 'chat_tint_color', 'user_mes_blur_tint_color',
-        'bot_mes_blur_tint_color', 'shadow_color', 'shadow_width', 'border_color',
-        'font_scale', 'fast_ui_mode', 'waifuMode', 'avatar_style', 'chat_display',
-        'toastr_position', 'noShadows', 'chat_width', 'timer_enabled', 'timestamps_enabled',
-        'timestamp_model_icon', 'mesIDDisplay_enabled', 'hideChatAvatars_enabled',
-        'message_token_count_enabled', 'expand_message_actions', 'hotswap_enabled',
-        'custom_css', 'reduced_motion', 'compact_input_area', 'show_swipe_num_all_messages',
-        'click_to_edit', 'media_display'
-    ];
-
-    var BAIBAOKU_LAZY_THEME_MARKER = '__baibaokuLazyTheme';
-
-    function isPlainThemeObject(theme) {
-        if (!theme || Object.prototype.toString.call(theme) !== '[object Object]') return false;
-        var proto = Object.getPrototypeOf(theme);
-        return proto === Object.prototype || proto === null;
-    }
-
-    function hasRealThemeConfigField(theme) {
-        if (!isPlainThemeObject(theme)) return false;
-        return THEME_COMPAT_FIELDS.some(function (key) {
-            return Object.prototype.hasOwnProperty.call(theme, key) && theme[key] !== undefined;
-        });
-    }
-
-    function isCompleteThemeObject(theme, expectedName) {
-        if (!isPlainThemeObject(theme)) return false;
-        if (typeof theme.name !== 'string' || !theme.name.trim()) return false;
-        if (expectedName && theme.name !== expectedName) return false;
-        if (Object.prototype.hasOwnProperty.call(theme, BAIBAOKU_LAZY_THEME_MARKER)) return false;
-        return hasRealThemeConfigField(theme);
-    }
+    function isPlainThemeObject(theme) { return themeSchema.isPlainObject(theme); }
+    function isCompleteThemeObject(theme, expectedName) { return themeSchema.isCompleteTheme(theme, expectedName); }
 
     function invalidateBaibaokuThemeCache(reason) {
-        try {
-            var bridge = window.__baibaokuEarlyBridge;
-            if (bridge && typeof bridge.clearSettingsGetCache === 'function') {
-                bridge.clearSettingsGetCache(reason || 'theme-manager-theme-change');
-            }
-        } catch (err) {
-            console.warn('[美化管理] 清理柏宝库主题缓存失败:', err);
-        }
+        themeRuntime.invalidate(reason);
     }
 
-    function cloneThemeValue(value) {
-        if (value === undefined) return undefined;
-        if (value === null || typeof value !== 'object') return value;
-        try { return JSON.parse(JSON.stringify(value)); } catch (e) { return value; }
-    }
+    function cloneThemeValue(value) { return themeSchema.cloneValue(value); }
 
     function getFallbackThemeDefaults() {
         var rootStyle = getComputedStyle(document.documentElement);
@@ -900,7 +861,7 @@
             .then(function (mod) {
                 var pu = mod && mod.power_user;
                 if (pu) {
-                    THEME_COMPAT_FIELDS.forEach(function (key) {
+                    themeSchema.THEME_FIELDS.forEach(function (key) {
                         if (Object.prototype.hasOwnProperty.call(pu, key)) defaults[key] = cloneThemeValue(pu[key]);
                     });
                 }
@@ -910,24 +871,11 @@
     }
 
     function getMissingThemeFields(theme) {
-        if (!theme || typeof theme !== 'object') return THEME_COMPAT_FIELDS.slice();
-        return THEME_COMPAT_FIELDS.filter(function (key) {
-            return theme[key] === undefined;
-        });
+        return themeSchema.getMissingFields(theme);
     }
 
     function normalizeThemeObject(theme, defaults, existingTheme) {
-        var normalized = {};
-        THEME_COMPAT_FIELDS.forEach(function (key) {
-            if (defaults[key] !== undefined) normalized[key] = cloneThemeValue(defaults[key]);
-        });
-        if (existingTheme && typeof existingTheme === 'object') {
-            for (var oldKey in existingTheme) normalized[oldKey] = cloneThemeValue(existingTheme[oldKey]);
-        }
-        for (var key in theme) normalized[key] = cloneThemeValue(theme[key]);
-        normalized.name = String(theme.name || '').trim();
-        if (typeof normalized.custom_css !== 'string') normalized.custom_css = normalized.custom_css == null ? '' : String(normalized.custom_css);
-        return normalized;
+        return themeSchema.normalizeTheme(theme, defaults, existingTheme);
     }
 
     function normalizeThemeObjects(themes, cb) {
@@ -953,38 +901,12 @@
     }
 
     function getPostHeaders() {
-        return fetch('/csrf-token')
-            .then(function (r) { if (!r.ok) throw new Error('csrf ' + r.status); return r.json(); })
-            .then(function (tokenData) {
-                return { 'Content-Type': 'application/json', 'X-CSRF-Token': tokenData.token };
-            });
+        return themeApi.getPostHeaders();
     }
 
     function getAllThemeObjects(cb, bypassBaibaokuCache) {
-        getPostHeaders()
-            .then(function (headers) {
-                var requester = fetch;
-                try {
-                    var bridge = window.__baibaokuEarlyBridge;
-                    if (bypassBaibaokuCache && bridge && typeof bridge.rawFetch === 'function') requester = bridge.rawFetch;
-                } catch (e) {}
-                return requester('/api/settings/get', {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify({}),
-                    cache: 'no-cache',
-                });
-            })
-            .then(function (r) { if (!r.ok) throw new Error('settings ' + r.status); return r.json(); })
-            .then(function (data) {
-                var themes = data && Array.isArray(data.themes) ? data.themes : [];
-                themes.forEach(function (theme) {
-                    if (!theme || !theme.name) return;
-                    if (isCompleteThemeObject(theme, theme.name)) fullThemeCache[theme.name] = cloneThemeValue(theme);
-                    else delete fullThemeCache[theme.name];
-                });
-                cb(themes);
-            })
+        themeRuntime.getInventory({ bypassBaibaokuCache: bypassBaibaokuCache })
+            .then(function (themes) { cb(themes); })
             .catch(function (err) {
                 console.warn('[美化管理] 获取完整主题失败:', err);
                 cb(null, err);
@@ -993,7 +915,8 @@
 
     function getThemeObjectByName(themeName, cb) {
         if (importedThemeCache[themeName]) { cb(importedThemeCache[themeName]); return; }
-        if (fullThemeCache[themeName]) { cb(fullThemeCache[themeName]); return; }
+        var cached = themeRuntime.getCached(themeName);
+        if (cached) { cb(cached); return; }
         getAllThemeObjects(function (themes) {
             var found = null;
             if (themes) {
@@ -1001,84 +924,13 @@
                     if (theme && theme.name === themeName) found = theme;
                 });
             }
-            if (isCompleteThemeObject(found, themeName)) fullThemeCache[themeName] = cloneThemeValue(found);
+            if (isCompleteThemeObject(found, themeName)) themeRuntime.remember(found);
             cb(found);
         });
     }
 
-    function makeThemeApplyError(code, message) {
-        var error = new Error(message || code);
-        error.code = code;
-        return error;
-    }
-
     function prepareCompleteNativeThemeForApply(themeName) {
-        var bridge = null;
-        try { bridge = window.__baibaokuEarlyBridge; } catch (e) {}
-        if (!bridge || typeof bridge.ensureThemeLoaded !== 'function') {
-            return Promise.resolve({ theme: null, hydrated: false });
-        }
-
-        var cached = isCompleteThemeObject(fullThemeCache[themeName], themeName)
-            ? cloneThemeValue(fullThemeCache[themeName])
-            : null;
-        var ensureLoaded = function () {
-            return Promise.resolve().then(function () { return bridge.ensureThemeLoaded(themeName); });
-        };
-        var completeResult = function (theme) {
-            if (!isCompleteThemeObject(theme, themeName)) {
-                throw makeThemeApplyError('incomplete', '主题尚未完整加载，不能安全切换');
-            }
-            var complete = cloneThemeValue(theme);
-            fullThemeCache[themeName] = cloneThemeValue(complete);
-            return { theme: complete, hydrated: hydrateRenamedNativeTheme(complete) };
-        };
-
-        return ensureLoaded()
-            .then(function (loaded) {
-                if (isCompleteThemeObject(loaded, themeName)) return loaded;
-                if (cached) return cached;
-
-                return new Promise(function (resolve, reject) {
-                    getAllThemeObjects(function (themes, err) {
-                        if (!themes) {
-                            reject(makeThemeApplyError('load-failed', err && err.message ? err.message : '无法读取主题列表'));
-                            return;
-                        }
-                        var candidate = findThemeByName(themes, themeName);
-                        if (isCompleteThemeObject(candidate, themeName)) {
-                            resolve(candidate);
-                            return;
-                        }
-
-                        var isLazy = Boolean(candidate && candidate[BAIBAOKU_LAZY_THEME_MARKER] === true);
-                        try {
-                            if (!isLazy && typeof bridge.isThemeLazy === 'function') isLazy = bridge.isThemeLazy(themeName) === true;
-                        } catch (e) {}
-                        if (!candidate && !isLazy) { resolve(null); return; }
-                        if (!isLazy) {
-                            reject(makeThemeApplyError('incomplete', '主题尚未完整加载，不能安全切换'));
-                            return;
-                        }
-
-                        ensureLoaded().then(function (complete) {
-                            if (!isCompleteThemeObject(complete, themeName)) {
-                                reject(makeThemeApplyError('incomplete', '主题尚未完整加载，不能安全切换'));
-                                return;
-                            }
-                            resolve(complete);
-                        }, reject);
-                    });
-                });
-            })
-            .then(function (theme) {
-                return theme ? completeResult(theme) : { theme: null, hydrated: false };
-            })
-            .catch(function (err) {
-                if (err && (err.code === 'incomplete' || err.code === 'load-failed')) throw err;
-                console.warn('[美化管理] 柏宝库主题切换预加载失败:', err);
-                throw makeThemeApplyError('load-failed', err && err.message ? err.message : '主题加载失败');
-            });
+        return themeRuntime.prepareCompleteThemeForApply(themeName);
     }
 
     function dispatchPreparedNativeThemeChange(themeEl, themeName, bypassLazyGuard) {
@@ -1125,28 +977,11 @@
     }
 
     function saveThemeToServer(theme, headers) {
-        if (!isPlainThemeObject(theme) || Object.prototype.hasOwnProperty.call(theme, BAIBAOKU_LAZY_THEME_MARKER)) {
-            return Promise.reject(new Error('拒绝保存柏宝库懒加载占位主题'));
-        }
-        return fetch('/api/themes/save', {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify(theme),
-        }).then(function (r) {
-            if (!r.ok) throw new Error(theme.name + ': status ' + r.status);
-            return theme;
-        });
+        return themeApi.saveTheme(theme, headers);
     }
 
     function deleteThemeFromServer(themeName, headers) {
-        return fetch('/api/themes/delete', {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify({ name: themeName }),
-        }).then(function (r) {
-            if (!r.ok) throw new Error(themeName + ': delete status ' + r.status);
-            return true;
-        });
+        return themeApi.deleteTheme(themeName, headers);
     }
 
     function removeThemeOption(themeName) {
@@ -1210,41 +1045,12 @@
         return error;
     }
 
-    function truncateUtf8Bytes(value, maxBytes) {
-        var chars = Array.from(String(value || ''));
-        var out = '';
-        var bytes = 0;
-        var encoder = typeof TextEncoder === 'function' ? new TextEncoder() : null;
-        for (var i = 0; i < chars.length; i++) {
-            var charBytes = encoder
-                ? encoder.encode(chars[i]).length
-                : unescape(encodeURIComponent(chars[i])).length;
-            if (bytes + charBytes > maxBytes) break;
-            out += chars[i];
-            bytes += charBytes;
-        }
-        return out;
-    }
-
-    // Mirrors SillyTavern's sanitize-filename call in /api/themes/save and /delete.
     function getSanitizedThemeFilename(themeName) {
-        var filename = String(themeName || '') + '.json';
-        filename = filename
-            .replace(/[\/\?<>\\:\*\|"]/g, '')
-            .replace(/[\x00-\x1f\x80-\x9f]/g, '')
-            .replace(/^\.+$/, '')
-            .replace(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i, '')
-            .replace(/[\. ]+$/, '');
-        return truncateUtf8Bytes(filename, 255);
+        return themeSchema.sanitizeFilename(themeName);
     }
 
     function findThemeByName(themes, themeName) {
-        var found = null;
-        (themes || []).some(function (theme) {
-            if (theme && theme.name === themeName) { found = theme; return true; }
-            return false;
-        });
-        return found;
+        return themeRuntime.findTheme(themes, themeName);
     }
 
     function getFreshThemeInventory(reason, bypassBaibaokuCache) {
@@ -1261,35 +1067,16 @@
     }
 
     function ensureCompleteThemeObject(themeName, candidate) {
-        if (isCompleteThemeObject(candidate, themeName)) {
-            return Promise.resolve(cloneThemeValue(candidate));
-        }
-
-        var bridge = window.__baibaokuEarlyBridge;
-        if (!bridge || typeof bridge.ensureThemeLoaded !== 'function') {
-            return Promise.reject(makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名'));
-        }
-
-        return Promise.resolve()
-            .then(function () { return bridge.ensureThemeLoaded(themeName); })
-            .then(function (loaded) {
-                if (!isCompleteThemeObject(loaded, themeName)) {
-                    throw makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名');
-                }
-                var complete = cloneThemeValue(loaded);
-                fullThemeCache[themeName] = cloneThemeValue(complete);
-                return complete;
-            })
+        return themeRuntime.ensureCompleteTheme(themeName, candidate)
             .catch(function (err) {
-                if (err && err.code === 'incomplete') throw err;
-                console.warn('[美化管理] 柏宝库完整主题加载失败:', err);
+                if (err && err.code !== 'incomplete') console.warn('[美化管理] 柏宝库完整主题加载失败:', err);
                 throw makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名');
             });
     }
 
     function resolveCompleteThemeForRename(themeName) {
         var nativeThemeRef = null;
-        var bridge = window.__baibaokuEarlyBridge;
+        var bridge = themeRuntime.getBridge();
         var bridgeLoad = bridge && typeof bridge.ensureThemeLoaded === 'function'
             ? Promise.resolve().then(function () { return bridge.ensureThemeLoaded(themeName); }).catch(function (err) {
                 console.warn('[美化管理] 柏宝库原生主题缓存预加载失败:', err);
@@ -1343,15 +1130,7 @@
     }
 
     function sameThemeConfig(expected, actual) {
-        if (!isCompleteThemeObject(actual, expected && expected.name)) return false;
-        var keys = Object.keys(expected).filter(function (key) {
-            return key !== 'name' && key !== BAIBAOKU_LAZY_THEME_MARKER && expected[key] !== undefined;
-        });
-        if (keys.length === 0) return false;
-        return keys.every(function (key) {
-            return Object.prototype.hasOwnProperty.call(actual, key) &&
-                JSON.stringify(actual[key]) === JSON.stringify(expected[key]);
-        });
+        return themeSchema.sameConfig(expected, actual);
     }
 
     function verifySavedTheme(expectedTheme) {
@@ -1433,7 +1212,7 @@
 
                 renamed = cloneJson(resolved.theme);
                 renamed.name = newName;
-                delete renamed[BAIBAOKU_LAZY_THEME_MARKER];
+                themeSchema.removeLazyMarker(renamed);
                 if (!isCompleteThemeObject(renamed, newName)) {
                     throw makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名');
                 }
@@ -1454,8 +1233,8 @@
                 invalidateBaibaokuThemeCache('theme-manager-rename-delete-old');
                 delete importedThemeCache[oldName];
                 delete importedThemeCache[newName];
-                delete fullThemeCache[oldName];
-                fullThemeCache[newName] = cloneThemeValue(verified);
+                themeRuntime.forget(oldName);
+                themeRuntime.remember(verified);
                 delete renamedNativeThemeCache[oldName];
                 delete renamedNativeThemeCache[newName];
                 renamedNativeThemeCache[newName] = cloneThemeValue(verified);
@@ -1510,7 +1289,7 @@
             .then(function () {
                 var wasCurrent = getCurrentThemeName() === themeName;
                 delete importedThemeCache[themeName];
-                delete fullThemeCache[themeName];
+                themeRuntime.forget(themeName);
                 delete renamedNativeThemeCache[themeName];
                 removeThemeMetaName(themeName);
                 removeThemeOption(themeName);
@@ -1544,7 +1323,7 @@
     }
 
     function cloneJson(v) {
-        try { return JSON.parse(JSON.stringify(v)); } catch (e) { return v; }
+        return themeSchema.cloneValue(v);
     }
 
     function collectServerImageUrls(data) {
@@ -1898,7 +1677,7 @@
     }
 
     function applyTheme(themeName, cb) {
-        var requestId = ++themeApplyRequestId;
+        var requestId = themeRuntime.beginApply();
         if (importedThemeCache[themeName]) {
             applyImportedThemeObject(importedThemeCache[themeName], function (ok) {
                 finishApplyTheme(themeName, cb, ok, requestId);
@@ -1908,7 +1687,7 @@
 
         prepareCompleteNativeThemeForApply(themeName)
             .then(function (prepared) {
-                if (requestId !== themeApplyRequestId) {
+                if (!themeRuntime.isApplyCurrent(requestId)) {
                     if (cb) cb(false, 'superseded');
                     return;
                 }
@@ -1921,7 +1700,7 @@
                 applyPreparedTheme(themeName, cb, requestId, Boolean(prepared.theme && prepared.hydrated));
             })
             .catch(function (err) {
-                if (requestId !== themeApplyRequestId) {
+                if (!themeRuntime.isApplyCurrent(requestId)) {
                     if (cb) cb(false, 'superseded');
                     return;
                 }
