@@ -34,6 +34,7 @@
     var stThemeList = [];
     var importedThemeCache = {};
     var fullThemeCache = {};
+    var renamedNativeThemeCache = {};
     var importedThemeSelectSyncBound = false;
     var backgroundListCache = null;
     var IMAGE_FIELD_KEYS = { imageData: true, thumbData: true, previewData: true, fabImage: true };
@@ -703,6 +704,48 @@
             });
     }
 
+    // 原生 ST 没有暴露主题数组刷新能力时，仅对本页刚改名的完整主题兜底。
+    // 普通酒馆主题不会进入 importedThemeCache，也不会交给 applyImportedThemeObject。
+    function applyRenamedNativeThemeFallback(theme, cb) {
+        if (!isCompleteThemeObject(theme, theme && theme.name)) { if (cb) cb(false); return; }
+        setThemeControlValue(theme.name);
+        Promise.all([import('/scripts/power-user.js'), import('/script.js')])
+            .then(function (mods) {
+                var powerUserModule = mods[0];
+                var scriptModule = mods[1];
+                if (powerUserModule.power_user) {
+                    for (var key in theme) {
+                        if (key === 'name') continue;
+                        if (Object.prototype.hasOwnProperty.call(powerUserModule.power_user, key)) {
+                            powerUserModule.power_user[key] = theme[key];
+                        }
+                    }
+                    powerUserModule.power_user.theme = theme.name;
+                }
+                applyThemeVisuals(theme);
+                if (scriptModule && typeof scriptModule.saveSettingsDebounced === 'function') {
+                    scriptModule.saveSettingsDebounced();
+                }
+                if (cb) cb(true);
+            })
+            .catch(function (err) {
+                console.warn('[美化管理] 原生主题缓存不可刷新，兜底应用视觉样式:', err);
+                applyThemeVisuals(theme);
+                if (cb) cb(true);
+            });
+    }
+
+    function hydrateRenamedNativeTheme(theme) {
+        try {
+            if (typeof window.baibaokuHydrateTheme !== 'function') return false;
+            window.baibaokuHydrateTheme(cloneThemeValue(theme));
+            return true;
+        } catch (err) {
+            console.warn('[美化管理] 刷新酒馆原生主题缓存失败:', err);
+            return false;
+        }
+    }
+
     function getThemeNameFromControl(themeEl) {
         if (!themeEl) return '';
         if (themeEl.tagName === 'SELECT') {
@@ -718,9 +761,8 @@
         document.addEventListener('change', function (e) {
             if (!e.target || e.target.id !== 'themes') return;
             var name = getThemeNameFromControl(e.target);
-            if (!name) return;
-            getThemeObjectByName(name, function (theme) {
-                if (!theme) return;
+            var theme = name ? importedThemeCache[name] : null;
+            if (theme) {
                 applyImportedThemeObject(theme, function (ok) {
                     if (ok) {
                         applyBoundBackground(name, function () {
@@ -728,6 +770,17 @@
                         });
                     }
                 });
+                return;
+            }
+
+            var renamedNativeTheme = name ? renamedNativeThemeCache[name] : null;
+            if (!renamedNativeTheme || hydrateRenamedNativeTheme(renamedNativeTheme)) return;
+            applyRenamedNativeThemeFallback(renamedNativeTheme, function (ok) {
+                if (ok) {
+                    applyBoundBackground(name, function () {
+                        renderGrid(); renderBottomStatus();
+                    });
+                }
             });
         }, true);
     }
@@ -750,6 +803,40 @@
         'custom_css', 'reduced_motion', 'compact_input_area', 'show_swipe_num_all_messages',
         'click_to_edit', 'media_display'
     ];
+
+    var BAIBAOKU_LAZY_THEME_MARKER = '__baibaokuLazyTheme';
+
+    function isPlainThemeObject(theme) {
+        if (!theme || Object.prototype.toString.call(theme) !== '[object Object]') return false;
+        var proto = Object.getPrototypeOf(theme);
+        return proto === Object.prototype || proto === null;
+    }
+
+    function hasRealThemeConfigField(theme) {
+        if (!isPlainThemeObject(theme)) return false;
+        return THEME_COMPAT_FIELDS.some(function (key) {
+            return Object.prototype.hasOwnProperty.call(theme, key) && theme[key] !== undefined;
+        });
+    }
+
+    function isCompleteThemeObject(theme, expectedName) {
+        if (!isPlainThemeObject(theme)) return false;
+        if (typeof theme.name !== 'string' || !theme.name.trim()) return false;
+        if (expectedName && theme.name !== expectedName) return false;
+        if (Object.prototype.hasOwnProperty.call(theme, BAIBAOKU_LAZY_THEME_MARKER)) return false;
+        return hasRealThemeConfigField(theme);
+    }
+
+    function invalidateBaibaokuThemeCache(reason) {
+        try {
+            var bridge = window.__baibaokuEarlyBridge;
+            if (bridge && typeof bridge.clearSettingsGetCache === 'function') {
+                bridge.clearSettingsGetCache(reason || 'theme-manager-theme-change');
+            }
+        } catch (err) {
+            console.warn('[美化管理] 清理柏宝库主题缓存失败:', err);
+        }
+    }
 
     function cloneThemeValue(value) {
         if (value === undefined) return undefined;
@@ -867,10 +954,15 @@
             });
     }
 
-    function getAllThemeObjects(cb) {
+    function getAllThemeObjects(cb, bypassBaibaokuCache) {
         getPostHeaders()
             .then(function (headers) {
-                return fetch('/api/settings/get', {
+                var requester = fetch;
+                try {
+                    var bridge = window.__baibaokuEarlyBridge;
+                    if (bypassBaibaokuCache && bridge && typeof bridge.rawFetch === 'function') requester = bridge.rawFetch;
+                } catch (e) {}
+                return requester('/api/settings/get', {
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify({}),
@@ -880,7 +972,11 @@
             .then(function (r) { if (!r.ok) throw new Error('settings ' + r.status); return r.json(); })
             .then(function (data) {
                 var themes = data && Array.isArray(data.themes) ? data.themes : [];
-                themes.forEach(function (theme) { if (theme && theme.name) fullThemeCache[theme.name] = theme; });
+                themes.forEach(function (theme) {
+                    if (!theme || !theme.name) return;
+                    if (isCompleteThemeObject(theme, theme.name)) fullThemeCache[theme.name] = cloneThemeValue(theme);
+                    else delete fullThemeCache[theme.name];
+                });
                 cb(themes);
             })
             .catch(function (err) {
@@ -899,7 +995,7 @@
                     if (theme && theme.name === themeName) found = theme;
                 });
             }
-            if (found) rememberImportedTheme(found);
+            if (isCompleteThemeObject(found, themeName)) fullThemeCache[themeName] = cloneThemeValue(found);
             cb(found);
         });
     }
@@ -929,6 +1025,9 @@
     }
 
     function saveThemeToServer(theme, headers) {
+        if (!isPlainThemeObject(theme) || Object.prototype.hasOwnProperty.call(theme, BAIBAOKU_LAZY_THEME_MARKER)) {
+            return Promise.reject(new Error('拒绝保存柏宝库懒加载占位主题'));
+        }
         return fetch('/api/themes/save', {
             method: 'POST',
             headers: headers,
@@ -1005,44 +1104,304 @@
         }
     }
 
-    function renameThemeEverywhere(oldName, newName, cb) {
-        if (!newName || newName === oldName) { if (cb) cb(false, 'empty'); return; }
-        if (stThemeList.indexOf(newName) !== -1) { if (cb) cb(false, 'duplicate'); return; }
-        getThemeObjectByName(oldName, function (theme) {
-            if (!theme) { if (cb) cb(false, 'missing'); return; }
-            var renamed = cloneJson(theme);
-            renamed.name = newName;
-            getPostHeaders()
-                .then(function (headers) {
-                    return saveThemeToServer(renamed, headers).then(function () {
-                        return deleteThemeFromServer(oldName, headers);
-                    });
-                })
-                .then(function () {
-                    var wasCurrent = getCurrentThemeName() === oldName;
-                    delete importedThemeCache[oldName];
-                    delete fullThemeCache[oldName];
-                    importedThemeCache[newName] = renamed;
-                    fullThemeCache[newName] = renamed;
-                    var idx = stThemeList.indexOf(oldName);
-                    if (idx !== -1) stThemeList[idx] = newName;
-                    else stThemeList.push(newName);
-                    renameThemeOption(oldName, newName);
-                    migrateThemeMetaName(oldName, newName);
-                    if (wasCurrent) {
-                        applyTheme(newName, function () {
-                            fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); });
-                        });
-                    } else {
-                        fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); });
-                    }
-                    if (cb) cb(true);
-                })
-                .catch(function (err) {
-                    console.warn('[美化管理] 重命名美化失败:', err);
-                    if (cb) cb(false, err.message);
-                });
+    function makeThemeRenameError(code, message) {
+        var error = new Error(message || code);
+        error.code = code;
+        return error;
+    }
+
+    function truncateUtf8Bytes(value, maxBytes) {
+        var chars = Array.from(String(value || ''));
+        var out = '';
+        var bytes = 0;
+        var encoder = typeof TextEncoder === 'function' ? new TextEncoder() : null;
+        for (var i = 0; i < chars.length; i++) {
+            var charBytes = encoder
+                ? encoder.encode(chars[i]).length
+                : unescape(encodeURIComponent(chars[i])).length;
+            if (bytes + charBytes > maxBytes) break;
+            out += chars[i];
+            bytes += charBytes;
+        }
+        return out;
+    }
+
+    // Mirrors SillyTavern's sanitize-filename call in /api/themes/save and /delete.
+    function getSanitizedThemeFilename(themeName) {
+        var filename = String(themeName || '') + '.json';
+        filename = filename
+            .replace(/[\/\?<>\\:\*\|"]/g, '')
+            .replace(/[\x00-\x1f\x80-\x9f]/g, '')
+            .replace(/^\.+$/, '')
+            .replace(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i, '')
+            .replace(/[\. ]+$/, '');
+        return truncateUtf8Bytes(filename, 255);
+    }
+
+    function findThemeByName(themes, themeName) {
+        var found = null;
+        (themes || []).some(function (theme) {
+            if (theme && theme.name === themeName) { found = theme; return true; }
+            return false;
         });
+        return found;
+    }
+
+    function getFreshThemeInventory(reason, bypassBaibaokuCache) {
+        invalidateBaibaokuThemeCache(reason);
+        return new Promise(function (resolve, reject) {
+            getAllThemeObjects(function (themes, err) {
+                if (!themes) {
+                    reject(makeThemeRenameError('inventory-failed', err && err.message ? err.message : '无法读取主题列表'));
+                    return;
+                }
+                resolve(themes);
+            }, bypassBaibaokuCache);
+        });
+    }
+
+    function ensureCompleteThemeObject(themeName, candidate) {
+        if (isCompleteThemeObject(candidate, themeName)) {
+            return Promise.resolve(cloneThemeValue(candidate));
+        }
+
+        var bridge = window.__baibaokuEarlyBridge;
+        if (!bridge || typeof bridge.ensureThemeLoaded !== 'function') {
+            return Promise.reject(makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名'));
+        }
+
+        return Promise.resolve()
+            .then(function () { return bridge.ensureThemeLoaded(themeName); })
+            .then(function (loaded) {
+                if (!isCompleteThemeObject(loaded, themeName)) {
+                    throw makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名');
+                }
+                var complete = cloneThemeValue(loaded);
+                fullThemeCache[themeName] = cloneThemeValue(complete);
+                return complete;
+            })
+            .catch(function (err) {
+                if (err && err.code === 'incomplete') throw err;
+                console.warn('[美化管理] 柏宝库完整主题加载失败:', err);
+                throw makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名');
+            });
+    }
+
+    function resolveCompleteThemeForRename(themeName) {
+        var nativeThemeRef = null;
+        var bridge = window.__baibaokuEarlyBridge;
+        var bridgeLoad = bridge && typeof bridge.ensureThemeLoaded === 'function'
+            ? Promise.resolve().then(function () { return bridge.ensureThemeLoaded(themeName); }).catch(function (err) {
+                console.warn('[美化管理] 柏宝库原生主题缓存预加载失败:', err);
+                return null;
+            })
+            : Promise.resolve(null);
+
+        return bridgeLoad
+            .then(function (loaded) {
+                if (isCompleteThemeObject(loaded, themeName)) nativeThemeRef = loaded;
+                // Bypass fast-get here so the inventory reflects the actual files and
+                // does not replace BaiBaoKu's reference to SillyTavern's native array.
+                return getFreshThemeInventory('theme-manager-rename-read', true);
+            })
+            .then(function (themes) {
+                var candidate = findThemeByName(themes, themeName);
+                if (!isCompleteThemeObject(candidate, themeName) && nativeThemeRef) candidate = nativeThemeRef;
+                return ensureCompleteThemeObject(themeName, candidate)
+                    .then(function (theme) { return { theme: theme, themes: themes, nativeThemeRef: nativeThemeRef }; });
+            });
+    }
+
+    function getThemeRenameConflict(oldName, newName, themes) {
+        var targetFilename = getSanitizedThemeFilename(newName);
+        if (!targetFilename) return 'invalid-filename';
+
+        var seenNames = {};
+        var names = [];
+        (themes || []).forEach(function (theme) {
+            if (theme && theme.name && !seenNames[theme.name]) {
+                seenNames[theme.name] = true;
+                names.push(theme.name);
+            }
+        });
+        stThemeList.forEach(function (name) {
+            if (name && !seenNames[name]) {
+                seenNames[name] = true;
+                names.push(name);
+            }
+        });
+
+        var targetKey = targetFilename.toLowerCase();
+        for (var i = 0; i < names.length; i++) {
+            var existingName = names[i];
+            if (existingName === newName && existingName !== oldName) return 'duplicate';
+            if (existingName === oldName && newName === oldName) continue;
+            var existingKey = getSanitizedThemeFilename(existingName).toLowerCase();
+            if (existingKey && existingKey === targetKey) return 'filename-conflict';
+        }
+        return '';
+    }
+
+    function sameThemeConfig(expected, actual) {
+        if (!isCompleteThemeObject(actual, expected && expected.name)) return false;
+        var keys = Object.keys(expected).filter(function (key) {
+            return key !== 'name' && key !== BAIBAOKU_LAZY_THEME_MARKER && expected[key] !== undefined;
+        });
+        if (keys.length === 0) return false;
+        return keys.every(function (key) {
+            return Object.prototype.hasOwnProperty.call(actual, key) &&
+                JSON.stringify(actual[key]) === JSON.stringify(expected[key]);
+        });
+    }
+
+    function verifySavedTheme(expectedTheme) {
+        return getFreshThemeInventory('theme-manager-rename-verify', true)
+            .then(function (themes) {
+                var candidate = findThemeByName(themes, expectedTheme.name);
+                if (!candidate) throw makeThemeRenameError('verify-failed', '保存后未找到新主题');
+                return ensureCompleteThemeObject(expectedTheme.name, candidate)
+                    .then(function (complete) {
+                        if (!sameThemeConfig(expectedTheme, complete)) {
+                            throw makeThemeRenameError('verify-failed', '新主题内容验证失败');
+                        }
+                        return { theme: complete, themes: themes };
+                    });
+            })
+            .catch(function (err) {
+                if (err && err.code === 'verify-failed') throw err;
+                throw makeThemeRenameError('verify-failed', err && err.message ? err.message : '新主题验证失败');
+            });
+    }
+
+    function syncCurrentThemeRenameState(oldName, newName, wasCurrent) {
+        renameThemeOption(oldName, newName);
+        if (!wasCurrent) return Promise.resolve();
+
+        setThemeControlValue(newName);
+        try {
+            if (window.power_user && window.power_user.theme === oldName) window.power_user.theme = newName;
+        } catch (e) {}
+
+        return Promise.all([import('/scripts/power-user.js'), import('/script.js')])
+            .then(function (mods) {
+                var powerUserModule = mods[0];
+                var scriptModule = mods[1];
+                if (powerUserModule && powerUserModule.power_user) powerUserModule.power_user.theme = newName;
+                if (scriptModule && typeof scriptModule.saveSettingsDebounced === 'function') {
+                    scriptModule.saveSettingsDebounced();
+                }
+            })
+            .catch(function (err) {
+                console.warn('[美化管理] 同步当前主题新名称失败:', err);
+            });
+    }
+
+    function refreshNativeThemeCache(oldName, verifiedTheme, nativeThemeRef) {
+        var complete = cloneThemeValue(verifiedTheme);
+        if (isPlainThemeObject(nativeThemeRef) && (nativeThemeRef.name === oldName || nativeThemeRef.name === complete.name)) {
+            Object.keys(nativeThemeRef).forEach(function (key) { delete nativeThemeRef[key]; });
+            Object.assign(nativeThemeRef, cloneThemeValue(complete));
+        }
+        hydrateRenamedNativeTheme(complete);
+    }
+
+    function renderAfterThemeRename() {
+        renderCatbar();
+        renderGrid();
+        renderBottomStatus();
+        updateBtn();
+    }
+
+    function renameThemeEverywhere(oldName, newName, cb) {
+        newName = String(newName || '').trim();
+        if (!newName) { if (cb) cb(false, 'empty'); return; }
+        if (newName === oldName) { if (cb) cb(false, 'same'); return; }
+
+        var headers = null;
+        var renamed = null;
+        var verified = null;
+        var nativeThemeRef = null;
+        var saveAttempted = false;
+        var deleteOldStarted = false;
+        var wasCurrent = getCurrentThemeName() === oldName;
+
+        resolveCompleteThemeForRename(oldName)
+            .then(function (resolved) {
+                nativeThemeRef = resolved.nativeThemeRef;
+                var conflict = getThemeRenameConflict(oldName, newName, resolved.themes);
+                if (conflict) throw makeThemeRenameError(conflict, conflict);
+
+                renamed = cloneJson(resolved.theme);
+                renamed.name = newName;
+                delete renamed[BAIBAOKU_LAZY_THEME_MARKER];
+                if (!isCompleteThemeObject(renamed, newName)) {
+                    throw makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名');
+                }
+                return getPostHeaders();
+            })
+            .then(function (postHeaders) {
+                headers = postHeaders;
+                saveAttempted = true;
+                return saveThemeToServer(renamed, headers);
+            })
+            .then(function () { return verifySavedTheme(renamed); })
+            .then(function (result) {
+                verified = result.theme;
+                deleteOldStarted = true;
+                return deleteThemeFromServer(oldName, headers);
+            })
+            .then(function () {
+                invalidateBaibaokuThemeCache('theme-manager-rename-delete-old');
+                delete importedThemeCache[oldName];
+                delete importedThemeCache[newName];
+                delete fullThemeCache[oldName];
+                fullThemeCache[newName] = cloneThemeValue(verified);
+                delete renamedNativeThemeCache[oldName];
+                delete renamedNativeThemeCache[newName];
+                renamedNativeThemeCache[newName] = cloneThemeValue(verified);
+                refreshNativeThemeCache(oldName, verified, nativeThemeRef);
+                migrateThemeMetaName(oldName, newName);
+
+                return syncCurrentThemeRenameState(oldName, newName, wasCurrent)
+                    .then(function () {
+                        return getFreshThemeInventory('theme-manager-rename-final', true).catch(function (err) {
+                            console.warn('[美化管理] 重命名后的主题列表刷新失败:', err);
+                            return null;
+                        });
+                    });
+            })
+            .then(function (themes) {
+                if (themes) {
+                    stThemeList = themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; });
+                } else {
+                    stThemeList = stThemeList.filter(function (name) { return name !== oldName && name !== newName; });
+                    stThemeList.push(newName);
+                }
+                removeThemeOption(oldName);
+                syncThemeOption(newName);
+                setThemeControlValue(wasCurrent ? newName : getCurrentThemeName());
+                renderAfterThemeRename();
+                if (cb) cb(true);
+            })
+            .catch(function (err) {
+                var reason = err && err.code ? err.code : 'failed';
+                console.warn('[美化管理] 重命名美化失败:', err);
+
+                if (saveAttempted && !deleteOldStarted && headers) {
+                    deleteThemeFromServer(newName, headers)
+                        .catch(function (cleanupErr) {
+                            console.warn('[美化管理] 清理失败的新主题文件失败:', cleanupErr);
+                        })
+                        .then(function () {
+                            invalidateBaibaokuThemeCache('theme-manager-rename-rollback');
+                            if (cb) cb(false, reason);
+                        });
+                    return;
+                }
+
+                if (deleteOldStarted) reason = 'delete-failed';
+                if (cb) cb(false, reason);
+            });
     }
 
     function deleteThemeEverywhere(themeName, cb) {
@@ -1052,6 +1411,7 @@
                 var wasCurrent = getCurrentThemeName() === themeName;
                 delete importedThemeCache[themeName];
                 delete fullThemeCache[themeName];
+                delete renamedNativeThemeCache[themeName];
                 removeThemeMetaName(themeName);
                 removeThemeOption(themeName);
                 stThemeList = stThemeList.filter(function (n) { return n !== themeName; });
@@ -1441,6 +1801,14 @@
         var logs = [];
         if (importedThemeCache[themeName]) {
             applyImportedThemeObject(importedThemeCache[themeName], function (ok) { finishApplyTheme(themeName, cb, ok); });
+            return;
+        }
+
+        var renamedNativeTheme = renamedNativeThemeCache[themeName];
+        if (renamedNativeTheme && !hydrateRenamedNativeTheme(renamedNativeTheme)) {
+            applyRenamedNativeThemeFallback(renamedNativeTheme, function (ok) {
+                finishApplyTheme(themeName, cb, ok);
+            });
             return;
         }
 
@@ -2104,7 +2472,13 @@
             renameThemeEverywhere(themeName, newName, function (ok, reason) {
                 if (ok) toast('已重命名美化');
                 else if (reason === 'duplicate') toast('已有同名美化', true);
-                else toast('重命名失败', true);
+                else if (reason === 'filename-conflict') toast('名称经酒馆文件名清理后与已有主题冲突', true);
+                else if (reason === 'invalid-filename') toast('该名称无法生成有效的主题文件名', true);
+                else if (reason === 'incomplete') toast('主题尚未完整加载，不能安全改名', true);
+                else if (reason === 'verify-failed') toast('新主题保存验证失败，旧主题已保留', true);
+                else if (reason === 'delete-failed') toast('新主题已保存，但旧主题删除失败；已保留两者', true);
+                else if (reason === 'inventory-failed') toast('无法刷新主题列表，未执行改名', true);
+                else toast('重命名失败，旧主题已保留', true);
             });
         });
 
