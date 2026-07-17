@@ -41,6 +41,7 @@
             'src/image-tools.js',
             'src/styles.js',
             'src/backgrounds.js',
+            'src/ui-sheets.js',
             'src/ui-main.js',
         ];
         for (var i = 0; i < files.length; i++) await loadModule(baseUrl, files[i]);

@@ -32,6 +32,7 @@
     var themeTransactions = null;
     var themeTransfer = null;
     var backgroundsApi = null;
+    var uiSheetsApi = null;
     var supportReady = false;
     var supportFailed = false;
     var supportErrorText = '';
@@ -50,6 +51,7 @@
             if (!ok || !modules.themeSchema || !modules.createThemeApi || !modules.createThemeRuntime ||
                 !modules.createThemeTransactions || !modules.createThemeTransfer ||
                 !modules.createBackgrounds ||
+                !modules.createUiSheets ||
                 !modules.createStorage || !modules.imageTools || !modules.injectStyles) {
                 supportFailed = true;
                 if (!supportErrorText) {
@@ -63,6 +65,7 @@
                     if (!modules.createThemeTransactions) missing.push('theme-transactions.js');
                     if (!modules.createThemeTransfer) missing.push('theme-transfer.js');
                     if (!modules.createBackgrounds) missing.push('backgrounds.js');
+                    if (!modules.createUiSheets) missing.push('ui-sheets.js');
                     supportErrorText = missing.length ? ('模块未注册：' + missing.join('、')) : '支持模块初始化失败';
                 }
                 console.error('[美化管理] 支持模块初始化失败:', supportErrorText);
@@ -81,6 +84,11 @@
                 schema: themeSchema,
                 runtime: themeRuntime,
                 transactions: themeTransactions,
+            });
+            uiSheetsApi = modules.createUiSheets({
+                getPopupLayer: getPopupLayer,
+                load: load,
+                esc: esc,
             });
             backgroundsApi = modules.createBackgrounds({
                 load: load,
@@ -2395,50 +2403,13 @@
 
     // ── Bottom Sheet 通用 ───────────────────────────────────
     function createSheet(contentHtml) {
-        var ov = document.createElement('div');
-        ov.className = 'tm-sheet-overlay';
-        ov.innerHTML = '<div class="tm-sheet"><div class="tm-sheet-handle"></div><div class="tm-sheet-content">' + contentHtml + '</div></div>';
-        getPopupLayer().appendChild(ov);
-        ov.addEventListener('click', function (e) { if (e.target === ov) closeSheet(ov); });
-        return ov;
+        return uiSheetsApi.createSheet(contentHtml);
     }
-    function closeSheet(ov) { if (ov && ov.parentNode) ov.parentNode.removeChild(ov); }
+    function closeSheet(ov) { return uiSheetsApi.closeSheet(ov); }
 
     // ── Lightbox ─────────────────────────────────────────────
     function openLightbox(themeNames, startName) {
-        var themes = themeNames.filter(function (n) { var m = load().themeMeta[n]; return m && (m.imageData || m.thumbData); });
-        if (themes.length === 0) return;
-        var idx = themes.indexOf(startName); if (idx === -1) idx = 0;
-
-        var lb = document.createElement('div');
-        lb.className = 'tm-lightbox';
-        lb.style.cssText = 'position:absolute !important;inset:0 !important;z-index:2 !important;pointer-events:auto !important;';
-
-        function render() {
-            var d = load(); var name = themes[idx]; var meta = d.themeMeta[name] || {};
-            var lbImg = meta.imageData || meta.thumbData || '';
-            lb.innerHTML =
-                '<button class="tm-lb-close"><i class="fa-solid fa-xmark"></i></button>' +
-                '<div class="tm-lb-name">' + esc(name) + '</div>' +
-                (themes.length > 1 ? '<button class="tm-lb-nav tm-lb-prev"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
-                '<img class="tm-lb-img" src="' + lbImg + '" draggable="false" />' +
-                (themes.length > 1 ? '<button class="tm-lb-nav tm-lb-next"><i class="fa-solid fa-chevron-right"></i></button>' : '') +
-                (themes.length > 1 ? '<div class="tm-lb-counter">' + (idx + 1) + ' / ' + themes.length + '</div>' : '');
-            lb.querySelector('.tm-lb-close').addEventListener('click', closeLb);
-            var prev = lb.querySelector('.tm-lb-prev'); var next = lb.querySelector('.tm-lb-next');
-            if (prev) prev.addEventListener('click', function (e) { e.stopPropagation(); idx = (idx - 1 + themes.length) % themes.length; render(); });
-            if (next) next.addEventListener('click', function (e) { e.stopPropagation(); idx = (idx + 1) % themes.length; render(); });
-        }
-        lb.addEventListener('click', function (e) { if (e.target === lb) closeLb(); });
-        function closeLb() { if (lb.parentNode) lb.parentNode.removeChild(lb); document.removeEventListener('keydown', keyH); }
-        function keyH(e) {
-            if (e.key === 'Escape') closeLb();
-            else if (e.key === 'ArrowLeft' && themes.length > 1) { idx = (idx - 1 + themes.length) % themes.length; render(); }
-            else if (e.key === 'ArrowRight' && themes.length > 1) { idx = (idx + 1) % themes.length; render(); }
-        }
-        document.addEventListener('keydown', keyH);
-        render();
-        getPopupLayer().appendChild(lb);
+        return uiSheetsApi.openLightbox(themeNames, startName);
     }
 
     // ── FAB ──────────────────────────────────────────────────
