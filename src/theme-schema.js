@@ -9,11 +9,11 @@
         'font_scale', 'fast_ui_mode', 'waifuMode', 'avatar_style', 'chat_display',
         'toastr_position', 'noShadows', 'chat_width', 'timer_enabled', 'timestamps_enabled',
         'timestamp_model_icon', 'mesIDDisplay_enabled', 'hideChatAvatars_enabled',
-        'message_token_count_enabled', 'expand_message_actions', 'hotswap_enabled',
+        'message_token_count_enabled', 'expand_message_actions', 'enableZenSliders',
+        'enableLabMode', 'hotswap_enabled', 'bogus_folders', 'zoomed_avatar_magnification',
         'custom_css', 'reduced_motion', 'compact_input_area', 'show_swipe_num_all_messages',
         'click_to_edit', 'media_display'
     ];
-
     function isPlainObject(value) {
         if (!value || Object.prototype.toString.call(value) !== '[object Object]') return false;
         var proto = Object.getPrototypeOf(value);
@@ -24,10 +24,6 @@
         return isPlainObject(theme) && Object.prototype.hasOwnProperty.call(theme, LAZY_THEME_MARKER);
     }
 
-    function isLazyTheme(theme) {
-        return isPlainObject(theme) && theme[LAZY_THEME_MARKER] === true;
-    }
-
     function hasRealConfigField(theme) {
         if (!isPlainObject(theme)) return false;
         return THEME_FIELDS.some(function (key) {
@@ -35,12 +31,33 @@
         });
     }
 
+    function getMissingThemeFields(theme) {
+        if (!isPlainObject(theme)) return THEME_FIELDS.slice();
+        return THEME_FIELDS.filter(function (key) {
+            return !Object.prototype.hasOwnProperty.call(theme, key) || theme[key] === undefined;
+        });
+    }
+
+    function hasValidName(theme, expectedName) {
+        if (!isPlainObject(theme) || typeof theme.name !== 'string' || !theme.name.trim()) return false;
+        return !expectedName || theme.name === expectedName;
+    }
+
+    function isLazyThemePlaceholder(theme, expectedName) {
+        if (!hasValidName(theme, expectedName)) return false;
+        return hasLazyMarker(theme) || !hasRealConfigField(theme);
+    }
+
+    function isUsableTheme(theme, expectedName) {
+        return hasValidName(theme, expectedName) && !hasLazyMarker(theme) && hasRealConfigField(theme);
+    }
+
+    function isLegacyPartialTheme(theme, expectedName) {
+        return isUsableTheme(theme, expectedName) && getMissingThemeFields(theme).length > 0;
+    }
+
     function isCompleteTheme(theme, expectedName) {
-        if (!isPlainObject(theme)) return false;
-        if (typeof theme.name !== 'string' || !theme.name.trim()) return false;
-        if (expectedName && theme.name !== expectedName) return false;
-        if (hasLazyMarker(theme)) return false;
-        return hasRealConfigField(theme);
+        return isUsableTheme(theme, expectedName) && getMissingThemeFields(theme).length === 0;
     }
 
     function cloneValue(value) {
@@ -58,24 +75,27 @@
         return theme;
     }
 
-    function getMissingFields(theme) {
-        if (!theme || typeof theme !== 'object') return THEME_FIELDS.slice();
-        return THEME_FIELDS.filter(function (key) { return theme[key] === undefined; });
+    function snapshotThemeBaseline(powerUser) {
+        var baseline = {};
+        THEME_FIELDS.forEach(function (key) {
+            if (powerUser && Object.prototype.hasOwnProperty.call(powerUser, key) && powerUser[key] !== undefined) {
+                baseline[key] = cloneValue(powerUser[key]);
+            }
+        });
+        return baseline;
     }
 
-    function normalizeTheme(theme, defaults, existingTheme) {
-        var normalized = {};
-        THEME_FIELDS.forEach(function (key) {
-            if (defaults[key] !== undefined) normalized[key] = cloneValue(defaults[key]);
+    // Mirrors SillyTavern getNewTheme(): start from one stable current-theme
+    // snapshot, then overwrite only fields recognized by the native theme shape.
+    function normalizeImportedThemeLikeSillyTavern(theme, baseline) {
+        if (!isUsableTheme(theme, theme && theme.name)) return null;
+        var normalized = snapshotThemeBaseline(baseline);
+        normalized.name = String(theme.name).trim();
+        Object.keys(theme).forEach(function (key) {
+            if (key !== LAZY_THEME_MARKER && Object.prototype.hasOwnProperty.call(normalized, key)) {
+                normalized[key] = cloneValue(theme[key]);
+            }
         });
-        if (existingTheme && typeof existingTheme === 'object') {
-            for (var oldKey in existingTheme) normalized[oldKey] = cloneValue(existingTheme[oldKey]);
-        }
-        for (var key in theme) normalized[key] = cloneValue(theme[key]);
-        normalized.name = String(theme.name || '').trim();
-        if (typeof normalized.custom_css !== 'string') {
-            normalized.custom_css = normalized.custom_css == null ? '' : String(normalized.custom_css);
-        }
         return normalized;
     }
 
@@ -135,7 +155,7 @@
     }
 
     function sameConfig(expected, actual) {
-        if (!isCompleteTheme(actual, expected && expected.name)) return false;
+        if (!isUsableTheme(actual, expected && expected.name)) return false;
         var keys = Object.keys(expected).filter(function (key) {
             return key !== 'name' && key !== LAZY_THEME_MARKER && expected[key] !== undefined;
         });
@@ -151,14 +171,17 @@
         THEME_FIELDS: THEME_FIELDS.slice(),
         isPlainObject: isPlainObject,
         hasLazyMarker: hasLazyMarker,
-        isLazyTheme: isLazyTheme,
         hasRealConfigField: hasRealConfigField,
+        getMissingThemeFields: getMissingThemeFields,
+        isLazyThemePlaceholder: isLazyThemePlaceholder,
+        isLegacyPartialTheme: isLegacyPartialTheme,
+        isUsableTheme: isUsableTheme,
         isCompleteTheme: isCompleteTheme,
         cloneValue: cloneValue,
         cloneJson: cloneJson,
         removeLazyMarker: removeLazyMarker,
-        getMissingFields: getMissingFields,
-        normalizeTheme: normalizeTheme,
+        snapshotThemeBaseline: snapshotThemeBaseline,
+        normalizeImportedThemeLikeSillyTavern: normalizeImportedThemeLikeSillyTavern,
         sanitizeFilename: sanitizeFilename,
         fingerprint: fingerprint,
         sameConfig: sameConfig,

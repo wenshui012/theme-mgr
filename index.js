@@ -25,6 +25,8 @@
     var themeSchema = null;
     var themeApi = null;
     var themeRuntime = null;
+    var themeTransactions = null;
+    var themeTransfer = null;
     var supportReady = false;
     var supportFailed = false;
     var supportErrorText = '';
@@ -35,9 +37,7 @@
 
     // 缓存主题列表
     var stThemeList = [];
-    var importedThemeCache = {};
-    var renamedNativeThemeCache = {};
-    var importedThemeSelectSyncBound = false;
+    var verifiedThemeSelectSyncBound = false;
     var backgroundListCache = null;
     var IMAGE_FIELD_KEYS = { imageData: true, thumbData: true, previewData: true, fabImage: true };
 
@@ -89,6 +89,7 @@
         var baseUrl = getExtensionBaseUrl();
         var files = [
             'src/theme-schema.js', 'src/theme-api.js', 'src/theme-runtime.js',
+            'src/theme-transactions.js', 'src/theme-transfer.js',
             'src/storage.js', 'src/image-tools.js', 'src/styles.js'
         ];
         var idx = 0;
@@ -104,6 +105,7 @@
         loadSupportScripts(function (ok) {
             var modules = window.ThemeMgrModules || {};
             if (!ok || !modules.themeSchema || !modules.createThemeApi || !modules.createThemeRuntime ||
+                !modules.createThemeTransactions || !modules.createThemeTransfer ||
                 !modules.createStorage || !modules.imageTools || !modules.injectStyles) {
                 supportFailed = true;
                 if (!supportErrorText) {
@@ -114,6 +116,8 @@
                     if (!modules.themeSchema) missing.push('theme-schema.js');
                     if (!modules.createThemeApi) missing.push('theme-api.js');
                     if (!modules.createThemeRuntime) missing.push('theme-runtime.js');
+                    if (!modules.createThemeTransactions) missing.push('theme-transactions.js');
+                    if (!modules.createThemeTransfer) missing.push('theme-transfer.js');
                     supportErrorText = missing.length ? ('模块未注册：' + missing.join('、')) : '支持模块初始化失败';
                 }
                 console.error('[美化管理] 支持模块初始化失败:', supportErrorText);
@@ -123,6 +127,16 @@
             themeSchema = modules.themeSchema;
             themeApi = modules.createThemeApi({ schema: themeSchema });
             themeRuntime = modules.createThemeRuntime({ schema: themeSchema, api: themeApi });
+            themeTransactions = modules.createThemeTransactions({
+                schema: themeSchema,
+                api: themeApi,
+                runtime: themeRuntime,
+            });
+            themeTransfer = modules.createThemeTransfer({
+                schema: themeSchema,
+                runtime: themeRuntime,
+                transactions: themeTransactions,
+            });
             storageApi = modules.createStorage({
                 DB_NAME: DB_NAME,
                 DB_VERSION: DB_VERSION,
@@ -696,35 +710,9 @@
         if (has('media_display')) setControlValue('#media_display', theme.media_display);
     }
 
-    function applyImportedThemeObject(theme, cb) {
-        if (!theme || !theme.name) { if (cb) cb(false); return; }
-        setThemeControlValue(theme.name);
-        Promise.all([import('/scripts/power-user.js'), import('/script.js')])
-            .then(function (mods) {
-                var puMod = mods[0];
-                var scriptMod = mods[1];
-                if (puMod.power_user) {
-                    for (var key in theme) {
-                        if (key === 'name') continue;
-                        if (Object.prototype.hasOwnProperty.call(puMod.power_user, key)) puMod.power_user[key] = theme[key];
-                    }
-                    puMod.power_user.theme = theme.name;
-                }
-                applyThemeVisuals(theme);
-                if (scriptMod && typeof scriptMod.saveSettingsDebounced === 'function') scriptMod.saveSettingsDebounced();
-                if (cb) cb(true);
-            })
-            .catch(function (err) {
-                console.warn('[美化管理] 直接应用导入主题失败，尝试仅应用视觉样式:', err);
-                applyThemeVisuals(theme);
-                if (cb) cb(true);
-            });
-    }
-
-    // 原生 ST 没有暴露主题数组刷新能力时，仅对本页刚改名的完整主题兜底。
-    // 普通酒馆主题不会进入 importedThemeCache，也不会交给 applyImportedThemeObject。
-    function applyCompleteNativeThemeFallback(theme, cb) {
-        if (!isCompleteThemeObject(theme, theme && theme.name)) { if (cb) cb(false); return; }
+    // 原生 ST 没有暴露主题数组刷新能力时，仅对已验证的可用主题兜底。
+    function applyUsableNativeThemeFallback(theme, cb) {
+        if (!isUsableThemeObject(theme, theme && theme.name)) { if (cb) cb(false); return; }
         setThemeControlValue(theme.name);
         Promise.all([import('/scripts/power-user.js'), import('/script.js')])
             .then(function (mods) {
@@ -752,7 +740,7 @@
             });
     }
 
-    function hydrateRenamedNativeTheme(theme) {
+    function hydrateVerifiedNativeTheme(theme) {
         return themeRuntime.hydrate(theme);
     }
 
@@ -765,27 +753,15 @@
         return String(themeEl.value || '').trim();
     }
 
-    function bindImportedThemeSelectSync() {
-        if (importedThemeSelectSyncBound) return;
-        importedThemeSelectSyncBound = true;
+    function bindVerifiedThemeSelectSync() {
+        if (verifiedThemeSelectSyncBound) return;
+        verifiedThemeSelectSyncBound = true;
         document.addEventListener('change', function (e) {
             if (!e.target || e.target.id !== 'themes') return;
             var name = getThemeNameFromControl(e.target);
-            var theme = name ? importedThemeCache[name] : null;
-            if (theme) {
-                applyImportedThemeObject(theme, function (ok) {
-                    if (ok) {
-                        applyBoundBackground(name, function () {
-                            renderGrid(); renderBottomStatus();
-                        });
-                    }
-                });
-                return;
-            }
-
-            var renamedNativeTheme = name ? renamedNativeThemeCache[name] : null;
-            if (!renamedNativeTheme || hydrateRenamedNativeTheme(renamedNativeTheme)) return;
-            applyCompleteNativeThemeFallback(renamedNativeTheme, function (ok) {
+            var verifiedTheme = name ? themeRuntime.getCached(name) : null;
+            if (!verifiedTheme || hydrateVerifiedNativeTheme(verifiedTheme)) return;
+            applyUsableNativeThemeFallback(verifiedTheme, function (ok) {
                 if (ok) {
                     applyBoundBackground(name, function () {
                         renderGrid(); renderBottomStatus();
@@ -795,142 +771,13 @@
         }, true);
     }
 
-    function rememberImportedTheme(theme) {
-        if (!theme || !theme.name) return;
-        importedThemeCache[theme.name] = theme;
-        themeRuntime.remember(theme);
-        bindImportedThemeSelectSync();
-    }
-
     function isPlainThemeObject(theme) { return themeSchema.isPlainObject(theme); }
-    function isCompleteThemeObject(theme, expectedName) { return themeSchema.isCompleteTheme(theme, expectedName); }
-
-    function invalidateBaibaokuThemeCache(reason) {
-        themeRuntime.invalidate(reason);
-    }
+    function isUsableThemeObject(theme, expectedName) { return themeSchema.isUsableTheme(theme, expectedName); }
 
     function cloneThemeValue(value) { return themeSchema.cloneValue(value); }
 
-    function getFallbackThemeDefaults() {
-        var rootStyle = getComputedStyle(document.documentElement);
-        function cssVar(name, fallback) {
-            var value = rootStyle.getPropertyValue(name).trim();
-            return value || fallback;
-        }
-        return {
-            blur_strength: 10,
-            main_text_color: cssVar('--SmartThemeBodyColor', 'rgba(220, 220, 210, 1)'),
-            italics_text_color: cssVar('--SmartThemeEmColor', 'rgba(145, 145, 145, 1)'),
-            underline_text_color: cssVar('--SmartThemeUnderlineColor', 'rgba(188, 231, 207, 1)'),
-            quote_text_color: cssVar('--SmartThemeQuoteColor', 'rgba(225, 138, 36, 1)'),
-            blur_tint_color: cssVar('--SmartThemeBlurTintColor', 'rgba(23, 23, 23, 1)'),
-            chat_tint_color: cssVar('--SmartThemeChatTintColor', 'rgba(23, 23, 23, 1)'),
-            user_mes_blur_tint_color: cssVar('--SmartThemeUserMesBlurTintColor', 'rgba(23, 23, 23, 1)'),
-            bot_mes_blur_tint_color: cssVar('--SmartThemeBotMesBlurTintColor', 'rgba(23, 23, 23, 1)'),
-            shadow_color: cssVar('--SmartThemeShadowColor', 'rgba(0, 0, 0, 1)'),
-            shadow_width: 2,
-            border_color: cssVar('--SmartThemeBorderColor', 'rgba(0, 0, 0, 1)'),
-            font_scale: 1,
-            fast_ui_mode: true,
-            waifuMode: false,
-            avatar_style: 0,
-            chat_display: 0,
-            toastr_position: 'toast-top-center',
-            noShadows: false,
-            chat_width: 50,
-            timer_enabled: true,
-            timestamps_enabled: true,
-            timestamp_model_icon: false,
-            mesIDDisplay_enabled: false,
-            hideChatAvatars_enabled: false,
-            message_token_count_enabled: false,
-            expand_message_actions: false,
-            hotswap_enabled: true,
-            custom_css: '',
-            reduced_motion: false,
-            compact_input_area: true,
-            show_swipe_num_all_messages: false,
-            click_to_edit: false,
-            media_display: 'list'
-        };
-    }
-
-    function getThemeCompatDefaults(cb) {
-        var defaults = getFallbackThemeDefaults();
-        import('/scripts/power-user.js')
-            .then(function (mod) {
-                var pu = mod && mod.power_user;
-                if (pu) {
-                    themeSchema.THEME_FIELDS.forEach(function (key) {
-                        if (Object.prototype.hasOwnProperty.call(pu, key)) defaults[key] = cloneThemeValue(pu[key]);
-                    });
-                }
-                cb(defaults);
-            })
-            .catch(function () { cb(defaults); });
-    }
-
-    function getMissingThemeFields(theme) {
-        return themeSchema.getMissingFields(theme);
-    }
-
-    function normalizeThemeObject(theme, defaults, existingTheme) {
-        return themeSchema.normalizeTheme(theme, defaults, existingTheme);
-    }
-
-    function normalizeThemeObjects(themes, cb) {
-        getThemeCompatDefaults(function (defaults) {
-            getAllThemeObjects(function (existingThemes) {
-                var existingByName = {};
-                (existingThemes || []).forEach(function (theme) {
-                    if (theme && theme.name) existingByName[theme.name] = theme;
-                });
-                var fixedCount = 0;
-                var missingTotal = 0;
-                var normalized = themes.map(function (theme) {
-                    var missing = getMissingThemeFields(theme);
-                    if (missing.length > 0) {
-                        fixedCount++;
-                        missingTotal += missing.length;
-                    }
-                    return normalizeThemeObject(theme, defaults, existingByName[theme.name]);
-                });
-                cb(normalized, { fixedCount: fixedCount, missingTotal: missingTotal });
-            });
-        });
-    }
-
     function getPostHeaders() {
         return themeApi.getPostHeaders();
-    }
-
-    function getAllThemeObjects(cb, bypassBaibaokuCache) {
-        themeRuntime.getInventory({ bypassBaibaokuCache: bypassBaibaokuCache })
-            .then(function (themes) { cb(themes); })
-            .catch(function (err) {
-                console.warn('[美化管理] 获取完整主题失败:', err);
-                cb(null, err);
-            });
-    }
-
-    function getThemeObjectByName(themeName, cb) {
-        if (importedThemeCache[themeName]) { cb(importedThemeCache[themeName]); return; }
-        var cached = themeRuntime.getCached(themeName);
-        if (cached) { cb(cached); return; }
-        getAllThemeObjects(function (themes) {
-            var found = null;
-            if (themes) {
-                themes.forEach(function (theme) {
-                    if (theme && theme.name === themeName) found = theme;
-                });
-            }
-            if (isCompleteThemeObject(found, themeName)) themeRuntime.remember(found);
-            cb(found);
-        });
-    }
-
-    function prepareCompleteNativeThemeForApply(themeName) {
-        return themeRuntime.prepareCompleteThemeForApply(themeName);
     }
 
     function dispatchPreparedNativeThemeChange(themeEl, themeName, bypassLazyGuard) {
@@ -974,14 +821,6 @@
                 }
             }
         }
-    }
-
-    function saveThemeToServer(theme, headers) {
-        return themeApi.saveTheme(theme, headers);
-    }
-
-    function deleteThemeFromServer(themeName, headers) {
-        return themeApi.deleteTheme(themeName, headers);
     }
 
     function removeThemeOption(themeName) {
@@ -1039,119 +878,6 @@
         }
     }
 
-    function makeThemeRenameError(code, message) {
-        var error = new Error(message || code);
-        error.code = code;
-        return error;
-    }
-
-    function getSanitizedThemeFilename(themeName) {
-        return themeSchema.sanitizeFilename(themeName);
-    }
-
-    function findThemeByName(themes, themeName) {
-        return themeRuntime.findTheme(themes, themeName);
-    }
-
-    function getFreshThemeInventory(reason, bypassBaibaokuCache) {
-        invalidateBaibaokuThemeCache(reason);
-        return new Promise(function (resolve, reject) {
-            getAllThemeObjects(function (themes, err) {
-                if (!themes) {
-                    reject(makeThemeRenameError('inventory-failed', err && err.message ? err.message : '无法读取主题列表'));
-                    return;
-                }
-                resolve(themes);
-            }, bypassBaibaokuCache);
-        });
-    }
-
-    function ensureCompleteThemeObject(themeName, candidate) {
-        return themeRuntime.ensureCompleteTheme(themeName, candidate)
-            .catch(function (err) {
-                if (err && err.code !== 'incomplete') console.warn('[美化管理] 柏宝库完整主题加载失败:', err);
-                throw makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名');
-            });
-    }
-
-    function resolveCompleteThemeForRename(themeName) {
-        var nativeThemeRef = null;
-        var bridge = themeRuntime.getBridge();
-        var bridgeLoad = bridge && typeof bridge.ensureThemeLoaded === 'function'
-            ? Promise.resolve().then(function () { return bridge.ensureThemeLoaded(themeName); }).catch(function (err) {
-                console.warn('[美化管理] 柏宝库原生主题缓存预加载失败:', err);
-                return null;
-            })
-            : Promise.resolve(null);
-
-        return bridgeLoad
-            .then(function (loaded) {
-                if (isCompleteThemeObject(loaded, themeName)) nativeThemeRef = loaded;
-                // Bypass fast-get here so the inventory reflects the actual files and
-                // does not replace BaiBaoKu's reference to SillyTavern's native array.
-                return getFreshThemeInventory('theme-manager-rename-read', true);
-            })
-            .then(function (themes) {
-                var candidate = findThemeByName(themes, themeName);
-                if (!isCompleteThemeObject(candidate, themeName) && nativeThemeRef) candidate = nativeThemeRef;
-                return ensureCompleteThemeObject(themeName, candidate)
-                    .then(function (theme) { return { theme: theme, themes: themes, nativeThemeRef: nativeThemeRef }; });
-            });
-    }
-
-    function getThemeRenameConflict(oldName, newName, themes) {
-        var targetFilename = getSanitizedThemeFilename(newName);
-        if (!targetFilename) return 'invalid-filename';
-
-        var seenNames = {};
-        var names = [];
-        (themes || []).forEach(function (theme) {
-            if (theme && theme.name && !seenNames[theme.name]) {
-                seenNames[theme.name] = true;
-                names.push(theme.name);
-            }
-        });
-        stThemeList.forEach(function (name) {
-            if (name && !seenNames[name]) {
-                seenNames[name] = true;
-                names.push(name);
-            }
-        });
-
-        var targetKey = targetFilename.toLowerCase();
-        for (var i = 0; i < names.length; i++) {
-            var existingName = names[i];
-            if (existingName === newName && existingName !== oldName) return 'duplicate';
-            if (existingName === oldName && newName === oldName) continue;
-            var existingKey = getSanitizedThemeFilename(existingName).toLowerCase();
-            if (existingKey && existingKey === targetKey) return 'filename-conflict';
-        }
-        return '';
-    }
-
-    function sameThemeConfig(expected, actual) {
-        return themeSchema.sameConfig(expected, actual);
-    }
-
-    function verifySavedTheme(expectedTheme) {
-        return getFreshThemeInventory('theme-manager-rename-verify', true)
-            .then(function (themes) {
-                var candidate = findThemeByName(themes, expectedTheme.name);
-                if (!candidate) throw makeThemeRenameError('verify-failed', '保存后未找到新主题');
-                return ensureCompleteThemeObject(expectedTheme.name, candidate)
-                    .then(function (complete) {
-                        if (!sameThemeConfig(expectedTheme, complete)) {
-                            throw makeThemeRenameError('verify-failed', '新主题内容验证失败');
-                        }
-                        return { theme: complete, themes: themes };
-                    });
-            })
-            .catch(function (err) {
-                if (err && err.code === 'verify-failed') throw err;
-                throw makeThemeRenameError('verify-failed', err && err.message ? err.message : '新主题验证失败');
-            });
-    }
-
     function syncCurrentThemeRenameState(oldName, newName, wasCurrent) {
         renameThemeOption(oldName, newName);
         if (!wasCurrent) return Promise.resolve();
@@ -1175,15 +901,6 @@
             });
     }
 
-    function refreshNativeThemeCache(oldName, verifiedTheme, nativeThemeRef) {
-        var complete = cloneThemeValue(verifiedTheme);
-        if (isPlainThemeObject(nativeThemeRef) && (nativeThemeRef.name === oldName || nativeThemeRef.name === complete.name)) {
-            Object.keys(nativeThemeRef).forEach(function (key) { delete nativeThemeRef[key]; });
-            Object.assign(nativeThemeRef, cloneThemeValue(complete));
-        }
-        hydrateRenamedNativeTheme(complete);
-    }
-
     function renderAfterThemeRename() {
         renderCatbar();
         renderGrid();
@@ -1196,58 +913,17 @@
         if (!newName) { if (cb) cb(false, 'empty'); return; }
         if (newName === oldName) { if (cb) cb(false, 'same'); return; }
 
-        var headers = null;
-        var renamed = null;
-        var verified = null;
-        var nativeThemeRef = null;
-        var saveAttempted = false;
-        var deleteOldStarted = false;
         var wasCurrent = getCurrentThemeName() === oldName;
 
-        resolveCompleteThemeForRename(oldName)
-            .then(function (resolved) {
-                nativeThemeRef = resolved.nativeThemeRef;
-                var conflict = getThemeRenameConflict(oldName, newName, resolved.themes);
-                if (conflict) throw makeThemeRenameError(conflict, conflict);
-
-                renamed = cloneJson(resolved.theme);
-                renamed.name = newName;
-                themeSchema.removeLazyMarker(renamed);
-                if (!isCompleteThemeObject(renamed, newName)) {
-                    throw makeThemeRenameError('incomplete', '主题尚未完整加载，不能安全改名');
-                }
-                return getPostHeaders();
-            })
-            .then(function (postHeaders) {
-                headers = postHeaders;
-                saveAttempted = true;
-                return saveThemeToServer(renamed, headers);
-            })
-            .then(function () { return verifySavedTheme(renamed); })
+        themeTransactions.renameTheme(oldName, newName, { extraNames: stThemeList.slice() })
             .then(function (result) {
-                verified = result.theme;
-                deleteOldStarted = true;
-                return deleteThemeFromServer(oldName, headers);
-            })
-            .then(function () {
-                invalidateBaibaokuThemeCache('theme-manager-rename-delete-old');
-                delete importedThemeCache[oldName];
-                delete importedThemeCache[newName];
                 themeRuntime.forget(oldName);
-                themeRuntime.remember(verified);
-                delete renamedNativeThemeCache[oldName];
-                delete renamedNativeThemeCache[newName];
-                renamedNativeThemeCache[newName] = cloneThemeValue(verified);
-                refreshNativeThemeCache(oldName, verified, nativeThemeRef);
+                themeRuntime.remember(result.theme);
+                themeRuntime.replaceNativeTheme(oldName, result.theme, result.nativeThemeRef);
                 migrateThemeMetaName(oldName, newName);
 
                 return syncCurrentThemeRenameState(oldName, newName, wasCurrent)
-                    .then(function () {
-                        return getFreshThemeInventory('theme-manager-rename-final', true).catch(function (err) {
-                            console.warn('[美化管理] 重命名后的主题列表刷新失败:', err);
-                            return null;
-                        });
-                    });
+                    .then(function () { return result.themes; });
             })
             .then(function (themes) {
                 if (themes) {
@@ -1265,35 +941,22 @@
             .catch(function (err) {
                 var reason = err && err.code ? err.code : 'failed';
                 console.warn('[美化管理] 重命名美化失败:', err);
-
-                if (saveAttempted && !deleteOldStarted && headers) {
-                    deleteThemeFromServer(newName, headers)
-                        .catch(function (cleanupErr) {
-                            console.warn('[美化管理] 清理失败的新主题文件失败:', cleanupErr);
-                        })
-                        .then(function () {
-                            invalidateBaibaokuThemeCache('theme-manager-rename-rollback');
-                            if (cb) cb(false, reason);
-                        });
-                    return;
-                }
-
-                if (deleteOldStarted) reason = 'delete-failed';
                 if (cb) cb(false, reason);
             });
     }
 
     function deleteThemeEverywhere(themeName, cb) {
-        getPostHeaders()
-            .then(function (headers) { return deleteThemeFromServer(themeName, headers); })
-            .then(function () {
+        themeTransactions.deleteThemeVerified(themeName, {
+            deleteReason: 'theme-manager-delete',
+            verifyReason: 'theme-manager-delete-verify',
+        })
+            .then(function (result) {
                 var wasCurrent = getCurrentThemeName() === themeName;
-                delete importedThemeCache[themeName];
                 themeRuntime.forget(themeName);
-                delete renamedNativeThemeCache[themeName];
+                themeRuntime.evictNativeTheme(themeName, result.nativeThemeRef);
                 removeThemeMetaName(themeName);
                 removeThemeOption(themeName);
-                stThemeList = stThemeList.filter(function (n) { return n !== themeName; });
+                stThemeList = result.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; });
                 var nextTheme = stThemeList[0] || '';
                 if (wasCurrent && nextTheme) {
                     applyTheme(nextTheme, function () {
@@ -1447,8 +1110,11 @@
         else if (parsed && parsed.name) raw = [parsed];
         else throw new Error(sourceName + ' 缺少 name 或 themes 字段');
 
-        return raw.map(function (theme, idx) {
-            if (!theme || !theme.name || !String(theme.name).trim()) throw new Error(sourceName + ' 第 ' + (idx + 1) + ' 个主题缺少 name');
+        return raw.map(function (input, idx) {
+            var theme = cloneThemeValue(input);
+            if (!isPlainThemeObject(theme) || !theme.name || !String(theme.name).trim()) {
+                throw new Error(sourceName + ' 第 ' + (idx + 1) + ' 个主题缺少 name 或不是普通对象');
+            }
             theme.name = String(theme.name).trim();
             return theme;
         });
@@ -1636,184 +1302,117 @@
 
         if (dupInImport.length > 0 && !confirm('导入内容中有 ' + dupInImport.length + ' 个重名美化，将以最后出现的为准。是否继续？')) return;
 
+        var validation = themeTransfer.validateImportThemes(finalThemes);
+        if (validation.invalid.length > 0) {
+            var invalidNames = validation.invalid.map(function (item) { return item.name; });
+            console.warn('[美化管理] 已拒绝不安全的导入主题:', validation.invalid);
+            toast('导入已中止，不完整或不安全主题：' + invalidNames.join('、'), true);
+            return;
+        }
+
         var importThemes = finalThemes.filter(function (theme) { return typeof theme.custom_css === 'string' && /@import/i.test(theme.custom_css); });
         if (importThemes.length > 0 && !confirm('检测到 ' + importThemes.length + ' 个美化的 custom_css 中包含 @import。\n导入外部样式可能带来加载失败或安全风险，仍要继续吗？')) return;
 
         var existing = finalThemes.filter(function (theme) { return stThemeList.indexOf(theme.name) !== -1; });
         if (existing.length > 0 && !confirm('检测到 ' + existing.length + ' 个同名美化，继续导入将覆盖已有主题。是否继续？')) return;
 
-        normalizeThemeObjects(finalThemes, function (normalizedThemes, compatInfo) {
-            getPostHeaders()
-                .then(function (headers) {
-                    return Promise.all(normalizedThemes.map(function (theme) {
-                        return saveThemeToServer(theme, headers)
-                            .then(function () { return { ok: true, theme: theme }; })
-                            .catch(function (err) { return { ok: false, theme: theme, error: err }; });
-                    }));
-                })
-                .then(function (results) {
-                    var okCount = 0;
-                    var failCount = 0;
-                    results.forEach(function (res) {
-                        if (res.ok) {
-                            okCount++;
-                            rememberImportedTheme(res.theme);
-                            syncThemeOption(res.theme.name);
-                        } else failCount++;
-                    });
-                    var okNames = results.filter(function (res) { return res.ok; }).map(function (res) { return res.theme.name; });
-                    if (okNames.length > 0) mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories, opts.forceCategory);
-                    fetchThemeList(function () {
-                        renderCatbar(); renderGrid(); renderBottomStatus();
-                        var fixedText = compatInfo && compatInfo.fixedCount > 0 ? '，已补齐 ' + compatInfo.fixedCount + ' 个不完整美化' : '';
-                        if (failCount > 0) toast('导入完成：成功 ' + okCount + ' 个，失败 ' + failCount + ' 个' + fixedText, true);
-                        else if (okCount === 1 && results[0] && results[0].theme) toast('✅ 已导入美化：' + results[0].theme.name + fixedText);
-                        else toast('✅ 已导入美化：' + okCount + ' 个' + fixedText);
-                    });
-                    if (failCount > 0) console.warn('[美化管理] 批量导入失败项:', results.filter(function (r) { return !r.ok; }));
-                })
-                .catch(function (err) { toast((opts.failText || '导入美化失败') + '：' + err.message, true); });
-        });
+        themeTransfer.importVerified(finalThemes)
+            .then(function (outcome) {
+                var results = outcome.results || [];
+                var successful = results.filter(function (res) { return res.ok; });
+                var failed = results.filter(function (res) { return !res.ok; });
+
+                successful.forEach(function (res) {
+                    themeRuntime.remember(res.theme);
+                    syncThemeOption(res.theme.name);
+                });
+                var okNames = successful.map(function (res) { return res.theme.name; });
+                if (okNames.length > 0) mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories, opts.forceCategory);
+
+                if (outcome.legacyPartials && outcome.legacyPartials.length > 0) {
+                    console.info('[美化管理] 旧版部分主题已使用同一份固定 baseline 按 SillyTavern 语义补齐:', outcome.legacyPartials);
+                }
+                if (failed.length > 0) console.warn('[美化管理] 批量导入失败项（已恢复覆盖前主题）:', failed);
+
+                fetchThemeList(function () {
+                    renderCatbar(); renderGrid(); renderBottomStatus();
+                    if (failed.length > 0) {
+                        toast('导入完成：成功 ' + successful.length + ' 个；失败并已保护旧主题：' + failed.map(function (res) {
+                            return res.theme.name;
+                        }).join('、'), true);
+                    } else if (successful.length === 1) {
+                        toast('✅ 已导入并验证美化：' + successful[0].theme.name);
+                    } else {
+                        toast('✅ 已导入并验证美化：' + successful.length + ' 个');
+                    }
+                });
+            })
+            .catch(function (err) {
+                console.warn('[美化管理] 导入美化失败:', err);
+                var names = err && Array.isArray(err.details) ? err.details.map(function (item) { return item.name; }).join('、') : '';
+                toast((opts.failText || '导入美化失败') + (names ? '：' + names : '：' + err.message), true);
+            });
     }
 
     function applyTheme(themeName, cb) {
-        var requestId = themeRuntime.beginApply();
-        if (importedThemeCache[themeName]) {
-            applyImportedThemeObject(importedThemeCache[themeName], function (ok) {
-                finishApplyTheme(themeName, cb, ok, requestId);
-            });
-            return;
-        }
-
-        prepareCompleteNativeThemeForApply(themeName)
-            .then(function (prepared) {
-                if (!themeRuntime.isApplyCurrent(requestId)) {
-                    if (cb) cb(false, 'superseded');
-                    return;
-                }
-                if (prepared.theme && !prepared.hydrated) {
-                    applyCompleteNativeThemeFallback(prepared.theme, function (ok) {
-                        finishApplyTheme(themeName, cb, ok, requestId);
-                    });
-                    return;
-                }
-                applyPreparedTheme(themeName, cb, requestId, Boolean(prepared.theme && prepared.hydrated));
+        themeRuntime.applyThemeAndWait(
+            themeName,
+            function (prepared, requestId, isCurrent) {
+                return applyPreparedNativeTheme(prepared, requestId, isCurrent);
+            },
+            function (prepared, requestId, isCurrent) {
+                return applyVerifiedThemeFallback(prepared.theme, requestId, isCurrent);
+            },
+            function (prepared, requestId, isCurrent) {
+                return applyVerifiedThemeFallback(prepared.theme, requestId, isCurrent);
+            }
+        )
+            .then(function (result) {
+                finishApplyTheme(themeName, cb, true, result.requestId);
             })
             .catch(function (err) {
-                if (!themeRuntime.isApplyCurrent(requestId)) {
-                    if (cb) cb(false, 'superseded');
-                    return;
-                }
                 console.warn('[美化管理] 切换美化失败:', err);
                 if (cb) cb(false, err && err.code ? err.code : 'load-failed');
             });
     }
 
-    function applyPreparedTheme(themeName, cb, requestId, bypassLazyGuard) {
-        var logs = [];
+    function applyPreparedNativeTheme(prepared, requestId, isCurrent) {
+        if (!isCurrent()) return Promise.reject(themeRuntime.makeError('superseded', '主题切换已被更新请求取代'));
+        var themeName = prepared.theme.name;
+        var themeEl = document.getElementById('themes');
+        if (!themeEl) return Promise.reject(themeRuntime.makeError('apply-failed', '找不到 SillyTavern 原生主题控件'));
 
-        var renamedNativeTheme = renamedNativeThemeCache[themeName];
-        if (renamedNativeTheme && !hydrateRenamedNativeTheme(renamedNativeTheme)) {
-            applyCompleteNativeThemeFallback(renamedNativeTheme, function (ok) {
-                finishApplyTheme(themeName, cb, ok, requestId);
-            });
-            return;
+        syncThemeOption(themeName);
+        if (themeEl.tagName === 'SELECT') {
+            var found = false;
+            for (var i = 0; i < themeEl.options.length; i++) {
+                if (themeEl.options[i].value === themeName || themeEl.options[i].textContent === themeName) {
+                    themeEl.selectedIndex = i;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return Promise.reject(themeRuntime.makeError('apply-failed', '原生主题列表中找不到目标主题'));
+        } else if (themeEl.tagName === 'INPUT') {
+            var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            if (setter) setter.call(themeEl, themeName); else themeEl.value = themeName;
+        } else {
+            return Promise.reject(themeRuntime.makeError('apply-failed', '不支持的原生主题控件'));
         }
 
-        // 方式1：模拟用户在 #themes 输入框/下拉框中选择，然后触发 change 事件
-        // 这是最可靠的方式——直接模拟用户操作
-        try {
-            var themeEl = document.getElementById('themes');
-            if (themeEl) {
-                logs.push('找到#themes: ' + themeEl.tagName);
+        dispatchPreparedNativeThemeChange(themeEl, themeName, prepared.hydrated);
+        return Promise.resolve({ native: true });
+    }
 
-                if (themeEl.tagName === 'SELECT') {
-                    // 找到匹配的 option 并选中
-                    for (var i = 0; i < themeEl.options.length; i++) {
-                        if (themeEl.options[i].value === themeName || themeEl.options[i].textContent === themeName) {
-                            themeEl.selectedIndex = i;
-                            dispatchPreparedNativeThemeChange(themeEl, themeName, bypassLazyGuard);
-                            logs.push('SELECT 已选中 index=' + i + '，已触发 change');
-                            finishApplyTheme(themeName, cb, true, requestId);
-                            return;
-                        }
-                    }
-                    logs.push('SELECT 未找到匹配项');
-                } else if (themeEl.tagName === 'INPUT') {
-                    // 设置 value 然后触发 input + change 事件
-                    var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                    nativeInputValueSetter.call(themeEl, themeName);
-                    dispatchPreparedNativeThemeChange(themeEl, themeName, bypassLazyGuard);
-                    logs.push('INPUT 已设值并触发 input+change');
-                    finishApplyTheme(themeName, cb, true, requestId);
-                    return;
-                }
-            } else {
-                logs.push('#themes 元素不存在');
-            }
-        } catch (e) { logs.push('方式1异常: ' + e.message); }
-
-        // 方式2：通过 SillyTavern context 的 SlashCommandParser
-        try {
-            var ctx = null;
-            if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) ctx = SillyTavern.getContext();
-            else if (typeof getContext === 'function') ctx = getContext();
-
-            if (ctx) {
-                logs.push('ctx 可用');
-
-                // 2a: executeSlashCommands 或 executeSlashCommandsWithOptions
-                if (typeof ctx.executeSlashCommands === 'function') {
-                    ctx.executeSlashCommands('/theme ' + themeName);
-                    logs.push('executeSlashCommands 已调用');
-                    finishApplyTheme(themeName, cb, true, requestId);
-                    return;
-                }
-                if (typeof ctx.executeSlashCommandsWithOptions === 'function') {
-                    ctx.executeSlashCommandsWithOptions('/theme ' + themeName);
-                    logs.push('executeSlashCommandsWithOptions 已调用');
-                    finishApplyTheme(themeName, cb, true, requestId);
-                    return;
-                }
-
-                // 2b: SlashCommandParser
-                if (ctx.SlashCommandParser) {
-                    var parserMethods = Object.keys(ctx.SlashCommandParser).filter(function(k) { return typeof ctx.SlashCommandParser[k] === 'function'; });
-                    logs.push('SlashCommandParser methods: ' + parserMethods.join(','));
-                    try {
-                        ctx.SlashCommandParser.execute('/theme ' + themeName);
-                        logs.push('SlashCommandParser.execute 已调用');
-                        finishApplyTheme(themeName, cb, true, requestId);
-                        return;
-                    } catch (e2) { logs.push('SlashCommandParser.execute 失败: ' + e2.message); }
-                }
-
-                // 2c: 看 ctx 上有没有直接的主题切换方法
-                var ctxFns = Object.keys(ctx).filter(function (k) {
-                    return typeof ctx[k] === 'function' && k.toLowerCase().indexOf('theme') !== -1;
-                });
-                logs.push('ctx 中 theme 相关函数: ' + (ctxFns.join(',') || '无'));
-            } else {
-                logs.push('ctx 不可用');
-            }
-        } catch (e) { logs.push('方式2异常: ' + e.message); }
-
-        // 方式3：找页面上保存主题的按钮，模拟选中+点击
-        try {
-            // 有些 ST 版本用 .themeSaveButton 或类似的
-            var saveBtn = document.querySelector('#themes + .menu_button, #themes ~ .menu_button, [id*="theme"][id*="save"]');
-            if (saveBtn) {
-                logs.push('找到 save 按钮: ' + (saveBtn.id || saveBtn.className).slice(0, 30));
-            }
-        } catch (e) {}
-
-        // 所有方式都失败了——用 toast 显示调试信息
-        toast('切换失败', true);
-        setTimeout(function () {
-            toast(logs.join(' → ').slice(0, 100), true);
-        }, 600);
-        console.log('[美化管理] applyTheme 调试:', logs);
-        if (cb) cb(false);
+    function applyVerifiedThemeFallback(theme, requestId, isCurrent) {
+        if (!isCurrent()) return Promise.reject(themeRuntime.makeError('superseded', '主题切换已被更新请求取代'));
+        return new Promise(function (resolve, reject) {
+            applyUsableNativeThemeFallback(theme, function (ok) {
+                if (!isCurrent()) { reject(themeRuntime.makeError('superseded', '主题切换已被更新请求取代')); return; }
+                if (!ok) { reject(themeRuntime.makeError('apply-failed', '主题兜底应用失败')); return; }
+                resolve({ fallback: true, requestId: requestId });
+            });
+        });
     }
 
     // ── 图片工具（由 src/image-tools.js 提供实现）──────────────
@@ -2288,18 +1887,19 @@
                 card.addEventListener('click', function (e) {
                     if (e.target.closest('.tm-card-menu')) return;
                     var name = card.dataset.name;
-                    var dd = load();
-                    var m = getMeta(dd, name);
-                    m.useCount = (m.useCount || 0) + 1;
-                    m.lastUsed = Date.now();
-                    save(dd);
                     applyTheme(name, function (ok, reason) {
                         if (ok) {
+                            var dd = load();
+                            var m = getMeta(dd, name);
+                            m.useCount = (m.useCount || 0) + 1;
+                            m.lastUsed = Date.now();
+                            save(dd);
                             toast('✅ 已应用：' + name);
                             renderGrid(); renderBottomStatus(); updateBtn();
                         } else if (reason !== 'superseded') {
                             if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
                             else if (reason === 'load-failed') toast('主题加载失败，已保留当前主题', true);
+                            else if (reason === 'verify-failed') toast('主题状态或视觉验证失败，未切换绑定背景', true);
                             else toast('切换失败，请重试', true);
                         }
                     });
@@ -2348,12 +1948,15 @@
         var applyEl = sheet.querySelector('#tm-ctx-apply');
         if (applyEl) applyEl.addEventListener('click', function () {
             closeSheet(sheet);
-            var dd = load(); var m = getMeta(dd, themeName); m.useCount = (m.useCount || 0) + 1; m.lastUsed = Date.now(); save(dd);
             applyTheme(themeName, function (ok, reason) {
-                if (ok) { toast('✅ 已应用：' + themeName); renderGrid(); renderBottomStatus(); updateBtn(); }
+                if (ok) {
+                    var dd = load(); var m = getMeta(dd, themeName); m.useCount = (m.useCount || 0) + 1; m.lastUsed = Date.now(); save(dd);
+                    toast('✅ 已应用：' + themeName); renderGrid(); renderBottomStatus(); updateBtn();
+                }
                 else if (reason !== 'superseded') {
                     if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
                     else if (reason === 'load-failed') toast('主题加载失败，已保留当前主题', true);
+                    else if (reason === 'verify-failed') toast('主题状态或视觉验证失败，未切换绑定背景', true);
                     else toast('切换失败', true);
                 }
             });
@@ -2612,33 +2215,38 @@
                 var count = countForCat(cat);
                 if (count <= 0) { toast('这个分类里没有美化', true); return; }
                 closeSheet(sheet);
-                getAllThemeObjects(function (themes, err) {
-                    if (!themes) { toast('导出分类失败：' + (err ? err.message : '无法读取主题'), true); return; }
-                    var filtered = themes.filter(function (theme) {
-                        if (!theme || !theme.name) return false;
-                        var m = load().themeMeta[theme.name] || {};
+                var data = load();
+                var targetNames = stThemeList.filter(function (name) {
+                        var m = data.themeMeta[name] || {};
                         if (cat === '__uncategorized__') return !m.category;
                         return m.category === cat;
                     });
-                    if (filtered.length === 0) { toast('这个分类里没有可导出的美化', true); return; }
-                    normalizeThemeObjects(filtered, function (normalizedThemes, compatInfo) {
+                themeTransfer.prepareExport(targetNames)
+                    .then(function (prepared) {
                         var catName = cat === '__uncategorized__' ? '未分类' : cat;
                         var bundle = {
                             type: 'theme-mgr-theme-bundle',
                             version: 1,
                             exportedAt: new Date().toISOString(),
                             exportScope: { type: 'category', category: catName },
-                            themes: normalizedThemes,
+                            themes: prepared.themes,
                             categories: cat === '__uncategorized__' ? [] : [cat],
-                            themeMeta: buildThemeMetaForBundle(normalizedThemes),
+                            themeMeta: buildThemeMetaForBundle(prepared.themes),
+                            themeFingerprints: prepared.fingerprints.byFingerprint,
+                            themeCompatibilityReport: prepared.report,
                         };
                         var safeName = String(catName).replace(/[\\/:*?"<>|]/g, '_').slice(0, 40) || 'category';
-                        var fixedText = compatInfo && compatInfo.fixedCount > 0 ? '，已补齐 ' + compatInfo.fixedCount + ' 个不完整美化' : '';
+                        var reportText = prepared.report.legacyCount > 0
+                            ? '，兼容补齐 ' + prepared.report.legacyCount + ' 个旧主题的 ' + prepared.report.filledFieldCount + ' 个字段'
+                            : '';
                         downloadJsonFile('theme-mgr-' + safeName + '-' + new Date().toISOString().slice(0, 10) + '.json', bundle, function (assetCount) {
-                            toast('✅ 已导出「' + catName + '」：' + normalizedThemes.length + ' 个' + fixedText + (assetCount ? '，含 ' + assetCount + ' 张图片' : ''));
+                            toast('✅ 已安全导出「' + catName + '」：' + prepared.themes.length + ' 个' + reportText + (assetCount ? '，含 ' + assetCount + ' 张图片' : ''));
                         });
+                    })
+                    .catch(function (err) {
+                        console.warn('[美化管理] 导出分类安全检查失败:', err);
+                        toast('导出分类已中止：' + err.message, true);
                     });
-                });
             });
         });
     }
@@ -2818,24 +2426,30 @@
             inp.click();
         });
         sheet.querySelector('#tm-exp-theme-bundle').addEventListener('click', function () {
-            getAllThemeObjects(function (themes, err) {
-                if (!themes) { toast('导出美化包失败：' + (err ? err.message : '无法读取主题'), true); return; }
-                if (themes.length === 0) { toast('没有可导出的美化', true); return; }
-                normalizeThemeObjects(themes, function (normalizedThemes, compatInfo) {
+            if (stThemeList.length === 0) { toast('没有可导出的美化', true); return; }
+            themeTransfer.prepareExport(stThemeList.slice())
+                .then(function (prepared) {
                     var bundle = {
                         type: 'theme-mgr-theme-bundle',
                         version: 1,
                         exportedAt: new Date().toISOString(),
-                        themes: normalizedThemes,
+                        themes: prepared.themes,
                         categories: load().categories.slice(),
-                        themeMeta: buildThemeMetaForBundle(normalizedThemes),
+                        themeMeta: buildThemeMetaForBundle(prepared.themes),
+                        themeFingerprints: prepared.fingerprints.byFingerprint,
+                        themeCompatibilityReport: prepared.report,
                     };
-                    var fixedText = compatInfo && compatInfo.fixedCount > 0 ? '，已补齐 ' + compatInfo.fixedCount + ' 个不完整美化' : '';
+                    var reportText = prepared.report.legacyCount > 0
+                        ? '，兼容补齐 ' + prepared.report.legacyCount + ' 个旧主题的 ' + prepared.report.filledFieldCount + ' 个字段'
+                        : '';
                     downloadJsonFile('theme-mgr-themes-' + new Date().toISOString().slice(0, 10) + '.json', bundle, function (assetCount) {
-                        toast('✅ 已导出美化包：' + normalizedThemes.length + ' 个' + fixedText + (assetCount ? '，含 ' + assetCount + ' 张图片' : ''));
+                        toast('✅ 已安全导出美化包：' + prepared.themes.length + ' 个' + reportText + (assetCount ? '，含 ' + assetCount + ' 张图片' : ''));
                     });
+                })
+                .catch(function (err) {
+                    console.warn('[美化管理] 导出美化包安全检查失败:', err);
+                    toast('导出美化包已中止：' + err.message, true);
                 });
-            });
         });
         sheet.querySelector('#tm-exp-theme-cat').addEventListener('click', function () { openCategoryExportSheet(); });
         sheet.querySelector('#tm-clear').addEventListener('click', function () {
@@ -3279,7 +2893,7 @@
     // ── 启动 ──────────────────────────────────────────────────
     function startThemeManager() {
         injectStyles();
-        bindImportedThemeSelectSync();
+        bindVerifiedThemeSelectSync();
         startLauncherInjection();
         setTimeout(injectFab, 1500);
         setInterval(function () { if (!document.getElementById(FAB_ID)) injectFab(); }, 3000);

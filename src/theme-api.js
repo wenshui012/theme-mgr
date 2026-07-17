@@ -42,7 +42,7 @@
         }
 
         function saveTheme(theme, headers) {
-            if (!schema || !schema.isPlainObject(theme) || schema.hasLazyMarker(theme)) {
+            if (!schema || !schema.isUsableTheme(theme, theme && theme.name) || schema.isLazyThemePlaceholder(theme, theme && theme.name)) {
                 return Promise.reject(new Error('拒绝保存柏宝库懒加载占位主题'));
             }
             var headersPromise = headers ? Promise.resolve(headers) : getPostHeaders();
