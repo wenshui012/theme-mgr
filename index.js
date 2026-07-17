@@ -17,7 +17,7 @@
     var IMG_QUALITY = 0.8;
     var FAB_ID = 'tm-fab-main';
 
-    var TM_VERSION = '3.5.3';
+    var TM_VERSION = '3.5.4';
     var MODULE_VERSION = TM_VERSION;
     var storageApi = null;
     var imageToolsApi = null;
@@ -3312,7 +3312,7 @@
             return;
         }
         if (supportFailed) {
-            var failedMsg = '美化管理器模块加载失败：' + (supportErrorText || '未知原因') + '\n\n请更新到 v3.5.3 后刷新/重启酒馆。';
+            var failedMsg = '美化管理器模块加载失败：' + (supportErrorText || '未知原因') + '\n\n请更新到 v3.5.4 后刷新/重启酒馆。';
             try { alert(failedMsg); } catch (e) {}
             return;
         }
