@@ -318,10 +318,13 @@ test('batch import captures one fixed baseline before saving every partial theme
         schema,
         runtime,
         transactions: {
-            saveVerifiedTheme(theme) {
-                savedThemes.push(clone(theme));
+            saveVerifiedThemes(themes) {
+                themes.forEach((theme) => savedThemes.push(clone(theme)));
                 baseline.quote_text_color = '#mutated-during-import';
-                return Promise.resolve({ theme: clone(theme), overwritten: false });
+                return Promise.resolve({
+                    results: themes.map((theme) => ({ theme: clone(theme), overwritten: false })),
+                    themes: themes.map(clone),
+                });
             },
         },
         captureBaseline() { baselineCalls += 1; return Promise.resolve(clone(baseline)); },
@@ -338,6 +341,99 @@ test('batch import captures one fixed baseline before saving every partial theme
     assert.equal(savedThemes[0].quote_text_color, '#fixed');
     assert.equal(savedThemes[1].quote_text_color, '#fixed');
     assert.equal(savedThemes[1].custom_css, '');
+});
+
+test('batch save uses one initial and one final inventory for any number of themes', async () => {
+    const previous = completeTheme('Existing', { custom_css: '/* old */' });
+    const batch = [
+        completeTheme('Existing', { custom_css: '/* new */' }),
+        completeTheme('Import Two'),
+        completeTheme('Import Three'),
+        completeTheme('Import Four'),
+        completeTheme('Import Five'),
+    ];
+    const harness = makeTransactionHarness([previous]);
+
+    const result = await harness.transactions.saveVerifiedThemes(batch);
+
+    assert.equal(harness.getInventoryCount(), 2);
+    assert.equal(harness.getHeaderCount(), 1);
+    assert.equal(result.results.length, 5);
+    assert.equal(result.results.every((item) => item.ok), true);
+    assert.equal(result.results[0].overwritten, true);
+    assert.equal(result.results.slice(1).every((item) => !item.overwritten), true);
+    assert.equal(harness.calls.filter((call) => call.type === 'save').length, 5);
+    batch.forEach((theme) => assert.deepEqual(harness.store[theme.name], theme));
+});
+
+test('batch save failure restores every attempted destination before reporting failure', async () => {
+    const previous = completeTheme('Existing', { custom_css: '/* old */' });
+    const batch = [
+        completeTheme('Existing', { custom_css: '/* new */' }),
+        completeTheme('Import Two'),
+        completeTheme('Import Three'),
+    ];
+    const harness = makeTransactionHarness([previous], { saveErrorAt: 3 });
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedThemes(batch),
+        (error) => error.message === 'injected save failure' && error.rollbackRestored === true,
+    );
+
+    assert.deepEqual(harness.store.Existing, previous);
+    assert.equal(harness.store['Import Two'], undefined);
+    assert.equal(harness.store['Import Three'], undefined);
+    assert.equal(harness.getHeaderCount(), 1);
+    assert.equal(harness.getInventoryCount(), 2);
+});
+
+test('batch final verification failure restores the complete original batch state', async () => {
+    const previous = completeTheme('Existing', { custom_css: '/* old */' });
+    const batch = [
+        completeTheme('Existing', { custom_css: '/* new */' }),
+        completeTheme('Import Two'),
+    ];
+    const harness = makeTransactionHarness([previous], {
+        transformInventory(inventory, inventoryCount) {
+            if (inventoryCount !== 2) return inventory;
+            return inventory.map((theme) => theme.name === 'Import Two'
+                ? Object.assign({}, theme, { custom_css: '/* corrupted */' })
+                : theme);
+        },
+    });
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedThemes(batch),
+        (error) => error.code === 'batch-verify-failed' && error.rollbackRestored === true,
+    );
+
+    assert.deepEqual(harness.store.Existing, previous);
+    assert.equal(harness.store['Import Two'], undefined);
+    assert.equal(harness.getInventoryCount(), 3);
+});
+
+test('batch rollback failure reports rollback-failed with a content-free state summary', async () => {
+    const previous = completeTheme('Existing', { custom_css: '/* old */' });
+    const replacement = completeTheme('Existing', { custom_css: '/* new */' });
+    const harness = makeTransactionHarness([previous], {
+        saveErrorAt: 2,
+        transformInventory(inventory, inventoryCount) {
+            if (inventoryCount !== 2) return inventory;
+            return inventory.map((theme) => Object.assign({}, theme, { custom_css: '/* corrupted */' }));
+        },
+    });
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedThemes([replacement]),
+        (error) => {
+            assert.equal(error.code, 'rollback-failed');
+            assert.equal(Array.isArray(error.details.state), true);
+            assert.equal(error.details.state[0].restored, false);
+            assert.equal(JSON.stringify(error.details).includes('/* old */'), false);
+            assert.equal(JSON.stringify(error.details).includes('/* new */'), false);
+            return true;
+        },
+    );
 });
 
 test('transactional rename preserves the exact legacy partial fields and saves before deleting', async () => {
@@ -624,7 +720,7 @@ test('rename never saves a lazy placeholder when hydration is unavailable', asyn
     assert.deepEqual(harness.store['Lazy Old'], lazy);
 });
 
-test('consecutive renames use the remembered theme for a one-inventory second rename', async () => {
+test('consecutive renames keep remembering each new name for one-inventory follow-ups', async () => {
     const harness = makeTransactionHarness([{ name: 'First', main_text_color: '#one', custom_css: '' }]);
 
     await harness.transactions.renameTheme('First', 'Second', {
@@ -635,12 +731,17 @@ test('consecutive renames use the remembered theme for a one-inventory second re
         extraNames: ['Second'],
         extraNamesComplete: true,
     });
+    await harness.transactions.renameTheme('Third', 'Fourth', {
+        extraNames: ['Third'],
+        extraNamesComplete: true,
+    });
 
-    assert.equal(harness.getInventoryCount(), 3);
-    assert.equal(harness.getHeaderCount(), 2);
+    assert.equal(harness.getInventoryCount(), 4);
+    assert.equal(harness.getHeaderCount(), 3);
     assert.equal(harness.store.First, undefined);
     assert.equal(harness.store.Second, undefined);
-    assert.deepEqual(harness.store.Third, { name: 'Third', main_text_color: '#one', custom_css: '' });
+    assert.equal(harness.store.Third, undefined);
+    assert.deepEqual(harness.store.Fourth, { name: 'Fourth', main_text_color: '#one', custom_css: '' });
 });
 
 test('rename rejects direct and sanitized filename conflicts without saving', async () => {

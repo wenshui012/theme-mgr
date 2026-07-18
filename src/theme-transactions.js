@@ -150,6 +150,185 @@
                 });
         }
 
+        function verifyBatchSavedThemes(expectedThemes, themes) {
+            var verified = [];
+            var failures = [];
+            (expectedThemes || []).forEach(function (expected) {
+                var candidate = runtime.findTheme(themes, expected.name);
+                if (!schema.isUsableTheme(candidate, expected.name) ||
+                    schema.isLazyThemePlaceholder(candidate, expected.name) ||
+                    !schema.sameConfig(expected, candidate)) {
+                    failures.push(expected.name);
+                    return;
+                }
+                verified.push(schema.cloneValue(candidate));
+            });
+            if (failures.length > 0) {
+                throw error('batch-verify-failed', '批量保存后的主题联合验证失败', {
+                    failedNames: failures,
+                });
+            }
+            return verified;
+        }
+
+        function describeBatchRollbackState(entries, themes) {
+            return (entries || []).map(function (entry) {
+                var candidate = runtime.findTheme(themes, entry.expected.name);
+                var expectedPrevious = entry.previousTheme;
+                var restored = expectedPrevious
+                    ? schema.isUsableTheme(candidate, expectedPrevious.name) &&
+                        schema.fingerprint(candidate) === schema.fingerprint(expectedPrevious)
+                    : !candidate;
+                return {
+                    name: entry.expected.name,
+                    expectedPrevious: Boolean(expectedPrevious),
+                    present: Boolean(candidate),
+                    restored: restored,
+                };
+            });
+        }
+
+        function rollbackVerifiedThemeBatch(entries, headers, originalError, options) {
+            options = options || {};
+            var rollbackEntries = (entries || []).slice().reverse();
+            return rollbackEntries.reduce(function (pending, entry) {
+                return pending.then(function () {
+                    var rollbackRequest = entry.previousTheme
+                        ? api.saveTheme(entry.previousTheme, headers)
+                        : api.deleteTheme(entry.expected.name, headers);
+                    return rollbackRequest.catch(function () {
+                        // The final fresh inventory is authoritative. A rejected delete may
+                        // still mean the requested state was reached or the response was lost.
+                        return null;
+                    });
+                });
+            }, Promise.resolve())
+                .then(function () {
+                    return freshInventory(options.rollbackVerifyReason || 'theme-manager-import-batch-rollback-verify');
+                })
+                .then(function (themes) {
+                    var state = describeBatchRollbackState(entries, themes);
+                    if (state.some(function (item) { return !item.restored; })) {
+                        throw error('rollback-state-invalid', '批量导入回滚后的主题状态验证失败', state);
+                    }
+                    entries.forEach(function (entry) {
+                        if (entry.previousTheme) runtime.remember(entry.previousTheme);
+                        else runtime.forget(entry.expected.name);
+                    });
+                    originalError.rollbackRestored = true;
+                    originalError.rollbackState = state;
+                    throw originalError;
+                })
+                .catch(function (rollbackError) {
+                    if (rollbackError === originalError) throw rollbackError;
+                    if (rollbackError && rollbackError.code === 'rollback-failed') throw rollbackError;
+                    throw error('rollback-failed', '批量导入失败，且无法确认旧主题已全部恢复', {
+                        causeCode: originalError && originalError.code ? originalError.code : 'batch-save-failed',
+                        rollbackCode: rollbackError && rollbackError.code ? rollbackError.code : 'rollback-error',
+                        state: rollbackError && rollbackError.details ? rollbackError.details : null,
+                    });
+                });
+        }
+
+        function saveVerifiedThemes(themes, options) {
+            options = options || {};
+            var expectedThemes = (themes || []).map(function (theme) { return schema.cloneValue(theme); });
+            if (expectedThemes.length === 0) {
+                return Promise.resolve({ results: [], themes: [], initialInventory: [] });
+            }
+
+            var filenames = Object.create(null);
+            for (var i = 0; i < expectedThemes.length; i++) {
+                var expected = expectedThemes[i];
+                if (!schema.isUsableTheme(expected, expected && expected.name) || schema.hasLazyMarker(expected)) {
+                    return Promise.reject(error('incomplete', '批量保存包含不可用主题对象'));
+                }
+                var filenameKey = schema.sanitizeFilename(expected.name).toLowerCase();
+                if (!filenameKey) return Promise.reject(error('invalid-filename', '主题名称无法生成有效文件名'));
+                if (filenames[filenameKey] !== undefined) {
+                    return Promise.reject(error('filename-conflict', '批量保存项经文件名清理后发生冲突'));
+                }
+                filenames[filenameKey] = expected.name;
+            }
+
+            var initialInventory = null;
+            var headers = null;
+            var entries = [];
+            var attemptedEntries = [];
+            var writeStarted = false;
+
+            return freshInventory(options.readReason || 'theme-manager-import-batch-read')
+                .then(function (inventory) {
+                    initialInventory = inventory || [];
+                    var collision = expectedThemes.some(function (expected) {
+                        var targetKey = schema.sanitizeFilename(expected.name).toLowerCase();
+                        return initialInventory.some(function (item) {
+                            return item && item.name && item.name !== expected.name &&
+                                schema.sanitizeFilename(item.name).toLowerCase() === targetKey;
+                        });
+                    });
+                    if (collision) throw error('filename-conflict', '主题名称经文件名清理后与已有主题冲突');
+
+                    return expectedThemes.reduce(function (pending, expected) {
+                        return pending.then(function () {
+                            var previousCandidate = runtime.findTheme(initialInventory, expected.name);
+                            if (!previousCandidate) {
+                                entries.push({ expected: expected, previousTheme: null });
+                                return null;
+                            }
+                            return runtime.resolveUsableTheme(expected.name, previousCandidate).then(function (previous) {
+                                entries.push({
+                                    expected: expected,
+                                    previousTheme: schema.cloneValue(previous),
+                                });
+                            });
+                        });
+                    }, Promise.resolve());
+                })
+                .then(function () { return options.headers || api.getPostHeaders(); })
+                .then(function (postHeaders) {
+                    headers = postHeaders;
+                    return entries.reduce(function (pending, entry) {
+                        return pending.then(function () {
+                            writeStarted = true;
+                            attemptedEntries.push(entry);
+                            var transactionContext = {};
+                            return saveVerifiedTheme(entry.expected, {
+                                knownInventory: initialInventory,
+                                knownPreviousTheme: entry.previousTheme,
+                                headers: headers,
+                                deferVerification: true,
+                                transactionContext: transactionContext,
+                                saveReason: options.saveReason || 'theme-manager-import-batch-save',
+                            });
+                        });
+                    }, Promise.resolve());
+                })
+                .then(function () {
+                    return freshInventory(options.verifyReason || 'theme-manager-import-batch-verify');
+                })
+                .then(function (finalInventory) {
+                    var verified = verifyBatchSavedThemes(expectedThemes, finalInventory);
+                    verified.forEach(function (theme) { runtime.remember(theme); });
+                    return {
+                        results: verified.map(function (theme, index) {
+                            return {
+                                ok: true,
+                                theme: theme,
+                                previousTheme: entries[index].previousTheme,
+                                overwritten: Boolean(entries[index].previousTheme),
+                            };
+                        }),
+                        themes: finalInventory,
+                        initialInventory: initialInventory,
+                    };
+                })
+                .catch(function (originalError) {
+                    if (!writeStarted || !headers) throw originalError;
+                    return rollbackVerifiedThemeBatch(attemptedEntries, headers, originalError, options);
+                });
+        }
+
         function deleteThemeVerified(themeName, options) {
             options = options || {};
             var headers = null;
@@ -486,6 +665,7 @@
             verifySavedTheme: verifySavedTheme,
             verifyThemeAbsent: verifyThemeAbsent,
             saveVerifiedTheme: saveVerifiedTheme,
+            saveVerifiedThemes: saveVerifiedThemes,
             deleteThemeVerified: deleteThemeVerified,
             getRenameConflict: getRenameConflict,
             renameTheme: renameTheme,

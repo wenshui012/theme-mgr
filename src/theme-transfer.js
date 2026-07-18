@@ -157,7 +157,6 @@
                 return Promise.reject(error('import-invalid', '导入内容包含不安全主题', validation.invalid));
             }
 
-            var results = [];
             return captureBaseline().then(function (baseline) {
                 var normalizedThemes = validation.valid.map(function (theme) {
                     var normalized = schema.normalizeImportedThemeLikeSillyTavern(theme, baseline);
@@ -166,26 +165,30 @@
                     }
                     return { source: theme, normalized: normalized };
                 });
-                return normalizedThemes.reduce(function (pending, item) {
-                    return pending.then(function () {
-                        return transactions.saveVerifiedTheme(item.normalized, {
-                            readReason: 'theme-manager-import-read',
-                            saveReason: 'theme-manager-import-save',
-                            verifyReason: 'theme-manager-import-verify',
-                        }).then(function (saved) {
-                            runtime.remember(saved.theme);
-                            runtime.hydrate(saved.theme);
-                            results.push({ ok: true, theme: saved.theme, sourceTheme: item.source, overwritten: saved.overwritten });
-                        }).catch(function (err) {
-                            results.push({ ok: false, theme: item.normalized, sourceTheme: item.source, error: err });
-                        });
+                return transactions.saveVerifiedThemes(normalizedThemes.map(function (item) {
+                    return item.normalized;
+                }), {
+                    readReason: 'theme-manager-import-batch-read',
+                    saveReason: 'theme-manager-import-batch-save',
+                    verifyReason: 'theme-manager-import-batch-verify',
+                    rollbackVerifyReason: 'theme-manager-import-batch-rollback-verify',
+                }).then(function (savedBatch) {
+                    var results = savedBatch.results.map(function (saved, index) {
+                        runtime.remember(saved.theme);
+                        runtime.hydrate(saved.theme);
+                        return {
+                            ok: true,
+                            theme: saved.theme,
+                            sourceTheme: normalizedThemes[index].source,
+                            overwritten: saved.overwritten,
+                        };
                     });
-                }, Promise.resolve());
-            }).then(function () {
-                return {
-                    results: results,
-                    legacyPartials: validation.legacyPartials,
-                };
+                    return {
+                        results: results,
+                        legacyPartials: validation.legacyPartials,
+                        themes: savedBatch.themes,
+                    };
+                });
             });
         }
 
