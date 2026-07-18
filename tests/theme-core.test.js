@@ -113,6 +113,12 @@ function makeTransactionHarness(initialThemes, hooks) {
         getBridge() { return hooks.bridge || null; },
         remember(theme) { remembered[theme.name] = clone(theme); },
         forget(name) { delete remembered[name]; },
+        getCached(name) {
+            const cached = hooks.cachedThemes && hooks.cachedThemes[name]
+                ? hooks.cachedThemes[name]
+                : remembered[name];
+            return cached ? clone(cached) : null;
+        },
     };
 
     return {
@@ -396,6 +402,77 @@ test('bridge rename falls back to two inventories when the supplied name list is
     assert.equal(harness.getInventoryCount(), 2);
 });
 
+test('runtime cache rename uses one final inventory when the native name list is complete', async () => {
+    const original = { name: 'Cached Old', main_text_color: '#cached', custom_css: '' };
+    const harness = makeTransactionHarness([original], {
+        cachedThemes: { 'Cached Old': original },
+    });
+
+    const result = await harness.transactions.renameTheme('Cached Old', 'Cached New', {
+        extraNames: ['Cached Old'],
+        extraNamesComplete: true,
+    });
+
+    assert.equal(harness.getInventoryCount(), 1);
+    assert.equal(result.transactionContext.originalInventory, null);
+    assert.deepEqual(harness.store['Cached New'], { name: 'Cached New', main_text_color: '#cached', custom_css: '' });
+    assert.equal(harness.store['Cached Old'], undefined);
+});
+
+test('runtime cache fast path rejects exact name conflicts before saving', async () => {
+    const original = { name: 'Cached Source', main_text_color: '#cached' };
+    const harness = makeTransactionHarness([
+        original,
+        { name: 'Existing', main_text_color: '#existing' },
+    ], {
+        cachedThemes: { 'Cached Source': original },
+    });
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Cached Source', 'Existing', {
+            extraNames: ['Cached Source', 'Existing'],
+            extraNamesComplete: true,
+        }),
+        (error) => error.code === 'duplicate',
+    );
+    assert.equal(harness.getInventoryCount(), 0);
+    assert.equal(harness.calls.length, 0);
+});
+
+test('runtime cache placeholders do not enter the fast path and safely fall back', async () => {
+    const lazy = { name: 'Cached Lazy', __baibaokuLazyTheme: true };
+    const harness = makeTransactionHarness([lazy], {
+        cachedThemes: { 'Cached Lazy': lazy },
+    });
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Cached Lazy', 'Cached Lazy New', {
+            extraNames: ['Cached Lazy'],
+            extraNamesComplete: true,
+        }),
+        (error) => error.code === 'incomplete',
+    );
+    assert.equal(harness.getInventoryCount(), 1);
+    assert.equal(harness.calls.some((call) => call.type === 'save'), false);
+});
+
+test('runtime cache name-only objects do not enter the fast path or get saved', async () => {
+    const nameOnly = { name: 'Cached Empty' };
+    const harness = makeTransactionHarness([nameOnly], {
+        cachedThemes: { 'Cached Empty': nameOnly },
+    });
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Cached Empty', 'Cached Empty New', {
+            extraNames: ['Cached Empty'],
+            extraNamesComplete: true,
+        }),
+        (error) => error.code === 'incomplete',
+    );
+    assert.equal(harness.getInventoryCount(), 1);
+    assert.equal(harness.calls.some((call) => call.type === 'save'), false);
+});
+
 test('bridge fast path still rejects sanitized filename conflicts before saving', async () => {
     const original = { name: 'Bridge Source', main_text_color: '#bridge' };
     const harness = makeTransactionHarness([
@@ -547,13 +624,19 @@ test('rename never saves a lazy placeholder when hydration is unavailable', asyn
     assert.deepEqual(harness.store['Lazy Old'], lazy);
 });
 
-test('consecutive renames retain transactional guarantees and use two inventories each without bridge', async () => {
+test('consecutive renames use the remembered theme for a one-inventory second rename', async () => {
     const harness = makeTransactionHarness([{ name: 'First', main_text_color: '#one', custom_css: '' }]);
 
-    await harness.transactions.renameTheme('First', 'Second');
-    await harness.transactions.renameTheme('Second', 'Third');
+    await harness.transactions.renameTheme('First', 'Second', {
+        extraNames: ['First'],
+        extraNamesComplete: true,
+    });
+    await harness.transactions.renameTheme('Second', 'Third', {
+        extraNames: ['Second'],
+        extraNamesComplete: true,
+    });
 
-    assert.equal(harness.getInventoryCount(), 4);
+    assert.equal(harness.getInventoryCount(), 3);
     assert.equal(harness.getHeaderCount(), 2);
     assert.equal(harness.store.First, undefined);
     assert.equal(harness.store.Second, undefined);

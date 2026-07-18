@@ -349,10 +349,12 @@
             var bridge = runtime.getBridge();
             var providedNames = collectThemeNames([], options.extraNames);
             var hasReliableNames = Boolean(
-                bridge &&
                 options.extraNamesComplete === true &&
                 providedNames.indexOf(oldName) !== -1
             );
+            var cachedSource = typeof runtime.getCached === 'function'
+                ? runtime.getCached(oldName)
+                : null;
             var context = {
                 oldName: oldName,
                 newName: newName,
@@ -367,17 +369,26 @@
                 deleteAttempted: false,
                 deleteSucceeded: false,
             };
-            var preload = bridge && typeof bridge.ensureThemeLoaded === 'function'
-                ? Promise.resolve().then(function () { return bridge.ensureThemeLoaded(oldName); }).catch(function (err) {
-                    console.warn('[美化管理] 柏宝库原生主题缓存预加载失败:', err);
-                    return null;
-                })
-                : Promise.resolve(null);
+            var preload;
+            if (schema.isUsableTheme(cachedSource, oldName)) {
+                preload = Promise.resolve({ theme: cachedSource, nativeRef: null });
+            } else if (bridge && typeof bridge.ensureThemeLoaded === 'function') {
+                preload = Promise.resolve()
+                    .then(function () { return bridge.ensureThemeLoaded(oldName); })
+                    .then(function (loaded) { return { theme: loaded, nativeRef: loaded }; })
+                    .catch(function (err) {
+                        console.warn('[美化管理] 柏宝库原生主题缓存预加载失败:', err);
+                        return { theme: null, nativeRef: null };
+                    });
+            } else {
+                preload = Promise.resolve({ theme: null, nativeRef: null });
+            }
 
             return preload
-                .then(function (loaded) {
+                .then(function (preloaded) {
+                    var loaded = preloaded && preloaded.theme;
                     if (schema.isUsableTheme(loaded, oldName)) {
-                        nativeThemeRef = loaded;
+                        nativeThemeRef = preloaded.nativeRef;
                         context.sourceTheme = schema.cloneValue(loaded);
                     }
 
