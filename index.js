@@ -1,6 +1,6 @@
 // ST美化管理扩展 v3.5 - 模块装配与总入口
 (function () {
-    var TM_VERSION = '3.5.5';
+    var TM_VERSION = '3.5.6';
 
     function getExtensionBaseUrl() {
         var script = document.currentScript;

@@ -22,7 +22,7 @@
     var IMG_QUALITY = 0.8;
     var FAB_ID = 'tm-fab-main';
 
-    var TM_VERSION = options.version || '3.5.5';
+    var TM_VERSION = options.version || '3.5.6';
     var storageApi = null;
     var imageToolsApi = null;
     var styleApi = null;
