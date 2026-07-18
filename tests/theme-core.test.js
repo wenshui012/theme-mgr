@@ -61,21 +61,27 @@ function makeTransactionHarness(initialThemes, hooks) {
     const remembered = {};
     let saveCount = 0;
     let deleteCount = 0;
+    let inventoryCount = 0;
+    let headerCount = 0;
 
     const api = {
-        getPostHeaders() { return Promise.resolve({ 'X-Test': '1' }); },
-        saveTheme(theme) {
+        getPostHeaders() {
+            headerCount += 1;
+            if (hooks.headerErrorAt === headerCount) return Promise.reject(new Error('injected header failure'));
+            return Promise.resolve({ 'X-Test': String(headerCount) });
+        },
+        saveTheme(theme, headers) {
             saveCount += 1;
-            calls.push({ type: 'save', name: theme.name, theme: clone(theme) });
+            calls.push({ type: 'save', name: theme.name, theme: clone(theme), headers });
             if (hooks.saveErrorAt === saveCount) return Promise.reject(new Error('injected save failure'));
             let written = clone(theme);
             if (typeof hooks.transformSave === 'function') written = hooks.transformSave(written, saveCount);
             store[written.name] = written;
             return Promise.resolve(written);
         },
-        deleteTheme(name) {
+        deleteTheme(name, headers) {
             deleteCount += 1;
-            calls.push({ type: 'delete', name });
+            calls.push({ type: 'delete', name, headers });
             if (hooks.deleteErrorAt === deleteCount || hooks.deleteErrorName === name) {
                 return Promise.reject(new Error('injected delete failure'));
             }
@@ -86,7 +92,15 @@ function makeTransactionHarness(initialThemes, hooks) {
 
     const runtime = {
         invalidate() {},
-        getInventory() { return Promise.resolve(Object.values(store).map(clone)); },
+        getInventory(options) {
+            inventoryCount += 1;
+            if (hooks.inventoryErrorAt === inventoryCount) return Promise.reject(new Error('injected inventory failure'));
+            let inventory = Object.values(store).map(clone);
+            if (typeof hooks.transformInventory === 'function') {
+                inventory = hooks.transformInventory(inventory, inventoryCount, store, options);
+            }
+            return Promise.resolve(clone(inventory));
+        },
         findTheme(themes, name) { return (themes || []).find((theme) => theme && theme.name === name) || null; },
         resolveUsableTheme(name, candidate) {
             if (!schema.isUsableTheme(candidate, name)) {
@@ -105,6 +119,8 @@ function makeTransactionHarness(initialThemes, hooks) {
         store,
         calls,
         remembered,
+        getInventoryCount() { return inventoryCount; },
+        getHeaderCount() { return headerCount; },
         transactions: modules.createThemeTransactions({ schema, api, runtime }),
     };
 }
@@ -326,7 +342,78 @@ test('transactional rename preserves the exact legacy partial fields and saves b
     assert.deepEqual(harness.store['Legacy New'], { name: 'Legacy New', main_text_color: '#abc', custom_css: '' });
     assert.equal(harness.store['Legacy Old'], undefined);
     assert.equal(result.newName, 'Legacy New');
+    assert.equal(harness.getInventoryCount(), 2);
+    assert.equal(harness.getHeaderCount(), 1);
+    assert.equal(harness.calls[0].headers, harness.calls[1].headers);
+    assert.deepEqual(result.transactionContext.sourceTheme, original);
+    assert.equal(result.transactionContext.originalInventory.length, 1);
+    assert.deepEqual(result.transactionContext.existingNames, ['Legacy Old']);
+    assert.equal(result.transactionContext.previousDestinationTheme, null);
+    assert.deepEqual(result.transactionContext.expectedRenamedTheme, {
+        name: 'Legacy New',
+        main_text_color: '#abc',
+        custom_css: '',
+    });
     assert.deepEqual(harness.calls.map((call) => `${call.type}:${call.name}`), ['save:Legacy New', 'delete:Legacy Old']);
+});
+
+test('bridge rename uses hydrated source and one final inventory when the native name list is complete', async () => {
+    const original = { name: 'Bridge Old', main_text_color: '#bridge', custom_css: '' };
+    let hydrateCalls = 0;
+    const harness = makeTransactionHarness([original], {
+        bridge: {
+            ensureThemeLoaded(name) {
+                hydrateCalls += 1;
+                return Promise.resolve(clone(Object.assign({}, original, { name })));
+            },
+        },
+    });
+
+    const result = await harness.transactions.renameTheme('Bridge Old', 'Bridge New', {
+        extraNames: ['Bridge Old'],
+        extraNamesComplete: true,
+    });
+
+    assert.equal(hydrateCalls, 1);
+    assert.equal(harness.getInventoryCount(), 1);
+    assert.equal(harness.getHeaderCount(), 1);
+    assert.equal(result.transactionContext.originalInventory, null);
+    assert.deepEqual(result.transactionContext.existingNames, ['Bridge Old']);
+    assert.deepEqual(harness.store['Bridge New'], { name: 'Bridge New', main_text_color: '#bridge', custom_css: '' });
+    assert.equal(harness.store['Bridge Old'], undefined);
+});
+
+test('bridge rename falls back to two inventories when the supplied name list is not marked complete', async () => {
+    const original = { name: 'Fallback Old', main_text_color: '#bridge' };
+    const harness = makeTransactionHarness([original], {
+        bridge: { ensureThemeLoaded() { return Promise.resolve(clone(original)); } },
+    });
+
+    await harness.transactions.renameTheme('Fallback Old', 'Fallback New', {
+        extraNames: ['Fallback Old'],
+    });
+
+    assert.equal(harness.getInventoryCount(), 2);
+});
+
+test('bridge fast path still rejects sanitized filename conflicts before saving', async () => {
+    const original = { name: 'Bridge Source', main_text_color: '#bridge' };
+    const harness = makeTransactionHarness([
+        original,
+        { name: 'AB', main_text_color: '#existing' },
+    ], {
+        bridge: { ensureThemeLoaded() { return Promise.resolve(clone(original)); } },
+    });
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Bridge Source', 'A:B', {
+            extraNames: ['Bridge Source', 'AB'],
+            extraNamesComplete: true,
+        }),
+        (error) => error.code === 'filename-conflict',
+    );
+    assert.equal(harness.getInventoryCount(), 0);
+    assert.equal(harness.calls.length, 0);
 });
 
 test('save request failure preserves the old theme and does not leave a new file', async () => {
@@ -336,6 +423,17 @@ test('save request failure preserves the old theme and does not leave a new file
     await assert.rejects(harness.transactions.renameTheme('Old', 'New'), /injected save failure/);
     assert.deepEqual(harness.store.Old, old);
     assert.equal(harness.store.New, undefined);
+});
+
+test('standalone saveVerifiedTheme keeps its original read and post-save verification safety', async () => {
+    const harness = makeTransactionHarness([]);
+    const theme = { name: 'Standalone', main_text_color: '#safe' };
+
+    await harness.transactions.saveVerifiedTheme(theme);
+
+    assert.equal(harness.getInventoryCount(), 2);
+    assert.equal(harness.getHeaderCount(), 1);
+    assert.deepEqual(harness.store.Standalone, theme);
 });
 
 test('save verification failure preserves old theme and cleans the newly created file', async () => {
@@ -385,16 +483,81 @@ test('delete failure is reported only after a fresh read confirms the old theme 
     assert.deepEqual(harness.store['Keep Me'], old);
 });
 
-test('rename delete failure keeps the old theme intact after the new file was verified', async () => {
+test('rename delete failure restores the old theme and safely removes the new theme', async () => {
     const old = { name: 'Old Safe', main_text_color: '#old' };
     const harness = makeTransactionHarness([old], { deleteErrorName: 'Old Safe' });
 
     await assert.rejects(
         harness.transactions.renameTheme('Old Safe', 'New Verified'),
-        (error) => error.code === 'delete-failed',
+        (error) => error.code === 'delete-failed' && error.rollbackRestored === true,
     );
     assert.deepEqual(harness.store['Old Safe'], old);
-    assert.deepEqual(harness.store['New Verified'], { name: 'New Verified', main_text_color: '#old' });
+    assert.equal(harness.store['New Verified'], undefined);
+});
+
+test('final rename verification failure restores the old theme and removes the new theme', async () => {
+    const old = { name: 'Verify Old', main_text_color: '#old' };
+    const harness = makeTransactionHarness([old], {
+        transformSave(theme, count) {
+            if (count === 1) theme.main_text_color = '#corrupted';
+            return theme;
+        },
+    });
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Verify Old', 'Verify New'),
+        (error) => error.code === 'verify-failed' && error.rollbackRestored === true,
+    );
+    assert.deepEqual(harness.store['Verify Old'], old);
+    assert.equal(harness.store['Verify New'], undefined);
+});
+
+test('rename reports rollback-failed with a content-free current state summary', async () => {
+    const old = { name: 'Rollback Old', main_text_color: '#old' };
+    const harness = makeTransactionHarness([old], {
+        saveErrorAt: 2,
+        transformSave(theme, count) {
+            if (count === 1) theme.main_text_color = '#corrupted';
+            return theme;
+        },
+    });
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Rollback Old', 'Rollback New'),
+        (error) => {
+            assert.equal(error.code, 'rollback-failed');
+            assert.equal(error.details.currentState.inventoryAvailable, true);
+            assert.equal(error.details.currentState.oldPresent, false);
+            assert.equal(error.details.currentState.newPresent, true);
+            assert.equal(JSON.stringify(error.details.currentState).includes('#corrupted'), false);
+            return true;
+        },
+    );
+});
+
+test('rename never saves a lazy placeholder when hydration is unavailable', async () => {
+    const lazy = { name: 'Lazy Old', __baibaokuLazyTheme: true };
+    const harness = makeTransactionHarness([lazy]);
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Lazy Old', 'Lazy New'),
+        (error) => error.code === 'incomplete',
+    );
+    assert.equal(harness.calls.some((call) => call.type === 'save'), false);
+    assert.deepEqual(harness.store['Lazy Old'], lazy);
+});
+
+test('consecutive renames retain transactional guarantees and use two inventories each without bridge', async () => {
+    const harness = makeTransactionHarness([{ name: 'First', main_text_color: '#one', custom_css: '' }]);
+
+    await harness.transactions.renameTheme('First', 'Second');
+    await harness.transactions.renameTheme('Second', 'Third');
+
+    assert.equal(harness.getInventoryCount(), 4);
+    assert.equal(harness.getHeaderCount(), 2);
+    assert.equal(harness.store.First, undefined);
+    assert.equal(harness.store.Second, undefined);
+    assert.deepEqual(harness.store.Third, { name: 'Third', main_text_color: '#one', custom_css: '' });
 });
 
 test('rename rejects direct and sanitized filename conflicts without saving', async () => {

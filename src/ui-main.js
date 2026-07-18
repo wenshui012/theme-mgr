@@ -42,6 +42,7 @@
 
     // 缓存主题列表
     var stThemeList = [];
+    var stThemeListReliable = false;
     var verifiedThemeSelectSyncBound = false;
     var IMAGE_FIELD_KEYS = { imageData: true, thumbData: true, previewData: true, fabImage: true };
 
@@ -230,10 +231,11 @@
     function fetchThemeList(cb) {
         var found = false;
 
-        function done(list, method) {
+        function done(list, method, reliable) {
             if (found) return;
             found = true;
             stThemeList = list;
+            stThemeListReliable = reliable === true;
             console.log('[美化管理] 主题列表获取成功:', method, list.length + '个');
             if (cb) cb(list);
         }
@@ -248,7 +250,7 @@
                         var v = sel.options[i].value || sel.options[i].textContent;
                         if (v && v.trim()) names.push(v.trim());
                     }
-                    if (names.length > 0) { done(names, 'SELECT#themes'); return; }
+                    if (names.length > 0) { done(names, 'SELECT#themes', true); return; }
                 }
                 if (sel.tagName === 'INPUT') {
                     var listId = sel.getAttribute('list');
@@ -260,7 +262,7 @@
                                 var v2 = dl.options[j].value || dl.options[j].textContent;
                                 if (v2 && v2.trim()) names2.push(v2.trim());
                             }
-                            if (names2.length > 0) { done(names2, 'INPUT#themes+datalist'); return; }
+                            if (names2.length > 0) { done(names2, 'INPUT#themes+datalist', true); return; }
                         }
                     }
                 }
@@ -278,7 +280,7 @@
                         var val = dl.options[k].value || dl.options[k].textContent;
                         if (val && val.trim()) items.push(val.trim());
                     }
-                    if (items.length > 5) done(items, 'datalist#' + (dl.id || ''));
+                    if (items.length > 5) done(items, 'datalist#' + (dl.id || ''), false);
                 }
             });
             if (found) return;
@@ -291,10 +293,10 @@
             fetch(path)
                 .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
                 .then(function (data) {
-                    if (Array.isArray(data) && data.length > 0) done(data, 'fetch ' + path);
+                    if (Array.isArray(data) && data.length > 0) done(data, 'fetch ' + path, false);
                     else if (typeof data === 'object' && !Array.isArray(data)) {
                         var keys = Object.keys(data);
-                        if (keys.length > 0) done(keys, 'fetch ' + path);
+                        if (keys.length > 0) done(keys, 'fetch ' + path, false);
                     }
                 })
                 .catch(function () {})
@@ -302,6 +304,7 @@
                     apiDone++;
                     if (apiDone >= apiPaths.length && !found) {
                         stThemeList = [];
+                        stThemeListReliable = false;
                         if (cb) cb([]);
                     }
                 });
@@ -698,7 +701,10 @@
 
         var wasCurrent = getCurrentThemeName() === oldName;
 
-        themeTransactions.renameTheme(oldName, newName, { extraNames: stThemeList.slice() })
+        themeTransactions.renameTheme(oldName, newName, {
+            extraNames: stThemeList.slice(),
+            extraNamesComplete: stThemeListReliable,
+        })
             .then(function (result) {
                 themeRuntime.forget(oldName);
                 themeRuntime.remember(result.theme);
@@ -711,9 +717,11 @@
             .then(function (themes) {
                 if (themes) {
                     stThemeList = themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; });
+                    stThemeListReliable = true;
                 } else {
                     stThemeList = stThemeList.filter(function (name) { return name !== oldName && name !== newName; });
                     stThemeList.push(newName);
+                    stThemeListReliable = false;
                 }
                 removeThemeOption(oldName);
                 syncThemeOption(newName);
@@ -740,6 +748,7 @@
                 removeThemeMetaName(themeName);
                 removeThemeOption(themeName);
                 stThemeList = result.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; });
+                stThemeListReliable = true;
                 var nextTheme = stThemeList[0] || '';
                 if (wasCurrent && nextTheme) {
                     applyTheme(nextTheme, function () {
@@ -1774,8 +1783,9 @@
                 else if (reason === 'filename-conflict') toast('名称经酒馆文件名清理后与已有主题冲突', true);
                 else if (reason === 'invalid-filename') toast('该名称无法生成有效的主题文件名', true);
                 else if (reason === 'incomplete') toast('主题尚未完整加载，不能安全改名', true);
-                else if (reason === 'verify-failed') toast('新主题保存验证失败，旧主题已保留', true);
-                else if (reason === 'delete-failed') toast('新主题已保存，但旧主题删除失败；已保留两者', true);
+                else if (reason === 'verify-failed') toast('新主题最终验证失败，改名已回滚并保留旧主题', true);
+                else if (reason === 'delete-failed') toast('旧主题删除或最终验证失败，改名已回滚', true);
+                else if (reason === 'rollback-failed') toast('改名失败且自动回滚未完成，请立即检查主题文件', true);
                 else if (reason === 'inventory-failed') toast('无法刷新主题列表，未执行改名', true);
                 else toast('重命名失败，旧主题已保留', true);
             });
