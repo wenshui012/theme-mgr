@@ -19,12 +19,33 @@
             return runtime.getInventory({ bypassBaibaokuCache: true });
         }
 
+        function isTauriTavernMobileRuntime() {
+            return Boolean(global.__TAURITAVERN_MOBILE_RUNTIME_COMPAT__);
+        }
+
+        function valuesMatchForVerifiedTheme(key, expected, actual) {
+            if (JSON.stringify(actual) === JSON.stringify(expected)) return true;
+            return key === 'chat_width' && isTauriTavernMobileRuntime() && actual === 100;
+        }
+
+        function sameVerifiedConfig(expected, actual) {
+            if (!schema.isUsableTheme(actual, expected && expected.name)) return false;
+            var keys = Object.keys(expected).filter(function (key) {
+                return key !== 'name' && key !== schema.LAZY_THEME_MARKER && expected[key] !== undefined;
+            });
+            if (keys.length === 0) return false;
+            return keys.every(function (key) {
+                return Object.prototype.hasOwnProperty.call(actual, key) &&
+                    valuesMatchForVerifiedTheme(key, expected[key], actual[key]);
+            });
+        }
+
         function verifySavedTheme(expectedTheme, reason) {
             return freshInventory(reason || 'theme-manager-verify-save').then(function (themes) {
                 var candidate = runtime.findTheme(themes, expectedTheme.name);
                 if (!candidate) throw error('verify-failed', '保存后未找到主题：' + expectedTheme.name);
                 return runtime.resolveUsableTheme(expectedTheme.name, candidate).then(function (usable) {
-                    if (!schema.sameConfig(expectedTheme, usable)) {
+                    if (!sameVerifiedConfig(expectedTheme, usable)) {
                         throw error('verify-failed', '主题内容验证失败：' + expectedTheme.name);
                     }
                     runtime.remember(usable);
@@ -157,7 +178,7 @@
                 var candidate = runtime.findTheme(themes, expected.name);
                 if (!schema.isUsableTheme(candidate, expected.name) ||
                     schema.isLazyThemePlaceholder(candidate, expected.name) ||
-                    !schema.sameConfig(expected, candidate)) {
+                    !sameVerifiedConfig(expected, candidate)) {
                     failures.push(expected.name);
                     return;
                 }
@@ -390,9 +411,9 @@
             return {
                 inventoryAvailable: true,
                 oldPresent: Boolean(oldTheme),
-                oldMatchesExpected: Boolean(oldTheme && schema.sameConfig(context.sourceTheme, oldTheme)),
+                oldMatchesExpected: Boolean(oldTheme && sameVerifiedConfig(context.sourceTheme, oldTheme)),
                 newPresent: Boolean(newTheme),
-                newMatchesExpected: Boolean(newTheme && schema.sameConfig(context.expectedRenamedTheme, newTheme)),
+                newMatchesExpected: Boolean(newTheme && sameVerifiedConfig(context.expectedRenamedTheme, newTheme)),
             };
         }
 
@@ -402,7 +423,7 @@
             if (!candidate || !schema.isUsableTheme(candidate, context.newName)) {
                 throw error('verify-failed', '最终验证未找到可用的新主题：' + context.newName, { state: state });
             }
-            if (!schema.sameConfig(context.expectedRenamedTheme, candidate)) {
+            if (!sameVerifiedConfig(context.expectedRenamedTheme, candidate)) {
                 throw error('verify-failed', '最终验证发现新主题内容不一致：' + context.newName, { state: state });
             }
             if (runtime.findTheme(themes, context.oldName)) {

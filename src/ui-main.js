@@ -22,7 +22,7 @@
     var IMG_QUALITY = 0.8;
     var FAB_ID = 'tm-fab-main';
 
-    var TM_VERSION = options.version || '3.5.6';
+    var TM_VERSION = options.version || '3.5.7';
     var storageApi = null;
     var imageToolsApi = null;
     var styleApi = null;
@@ -1524,6 +1524,58 @@
     }
 
     // ── 分类栏 ───────────────────────────────────────────────
+    function bindCatbarMouseScroll(catbar) {
+        if (!catbar || catbar._tmMouseScrollBound) return;
+        var drag = { down: false, moved: false, startX: 0, scrollLeft: 0 };
+
+        function stopDrag() {
+            if (!drag.down) return;
+            drag.down = false;
+            catbar.classList.remove('dragging');
+            catbar.style.userSelect = '';
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            setTimeout(function () { drag.moved = false; }, 0);
+        }
+        function onMouseMove(e) {
+            if (!drag.down) return;
+            var dx = e.pageX - drag.startX;
+            if (Math.abs(dx) > 3) drag.moved = true;
+            if (drag.moved) e.preventDefault();
+            catbar.scrollLeft = drag.scrollLeft - dx;
+        }
+        function onMouseUp() {
+            stopDrag();
+        }
+
+        catbar.addEventListener('wheel', function (e) {
+            var delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+            if (Math.abs(delta) <= 0) return;
+            e.preventDefault();
+            catbar.scrollLeft += delta;
+        }, { passive: false });
+
+        catbar.addEventListener('mousedown', function (e) {
+            if (e.button !== 0) return;
+            drag.down = true;
+            drag.moved = false;
+            drag.startX = e.pageX;
+            drag.scrollLeft = catbar.scrollLeft;
+            catbar.classList.add('dragging');
+            catbar.style.userSelect = 'none';
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+
+        catbar.addEventListener('click', function (e) {
+            if (!drag.moved) return;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
+
+        catbar._tmMouseScrollBound = true;
+    }
+
     function renderCatbar() {
         var catbar = document.getElementById('tm-catbar'); if (!catbar) return;
         var d = load();
@@ -1538,6 +1590,7 @@
         catbar.querySelectorAll('.tm-catbtn').forEach(function (btn) {
             btn.addEventListener('click', function () { curCat = btn.dataset.c; renderCatbar(); renderGrid(); });
         });
+        bindCatbarMouseScroll(catbar);
     }
 
     // ── 网格 ─────────────────────────────────────────────────
@@ -2333,6 +2386,53 @@
                 last.classList.add('drag-over-bottom');
             }
         }
+        function startPointerCategoryDrag(item, idx, clientY) {
+            var rect = item.getBoundingClientRect();
+            dragFrom = idx;
+            dragTo = idx;
+            touchOffsetY = clientY - rect.top;
+            dragGhost = item.cloneNode(true);
+            dragGhost.classList.remove('dragging', 'drag-over-top', 'drag-over-bottom');
+            dragGhost.style.position = 'fixed';
+            dragGhost.style.left = rect.left + 'px';
+            dragGhost.style.top = rect.top + 'px';
+            dragGhost.style.width = rect.width + 'px';
+            dragGhost.style.margin = '0';
+            dragGhost.style.pointerEvents = 'none';
+            dragGhost.style.opacity = '.8';
+            dragGhost.style.zIndex = '99';
+            sheet.appendChild(dragGhost);
+            item.classList.add('dragging');
+            updateTouchInsert(clientY);
+        }
+        function movePointerCategoryDrag(clientY) {
+            if (dragFrom === null) return;
+            if (dragGhost) dragGhost.style.top = (clientY - touchOffsetY) + 'px';
+            updateTouchInsert(clientY);
+        }
+        function finishPointerCategoryDrag() {
+            if (dragFrom === null) return;
+            var from = dragFrom; var to = dragTo;
+            clearDragState();
+            dragFrom = null; dragTo = null;
+            moveCategory(from, to);
+        }
+        function cancelPointerCategoryDrag() {
+            clearDragState();
+            dragFrom = null; dragTo = null;
+        }
+        function onMouseMoveCategory(e) {
+            if (dragFrom === null) return;
+            e.preventDefault();
+            movePointerCategoryDrag(e.clientY);
+        }
+        function onMouseUpCategory(e) {
+            document.removeEventListener('mousemove', onMouseMoveCategory);
+            document.removeEventListener('mouseup', onMouseUpCategory);
+            if (dragFrom === null) return;
+            e.preventDefault();
+            finishPointerCategoryDrag();
+        }
 
         sheet.querySelector('#tm-newadd').addEventListener('click', function () {
             var name = inp.value.trim(); if (!name) return;
@@ -2355,46 +2455,37 @@
                 clearDragState();
                 dragFrom = null; dragTo = null;
             });
+            handle.addEventListener('mousedown', function (e) {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                document.removeEventListener('mousemove', onMouseMoveCategory);
+                document.removeEventListener('mouseup', onMouseUpCategory);
+                var item = handle.closest('.tm-cat-item');
+                startPointerCategoryDrag(item, parseInt(handle.dataset.idx, 10), e.clientY);
+                document.addEventListener('mousemove', onMouseMoveCategory);
+                document.addEventListener('mouseup', onMouseUpCategory);
+            });
             handle.addEventListener('touchstart', function (e) {
                 if (!e.touches || !e.touches.length) return;
                 e.preventDefault();
-                dragFrom = parseInt(handle.dataset.idx, 10);
-                dragTo = dragFrom;
                 var touch = e.touches[0];
                 var item = handle.closest('.tm-cat-item');
-                var rect = item.getBoundingClientRect();
-                touchOffsetY = touch.clientY - rect.top;
-                dragGhost = item.cloneNode(true);
-                dragGhost.style.position = 'fixed';
-                dragGhost.style.left = rect.left + 'px';
-                dragGhost.style.top = rect.top + 'px';
-                dragGhost.style.width = rect.width + 'px';
-                dragGhost.style.margin = '0';
-                dragGhost.style.pointerEvents = 'none';
-                dragGhost.style.opacity = '.8';
-                dragGhost.style.zIndex = '99';
-                sheet.appendChild(dragGhost);
-                item.classList.add('dragging');
-                updateTouchInsert(touch.clientY);
+                startPointerCategoryDrag(item, parseInt(handle.dataset.idx, 10), touch.clientY);
             }, { passive: false });
             handle.addEventListener('touchmove', function (e) {
                 if (!e.touches || !e.touches.length || dragFrom === null) return;
                 e.preventDefault();
                 var touch = e.touches[0];
-                if (dragGhost) dragGhost.style.top = (touch.clientY - touchOffsetY) + 'px';
-                updateTouchInsert(touch.clientY);
+                movePointerCategoryDrag(touch.clientY);
             }, { passive: false });
             handle.addEventListener('touchend', function (e) {
                 if (dragFrom === null) return;
                 e.preventDefault();
-                var from = dragFrom; var to = dragTo;
-                clearDragState();
-                dragFrom = null; dragTo = null;
-                moveCategory(from, to);
+                finishPointerCategoryDrag();
             }, { passive: false });
             handle.addEventListener('touchcancel', function () {
-                clearDragState();
-                dragFrom = null; dragTo = null;
+                cancelPointerCategoryDrag();
             });
         });
         sheet.querySelectorAll('.tm-cat-item').forEach(function (item) {

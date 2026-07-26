@@ -387,6 +387,54 @@ test('batch save failure restores every attempted destination before reporting f
     assert.equal(harness.getInventoryCount(), 2);
 });
 
+test('TauriTavern mobile batch verification accepts chat_width normalized to 100', async () => {
+    const batch = [
+        completeTheme('Mobile Import', { chat_width: 72, custom_css: '/* mobile */' }),
+    ];
+    const harness = makeTransactionHarness([], {
+        transformInventory(inventory, inventoryCount) {
+            if (inventoryCount !== 2) return inventory;
+            return inventory.map((theme) => theme.name === 'Mobile Import'
+                ? Object.assign({}, theme, { chat_width: 100 })
+                : theme);
+        },
+    });
+
+    global.__TAURITAVERN_MOBILE_RUNTIME_COMPAT__ = {};
+    try {
+        const result = await harness.transactions.saveVerifiedThemes(batch);
+
+        assert.equal(result.results.length, 1);
+        assert.equal(result.results[0].ok, true);
+        assert.equal(result.results[0].theme.chat_width, 100);
+        assert.equal(harness.getInventoryCount(), 2);
+    } finally {
+        delete global.__TAURITAVERN_MOBILE_RUNTIME_COMPAT__;
+    }
+});
+
+test('desktop batch verification still rejects unexpected chat_width changes', async () => {
+    const batch = [
+        completeTheme('Desktop Import', { chat_width: 72, custom_css: '/* desktop */' }),
+    ];
+    const harness = makeTransactionHarness([], {
+        transformInventory(inventory, inventoryCount) {
+            if (inventoryCount !== 2) return inventory;
+            return inventory.map((theme) => theme.name === 'Desktop Import'
+                ? Object.assign({}, theme, { chat_width: 100 })
+                : theme);
+        },
+    });
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedThemes(batch),
+        (error) => error.code === 'batch-verify-failed' && error.rollbackRestored === true,
+    );
+
+    assert.equal(harness.store['Desktop Import'], undefined);
+    assert.equal(harness.getInventoryCount(), 3);
+});
+
 test('batch final verification failure restores the complete original batch state', async () => {
     const previous = completeTheme('Existing', { custom_css: '/* old */' });
     const batch = [
