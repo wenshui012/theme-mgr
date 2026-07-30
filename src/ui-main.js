@@ -31,6 +31,7 @@
     var themeRuntime = null;
     var themeTransactions = null;
     var themeTransfer = null;
+    var appearanceApi = null;
     var backgroundsApi = null;
     var uiSheetsApi = null;
     var uiEventsApi = null;
@@ -44,6 +45,11 @@
     var stThemeList = [];
     var stThemeListReliable = false;
     var verifiedThemeSelectSyncBound = false;
+    var managerAppearanceObserver = null;
+    var managerAppearanceTimer = null;
+    var managerAppearanceSettleTimer = null;
+    var frameAssetAnalysisCache = Object.create(null);
+    var frameAssetAnalysisOrder = [];
     var IMAGE_FIELD_KEYS = { imageData: true, thumbData: true, previewData: true, fabImage: true };
 
     function initUiEvents() {
@@ -72,6 +78,7 @@
             var ok = true;
             if (!ok || !modules.themeSchema || !modules.createThemeApi || !modules.createThemeRuntime ||
                 !modules.createThemeTransactions || !modules.createThemeTransfer ||
+                !modules.themeAppearance ||
                 !modules.createBackgrounds ||
                 !modules.createUiSheets ||
                 !modules.createUiEvents ||
@@ -87,6 +94,7 @@
                     if (!modules.createThemeRuntime) missing.push('theme-runtime.js');
                     if (!modules.createThemeTransactions) missing.push('theme-transactions.js');
                     if (!modules.createThemeTransfer) missing.push('theme-transfer.js');
+                    if (!modules.themeAppearance) missing.push('theme-appearance.js');
                     if (!modules.createBackgrounds) missing.push('backgrounds.js');
                     if (!modules.createUiSheets) missing.push('ui-sheets.js');
                     if (!modules.createUiEvents) missing.push('ui-events.js');
@@ -109,6 +117,7 @@
                 runtime: themeRuntime,
                 transactions: themeTransactions,
             });
+            appearanceApi = modules.themeAppearance;
             uiSheetsApi = modules.createUiSheets({
                 getPopupLayer: getPopupLayer,
                 load: load,
@@ -187,6 +196,11 @@
         if (typeof d.themeMeta !== 'object' || !d.themeMeta) d.themeMeta = {};
         if (!Array.isArray(d.categories)) d.categories = [];
         if (typeof d.sortMode !== 'string') d.sortMode = 'name';
+        if (typeof d.followThemeAppearance !== 'boolean') d.followThemeAppearance = false;
+        if (typeof d.showThemeAvatarFrame !== 'boolean') d.showThemeAvatarFrame = false;
+        if (typeof d.followThemePreviewShape !== 'boolean') d.followThemePreviewShape = false;
+        if (typeof d.simplifyGridText !== 'boolean') d.simplifyGridText = false;
+        if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
         if (typeof d.fabImage !== 'string') d.fabImage = '';
         if (typeof d.fabSize !== 'number') d.fabSize = 38;
         if (typeof d.bgPickerSize !== 'number') d.bgPickerSize = 132;
@@ -213,7 +227,12 @@
             fabPos: null,
             bgPickerSize: 132,
             gridCardSize: 108,
-            sortMode: 'name'
+            sortMode: 'name',
+            followThemeAppearance: false,
+            showThemeAvatarFrame: false,
+            followThemePreviewShape: false,
+            simplifyGridText: false,
+            autoHideHeader: false
         };
     }
 
@@ -378,7 +397,10 @@
     }
 
     function finishApplyTheme(themeName, cb, ok, requestId) {
-        return backgroundsApi.finishApplyTheme(themeName, cb, ok, requestId);
+        return backgroundsApi.finishApplyTheme(themeName, function (backgroundOk, reason) {
+            scheduleManagerAppearanceSync();
+            if (cb) cb(backgroundOk, reason);
+        }, ok, requestId);
     }
 
     function setThemeControlValue(themeName) {
@@ -550,6 +572,7 @@
             applyUsableNativeThemeFallback(verifiedTheme, function (ok) {
                 if (ok) {
                     applyBoundBackground(name, function () {
+                        scheduleManagerAppearanceSync();
                         renderGrid(); renderBottomStatus();
                     });
                 }
@@ -762,6 +785,44 @@
             .catch(function (err) {
                 console.warn('[美化管理] 删除美化失败:', err);
                 if (cb) cb(false, err.message);
+            });
+    }
+
+    function deleteThemesEverywhere(themeNames, cb) {
+        themeTransactions.deleteThemesVerified(themeNames, {
+            readReason: 'theme-manager-delete-batch-read',
+            deleteReason: 'theme-manager-delete-batch',
+            verifyReason: 'theme-manager-delete-batch-verify',
+        })
+            .then(function (result) {
+                var removed = result.results.filter(function (item) { return item.ok; });
+                var failed = result.results.filter(function (item) { return !item.ok; });
+                var dd = load();
+                var metaChanged = false;
+
+                removed.forEach(function (item) {
+                    themeRuntime.evictNativeTheme(item.name, item.nativeThemeRef);
+                    removeThemeOption(item.name);
+                    if (dd.themeMeta[item.name]) {
+                        delete dd.themeMeta[item.name];
+                        metaChanged = true;
+                    }
+                });
+                if (metaChanged) save(dd);
+
+                stThemeList = result.themes
+                    .filter(function (theme) { return theme && theme.name; })
+                    .map(function (theme) { return theme.name; });
+                stThemeListReliable = true;
+                renderCatbar();
+                renderGrid();
+                renderBottomStatus();
+                updateBtn();
+                if (cb) cb(true, { removed: removed, failed: failed, result: result });
+            })
+            .catch(function (err) {
+                console.warn('[美化管理] 批量删除美化失败:', err);
+                if (cb) cb(false, { error: err, removed: [], failed: [] });
             });
     }
 
@@ -1160,6 +1221,7 @@
             }
         )
             .then(function (result) {
+                scheduleManagerAppearanceSync();
                 finishApplyTheme(themeName, cb, true, result.requestId);
             })
             .catch(function (err) {
@@ -1345,6 +1407,7 @@
     var curCat = '__all__';
     var batchMode = false;
     var batchSelected = [];
+    var batchDeleting = false;
     var searchQuery = '';
     var searchOpen = false;
     var sortOpen = false;
@@ -1392,11 +1455,1185 @@
         }, 120);
     }
 
+    var MANAGER_APPEARANCE_VARS = [
+        '--tm-bg',
+        '--tm-bg2',
+        '--tm-text',
+        '--tm-border',
+        '--tm-card-bg',
+        '--tm-card-border',
+        '--tm-head-bg',
+        '--tm-control-bg',
+        '--tm-control-hover',
+        '--tm-control-border',
+        '--tm-shadow',
+        '--tm-accent-text',
+        '--tm-card-radius',
+        '--tm-panel-radius',
+        '--tm-control-radius',
+        '--tm-card-border-style',
+        '--tm-control-border-style',
+        '--tm-card-shadow',
+        '--tm-card-hover-shadow',
+        '--tm-panel-shadow',
+        '--tm-control-shadow',
+        '--tm-card-blur',
+        '--tm-panel-blur',
+        '--tm-theme-font',
+        '--tm-theme-bg-image',
+        '--tm-theme-bg-size',
+        '--tm-theme-bg-position',
+        '--tm-theme-bg-repeat',
+        '--tm-theme-bg-opacity',
+        '--tm-theme-manager-image',
+        '--tm-theme-manager-size',
+        '--tm-theme-manager-position',
+        '--tm-theme-manager-repeat',
+        '--tm-theme-manager-opacity',
+        '--tm-theme-surface-image',
+        '--tm-theme-surface-size',
+        '--tm-theme-surface-position',
+        '--tm-theme-surface-repeat',
+        '--tm-theme-surface-opacity',
+        '--tm-theme-card-motif-opacity',
+        '--tm-theme-topbar-image',
+        '--tm-theme-topbar-size',
+        '--tm-theme-topbar-position',
+        '--tm-theme-topbar-repeat',
+        '--tm-theme-topbar-overlay-height',
+        '--tm-theme-topbar-overlay-top',
+        '--tm-theme-top-icon-image',
+        '--tm-theme-top-icon-transform',
+        '--tm-theme-top-icon-size',
+        '--tm-theme-bottombar-image',
+        '--tm-theme-bottombar-size',
+        '--tm-theme-bottombar-position',
+        '--tm-theme-bottombar-repeat',
+        '--tm-theme-bottom-refresh-image',
+        '--tm-theme-bottom-refresh-transform',
+        '--tm-theme-bottom-refresh-size',
+        '--tm-theme-bottom-refresh-bg-size',
+        '--tm-theme-bottom-refresh-bg-position',
+        '--tm-theme-bottom-refresh-bg-repeat',
+        '--tm-theme-bottom-refresh-filter',
+        '--tm-theme-bottom-refresh-opacity',
+        '--tm-theme-bottom-batch-image',
+        '--tm-theme-bottom-batch-transform',
+        '--tm-theme-bottom-batch-size',
+        '--tm-theme-bottom-batch-bg-size',
+        '--tm-theme-bottom-batch-bg-position',
+        '--tm-theme-bottom-batch-bg-repeat',
+        '--tm-theme-bottom-batch-filter',
+        '--tm-theme-bottom-batch-opacity',
+        '--tm-theme-bottom-settings-image',
+        '--tm-theme-bottom-settings-transform',
+        '--tm-theme-bottom-settings-size',
+        '--tm-theme-bottom-settings-bg-size',
+        '--tm-theme-bottom-settings-bg-position',
+        '--tm-theme-bottom-settings-bg-repeat',
+        '--tm-theme-bottom-settings-filter',
+        '--tm-theme-bottom-settings-opacity',
+        '--tm-theme-card-frame-image',
+        '--tm-theme-card-frame-size',
+        '--tm-theme-card-frame-position',
+        '--tm-theme-card-frame-repeat',
+        '--tm-theme-card-frame-blend',
+        '--tm-theme-card-frame-filter',
+        '--tm-theme-card-frame-opacity',
+        '--tm-preview-aspect',
+        '--tm-preview-radius',
+        '--tm-preview-border-style',
+        '--tm-preview-shadow',
+        '--tm-preview-clip-path',
+        '--tm-preview-mask-image',
+        '--tm-preview-mask-size',
+        '--tm-preview-mask-position',
+        '--tm-preview-mask-repeat',
+        '--tm-preview-slot-left',
+        '--tm-preview-slot-top',
+        '--tm-preview-slot-width',
+        '--tm-preview-slot-height',
+        '--tm-preview-slot-radius',
+        '--tm-preview-slot-clip-path',
+        '--tm-preview-slot-mask-image',
+        '--tm-preview-slot-mask-size',
+        '--tm-preview-slot-mask-position',
+        '--tm-preview-slot-mask-repeat',
+        '--tm-preview-slot-object-fit',
+        '--tm-preview-slot-object-position',
+        '--tm-preview-slot-transform',
+        '--SmartThemeQuoteColor',
+    ];
+
+    function clearManagerAppearanceVars(ov) {
+        MANAGER_APPEARANCE_VARS.forEach(function (name) { ov.style.removeProperty(name); });
+        ov.classList.remove(
+            'tm-has-manager-background',
+            'tm-has-topbar-decoration',
+            'tm-topbar-overhang',
+            'tm-has-top-icon',
+            'tm-has-bottombar-decoration',
+            'tm-has-bottom-refresh-icon',
+            'tm-has-bottom-batch-icon',
+            'tm-has-bottom-settings-icon',
+            'tm-has-card-frame',
+            'tm-follow-grid',
+            'tm-follow-card-frame',
+            'tm-card-frame-blended',
+            'tm-follow-preview-shape'
+        );
+    }
+
+    function resolveBrowserColor(probe, value, fallback) {
+        var candidate = String(value || '').trim();
+        if (!candidate) candidate = String(fallback || '').trim();
+        if (!candidate) return '';
+        probe.style.removeProperty('color');
+        probe.style.setProperty('color', candidate, 'important');
+        if (!probe.style.color) return String(fallback || '');
+        return getComputedStyle(probe).color || String(fallback || '');
+    }
+
+    function readCurrentThemeAppearance() {
+        var rootStyle = getComputedStyle(document.documentElement);
+        var bodyStyle = getComputedStyle(document.body);
+        var probe = document.createElement('span');
+        probe.setAttribute('style', 'position:fixed!important;left:-10000px!important;top:-10000px!important;visibility:hidden!important;pointer-events:none!important;');
+        document.body.appendChild(probe);
+        function read(variable, fallback) {
+            return resolveBrowserColor(probe, rootStyle.getPropertyValue(variable), fallback);
+        }
+        var colors = {
+            text: read('--SmartThemeBodyColor', bodyStyle.color),
+            accent: read('--SmartThemeQuoteColor', '#7c6daf'),
+            background: read('--SmartThemeBlurTintColor', bodyStyle.backgroundColor),
+            chat: read('--SmartThemeChatTintColor', bodyStyle.backgroundColor),
+            border: read('--SmartThemeBorderColor', ''),
+            shadow: read('--SmartThemeShadowColor', 'rgba(0,0,0,.28)'),
+        };
+        probe.parentNode.removeChild(probe);
+        return colors;
+    }
+
+    function applyCurrentBackgroundAppearance(ov, palette) {
+        var bg = document.getElementById('bg1');
+        var bgStyle = bg ? getComputedStyle(bg) : getComputedStyle(document.body);
+        var image = String(bgStyle.backgroundImage || '').trim();
+        var transparentImage = !image || image === 'none' || /__transparent(?:\.png)?/i.test(image);
+        ov.style.setProperty('--tm-theme-bg-image', transparentImage ? 'none' : image);
+        ov.style.setProperty('--tm-theme-bg-size', bgStyle.backgroundSize || 'cover');
+        ov.style.setProperty('--tm-theme-bg-position', bgStyle.backgroundPosition || 'center');
+        ov.style.setProperty('--tm-theme-bg-repeat', bgStyle.backgroundRepeat || 'no-repeat');
+        ov.style.setProperty('--tm-theme-bg-opacity', transparentImage ? '0' : (palette.mode === 'dark' ? '.3' : '.24'));
+    }
+
+    function getSafeComputedValue(value, fallback, maxLength) {
+        var text = String(value || '').trim();
+        if (!text || text.length > (maxLength || 500)) return fallback;
+        return text;
+    }
+
+    function getSafeImageValue(value, fallback) {
+        var text = getSafeComputedValue(value, '', 32000);
+        if (!text || text === 'none') return fallback || 'none';
+        if (!/(?:url|image-set|(?:repeating-)?(?:linear|radial|conic)-gradient)\(/i.test(text)) {
+            return fallback || 'none';
+        }
+        return text;
+    }
+
+    function getClampedPixelSize(value, fallback, minimum, maximum) {
+        var parsed = parseFloat(String(value || ''));
+        if (!Number.isFinite(parsed)) return fallback;
+        return Math.max(minimum || 12, Math.min(maximum || 30, parsed)) + 'px';
+    }
+
+    function getComputedAspectRatio(element, pseudo, fallback) {
+        var fallbackValue = arguments.length >= 3 ? fallback : '4 / 3';
+        if (!element) return fallbackValue;
+        var style = getComputedStyle(element, pseudo || null);
+        var aspectText = String(style.aspectRatio || '');
+        var aspectMatch = aspectText.match(/(\d*\.?\d+)\s*\/\s*(\d*\.?\d+)/);
+        var ratio = aspectMatch
+            ? Number(aspectMatch[1]) / Number(aspectMatch[2])
+            : NaN;
+        if (!Number.isFinite(ratio) || ratio <= 0) {
+            var width = parseFloat(style.width);
+            var height = parseFloat(style.height);
+            if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+                ratio = width / height;
+            }
+        }
+        if ((!Number.isFinite(ratio) || ratio <= 0) && !pseudo) {
+            var rect = element.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) ratio = rect.width / rect.height;
+        }
+        if (!Number.isFinite(ratio) || ratio <= 0) return fallbackValue;
+        ratio = Math.max(0.5, Math.min(2.4, ratio));
+        return Number(ratio.toFixed(4)) + ' / 1';
+    }
+
+    function getSafeClipPath(value) {
+        var text = getSafeComputedValue(value, 'none', 2000);
+        if (text === 'none') return text;
+        return /^(?:circle|ellipse|inset|polygon|path)\(/i.test(text) ? text : 'none';
+    }
+
+    function readBackgroundDecoration(element, pseudo) {
+        if (!element) return null;
+        var style = getComputedStyle(element, pseudo || null);
+        var image = getSafeImageValue(style.backgroundImage, 'none');
+        if (image === 'none' || style.display === 'none' || style.visibility === 'hidden') return null;
+        var width = parseFloat(style.width);
+        var height = parseFloat(style.height);
+        var top = parseFloat(style.top);
+        return {
+            image: image,
+            size: getSafeComputedValue(style.backgroundSize, 'cover', 1000),
+            position: getSafeComputedValue(style.backgroundPosition, 'center', 1000),
+            repeat: getSafeComputedValue(style.backgroundRepeat, 'no-repeat', 500),
+            width: Number.isFinite(width) && width > 0 ? width : 0,
+            height: Number.isFinite(height) && height > 0 ? height : 0,
+            top: Number.isFinite(top) ? top : 0,
+            pseudo: String(pseudo || ''),
+        };
+    }
+
+    function readFirstBackgroundDecoration(candidates) {
+        for (var i = 0; i < candidates.length; i++) {
+            var candidate = candidates[i];
+            var decoration = readBackgroundDecoration(candidate.element, candidate.pseudo);
+            if (decoration) return decoration;
+        }
+        return null;
+    }
+
+    function getFirstVisibleElement(selector) {
+        var elements = Array.from(document.querySelectorAll(selector));
+        return elements.find(function (element) {
+            var style = getComputedStyle(element);
+            return style.display !== 'none' && style.visibility !== 'hidden';
+        }) || elements[0] || null;
+    }
+
+    function readImageDecoration(element, pseudo, maximumSize, allowHidden) {
+        if (!element) return null;
+        var style = getComputedStyle(element, pseudo || null);
+        if (!allowHidden && (style.display === 'none' || style.visibility === 'hidden')) return null;
+        var image = getSafeImageValue(style.content, 'none');
+        if (image === 'none') image = getSafeImageValue(style.backgroundImage, 'none');
+        if (image === 'none' && !pseudo && element.tagName === 'IMG' && element.currentSrc) {
+            image = 'url("' + String(element.currentSrc).replace(/["\\]/g, '\\$&') + '")';
+        }
+        if (image === 'none') return null;
+        return {
+            image: image,
+            transform: getSafeComputedValue(style.transform, 'none', 500),
+            size: getClampedPixelSize(style.width, '24px', 14, maximumSize || 30),
+            aspectRatio: getComputedAspectRatio(element, pseudo, ''),
+            backgroundSize: getSafeComputedValue(style.backgroundSize, 'contain', 1000),
+            backgroundPosition: getSafeComputedValue(style.backgroundPosition, 'center', 1000),
+            backgroundRepeat: getSafeComputedValue(style.backgroundRepeat, 'no-repeat', 500),
+            mixBlendMode: getSafeComputedValue(style.mixBlendMode, 'normal', 100),
+            filter: getSafeComputedValue(style.filter, 'none', 1000),
+            opacity: String(clampPercent(parseFloat(style.opacity), 0, 1, 1)),
+        };
+    }
+
+    function readFirstTargetedImageDecoration(selectors, maximumSize) {
+        for (var i = 0; i < selectors.length; i++) {
+            var decoration = readImageDecoration(
+                document.querySelector(selectors[i]),
+                '',
+                maximumSize,
+                true
+            );
+            if (decoration) return decoration;
+        }
+        return null;
+    }
+
+    function extractSingleCssImageUrl(image) {
+        var text = String(image || '').trim();
+        var match = text.match(/^url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)$/i);
+        return match ? String(match[1] || match[2] || match[3] || '').trim() : '';
+    }
+
+    function finishFrameAssetAnalysis(key, state, result) {
+        state.status = result && result.trimmed ? 'ready' : 'plain';
+        state.result = result || null;
+        var attempts = frameAssetAnalysisOrder.length;
+        while (frameAssetAnalysisOrder.length > 12 && attempts-- > 0) {
+            var oldestKey = frameAssetAnalysisOrder.shift();
+            var oldest = frameAssetAnalysisCache[oldestKey];
+            if (oldest && oldest.status === 'loading') {
+                frameAssetAnalysisOrder.push(oldestKey);
+                continue;
+            }
+            if (oldest && oldest.result && oldest.result.objectUrl) {
+                try { URL.revokeObjectURL(oldest.result.objectUrl); } catch (_) {}
+            }
+            delete frameAssetAnalysisCache[oldestKey];
+        }
+        scheduleManagerAppearanceSync();
+    }
+
+    function analyzeFrameAsset(image) {
+        var url = extractSingleCssImageUrl(image);
+        if (!url || (!/\.png(?:[?#].*)?$/i.test(url) && !/^data:image\/png/i.test(url))) return null;
+        if (frameAssetAnalysisCache[url]) return frameAssetAnalysisCache[url];
+
+        var state = { status: 'loading', result: null };
+        frameAssetAnalysisCache[url] = state;
+        frameAssetAnalysisOrder.push(url);
+
+        fetch(url)
+            .then(function (response) {
+                if (!response.ok) throw new Error('frame image request failed');
+                return response.blob();
+            })
+            .then(function (blob) {
+                if (blob.type && blob.type !== 'image/png') return null;
+                if (typeof createImageBitmap !== 'function') return null;
+                return createImageBitmap(blob);
+            })
+            .then(function (bitmap) {
+                if (!bitmap) return null;
+                var maximumSample = 512;
+                var sampleScale = Math.min(1, maximumSample / Math.max(bitmap.width, bitmap.height));
+                var sampleWidth = Math.max(1, Math.round(bitmap.width * sampleScale));
+                var sampleHeight = Math.max(1, Math.round(bitmap.height * sampleScale));
+                var sample = document.createElement('canvas');
+                sample.width = sampleWidth;
+                sample.height = sampleHeight;
+                var sampleContext = sample.getContext('2d', { willReadFrequently: true });
+                sampleContext.drawImage(bitmap, 0, 0, sampleWidth, sampleHeight);
+                var pixels = sampleContext.getImageData(0, 0, sampleWidth, sampleHeight).data;
+                var minX = sampleWidth;
+                var minY = sampleHeight;
+                var maxX = -1;
+                var maxY = -1;
+                for (var y = 0; y < sampleHeight; y++) {
+                    for (var x = 0; x < sampleWidth; x++) {
+                        if (pixels[(y * sampleWidth + x) * 4 + 3] <= 4) continue;
+                        if (x < minX) minX = x;
+                        if (y < minY) minY = y;
+                        if (x > maxX) maxX = x;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+                if (maxX < minX || maxY < minY) {
+                    if (bitmap.close) bitmap.close();
+                    return null;
+                }
+
+                var sourceLeft = Math.floor(minX / sampleWidth * bitmap.width);
+                var sourceTop = Math.floor(minY / sampleHeight * bitmap.height);
+                var sourceRight = Math.ceil((maxX + 1) / sampleWidth * bitmap.width);
+                var sourceBottom = Math.ceil((maxY + 1) / sampleHeight * bitmap.height);
+                var padding = Math.max(2, Math.round(Math.max(bitmap.width, bitmap.height) * 0.01));
+                sourceLeft = Math.max(0, sourceLeft - padding);
+                sourceTop = Math.max(0, sourceTop - padding);
+                sourceRight = Math.min(bitmap.width, sourceRight + padding);
+                sourceBottom = Math.min(bitmap.height, sourceBottom + padding);
+                var cropWidth = sourceRight - sourceLeft;
+                var cropHeight = sourceBottom - sourceTop;
+                var originalWidth = bitmap.width;
+                var originalHeight = bitmap.height;
+                var needsTrim = cropWidth < bitmap.width * 0.92 || cropHeight < bitmap.height * 0.92;
+                if (!needsTrim) {
+                    if (bitmap.close) bitmap.close();
+                    return null;
+                }
+
+                var crop = document.createElement('canvas');
+                crop.width = cropWidth;
+                crop.height = cropHeight;
+                crop.getContext('2d').drawImage(
+                    bitmap,
+                    sourceLeft,
+                    sourceTop,
+                    cropWidth,
+                    cropHeight,
+                    0,
+                    0,
+                    cropWidth,
+                    cropHeight
+                );
+                if (bitmap.close) bitmap.close();
+                return new Promise(function (resolve) {
+                    crop.toBlob(function (trimmedBlob) {
+                        if (!trimmedBlob) {
+                            resolve(null);
+                            return;
+                        }
+                        var objectUrl = URL.createObjectURL(trimmedBlob);
+                        resolve({
+                            trimmed: true,
+                            image: 'url("' + objectUrl.replace(/["\\]/g, '\\$&') + '")',
+                            objectUrl: objectUrl,
+                            originalWidth: originalWidth,
+                            originalHeight: originalHeight,
+                            left: sourceLeft,
+                            top: sourceTop,
+                            width: cropWidth,
+                            height: cropHeight,
+                        });
+                    }, 'image/png');
+                });
+            })
+            .then(function (result) {
+                finishFrameAssetAnalysis(url, state, result);
+            })
+            .catch(function () {
+                state.status = 'failed';
+                state.result = null;
+                scheduleManagerAppearanceSync();
+            });
+
+        return state;
+    }
+
+    function setBackgroundDecorationVars(ov, prefix, decoration) {
+        ov.style.setProperty(prefix + '-image', decoration ? decoration.image : 'none');
+        ov.style.setProperty(prefix + '-size', decoration ? decoration.size : 'cover');
+        ov.style.setProperty(prefix + '-position', decoration ? decoration.position : 'center');
+        ov.style.setProperty(prefix + '-repeat', decoration ? decoration.repeat : 'no-repeat');
+    }
+
+    function getLargestPixelRadius(value, fallback, maximum) {
+        var matches = String(value || '').match(/-?\d*\.?\d+px/gi);
+        if (!matches || matches.length === 0) return fallback;
+        var radius = matches.reduce(function (largest, part) {
+            var parsed = parseFloat(part);
+            return Number.isFinite(parsed) ? Math.max(largest, parsed) : largest;
+        }, 0);
+        return Math.max(0, Math.min(maximum || 30, radius)) + 'px';
+    }
+
+    function getVisibleBorder(style, fallback) {
+        if (!style) return fallback;
+        var width = parseFloat(style.borderTopWidth || style.borderWidth || '0');
+        var borderStyle = style.borderTopStyle || style.borderStyle || 'none';
+        var colorText = style.borderTopColor || style.borderColor || '';
+        var color = appearanceApi && typeof appearanceApi.parseCssColor === 'function'
+            ? appearanceApi.parseCssColor(colorText)
+            : null;
+        if (!Number.isFinite(width) || width <= 0 || borderStyle === 'none' || borderStyle === 'hidden' ||
+            (color && color.a <= 0.03)) {
+            return fallback;
+        }
+        return Math.min(width, 3) + 'px ' + borderStyle + ' ' + colorText;
+    }
+
+    function getRepresentativeMessage() {
+        var messages = Array.from(document.querySelectorAll('#chat .mes'));
+        return messages.find(function (message) {
+            if (message.classList.contains('smallSysMes')) return false;
+            var style = getComputedStyle(message);
+            return style.display !== 'none' && style.visibility !== 'hidden';
+        }) || messages[0] || null;
+    }
+
+    function getThemeSurfaceMotif(message) {
+        var candidates = [];
+        if (message) {
+            candidates.push({ element: message, pseudo: '::before' });
+            candidates.push({ element: message, pseudo: '::after' });
+            candidates.push({ element: message, pseudo: '' });
+        }
+        var sendForm = document.getElementById('send_form');
+        if (sendForm) candidates.push({ element: sendForm, pseudo: '::before' });
+        var topBar = document.getElementById('top-bar');
+        if (topBar) candidates.push({ element: topBar, pseudo: '::before' });
+
+        for (var i = 0; i < candidates.length; i++) {
+            var item = candidates[i];
+            var style = getComputedStyle(item.element, item.pseudo || null);
+            var image = getSafeComputedValue(style.backgroundImage, 'none', 32000);
+            if (image === 'none' || style.display === 'none' || style.visibility === 'hidden') continue;
+            if (item.pseudo && (style.content === 'none' || style.content === 'normal')) continue;
+            return {
+                image: image,
+                size: getSafeComputedValue(style.backgroundSize, 'cover', 1000),
+                position: getSafeComputedValue(style.backgroundPosition, 'center', 1000),
+                repeat: getSafeComputedValue(style.backgroundRepeat, 'no-repeat', 500),
+            };
+        }
+        return null;
+    }
+
+    function readFunctionalPageBackground(element, pseudo) {
+        if (!element) return null;
+        var style = getComputedStyle(element, pseudo || null);
+        var image = getSafeImageValue(style.backgroundImage, 'none');
+        if (image === 'none') return null;
+        if (pseudo && (style.content === 'none' || style.content === 'normal')) return null;
+        return {
+            image: image,
+            size: getSafeComputedValue(style.backgroundSize, 'cover', 1000),
+            position: getSafeComputedValue(style.backgroundPosition, 'center', 1000),
+            repeat: getSafeComputedValue(style.backgroundRepeat, 'no-repeat', 500),
+        };
+    }
+
+    function getThemeManagerBackground() {
+        var pageSurfaces = [
+            document.getElementById('rm_extensions_block'),
+            document.getElementById('user-settings-block'),
+            document.getElementById('PersonaManagement'),
+            document.getElementById('right-nav-panel'),
+            document.getElementById('left-nav-panel'),
+        ];
+        var candidates = [];
+        pageSurfaces.forEach(function (surface) {
+            if (!surface) return;
+            candidates.push({ element: surface, pseudo: '' });
+            candidates.push({ element: surface, pseudo: '::before' });
+            candidates.push({ element: surface, pseudo: '::after' });
+        });
+        for (var i = 0; i < candidates.length; i++) {
+            var candidate = candidates[i];
+            var decoration = readFunctionalPageBackground(candidate.element, candidate.pseudo);
+            if (decoration) return decoration;
+        }
+        return null;
+    }
+
+    function getTransformTranslation(transform) {
+        var text = String(transform || '').trim();
+        if (!text || text === 'none') return { x: 0, y: 0 };
+        try {
+            if (typeof DOMMatrixReadOnly === 'function') {
+                var matrix = new DOMMatrixReadOnly(text);
+                return { x: Number(matrix.m41) || 0, y: Number(matrix.m42) || 0 };
+            }
+        } catch (error) {
+            // Fall through to the simple matrix parser.
+        }
+        var match = text.match(/^matrix\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*([^,]+),\s*([^)]+)\)$/);
+        return match
+            ? { x: Number(match[1]) || 0, y: Number(match[2]) || 0 }
+            : { x: 0, y: 0 };
+    }
+
+    function getTransformGeometry(transform) {
+        var text = String(transform || '').trim();
+        if (!text || text === 'none') {
+            return { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+        }
+        try {
+            if (typeof DOMMatrixReadOnly === 'function') {
+                var matrix = new DOMMatrixReadOnly(text);
+                var scaleX = Math.hypot(matrix.a, matrix.b) || 1;
+                var determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+                var scaleY = Math.abs(determinant / scaleX) || 1;
+                return {
+                    x: Number(matrix.m41) || 0,
+                    y: Number(matrix.m42) || 0,
+                    scaleX: scaleX,
+                    scaleY: scaleY,
+                    rotation: Math.atan2(matrix.b, matrix.a) * 180 / Math.PI,
+                };
+            }
+        } catch (error) {
+            // Fall through to translation-only compatibility.
+        }
+        var translation = getTransformTranslation(text);
+        return { x: translation.x, y: translation.y, scaleX: 1, scaleY: 1, rotation: 0 };
+    }
+
+    function getOffsetWithin(element, ancestor) {
+        var left = 0;
+        var top = 0;
+        var current = element;
+        while (current && current !== ancestor) {
+            left += Number(current.offsetLeft) || 0;
+            top += Number(current.offsetTop) || 0;
+            current = current.offsetParent;
+        }
+        return current === ancestor ? { left: left, top: top } : null;
+    }
+
+    function clampPercent(value, minimum, maximum, fallback) {
+        var numeric = Number(value);
+        if (!Number.isFinite(numeric)) numeric = fallback;
+        return Math.max(minimum, Math.min(maximum, numeric));
+    }
+
+    function readFrameComposition(avatar, cardFrame) {
+        var image = avatar && avatar.querySelector('img');
+        if (!avatar || !image || !cardFrame) return null;
+        var frameStyle = getComputedStyle(avatar, '::after');
+        var frameWidth = parseFloat(frameStyle.width);
+        var frameHeight = parseFloat(frameStyle.height);
+        if (!Number.isFinite(frameWidth) || frameWidth <= 0) frameWidth = avatar.offsetWidth;
+        if (!Number.isFinite(frameHeight) || frameHeight <= 0) {
+            var frameRatio = parseFloat(cardFrame.aspectRatio);
+            frameHeight = frameRatio > 0 ? frameWidth / frameRatio : avatar.offsetHeight;
+        }
+        var imageWidth = image.offsetWidth || parseFloat(getComputedStyle(image).width);
+        var imageHeight = image.offsetHeight || parseFloat(getComputedStyle(image).height);
+        if (!(frameWidth > 0 && frameHeight > 0 && imageWidth > 0 && imageHeight > 0)) return null;
+
+        var frameLeft = parseFloat(frameStyle.left);
+        var frameTop = parseFloat(frameStyle.top);
+        if (!Number.isFinite(frameLeft)) frameLeft = 0;
+        if (!Number.isFinite(frameTop)) frameTop = 0;
+        var imageStyle = getComputedStyle(image);
+        var frameTransform = getTransformGeometry(frameStyle.transform);
+        var imageTransform = getTransformGeometry(imageStyle.transform);
+        var imageOffset = getOffsetWithin(image, avatar) || {
+            left: parseFloat(imageStyle.left) || 0,
+            top: parseFloat(imageStyle.top) || 0,
+        };
+        var frameX = frameLeft + frameTransform.x;
+        var frameY = frameTop + frameTransform.y;
+        var imageX = imageOffset.left + imageTransform.x;
+        var imageY = imageOffset.top + imageTransform.y;
+        var transformedImageWidth = imageWidth * imageTransform.scaleX;
+        var transformedImageHeight = imageHeight * imageTransform.scaleY;
+        var slotLeft = clampPercent((imageX - frameX) / frameWidth * 100, -35, 95, 0);
+        var slotTop = clampPercent((imageY - frameY) / frameHeight * 100, -35, 95, 0);
+        var slotWidth = clampPercent(transformedImageWidth / frameWidth * 100, 12, 140, 100);
+        var slotHeight = clampPercent(transformedImageHeight / frameHeight * 100, 12, 140, 100);
+        var rotation = Math.abs(imageTransform.rotation) > 0.01
+            ? 'rotate(' + Number(imageTransform.rotation.toFixed(3)) + 'deg)'
+            : 'none';
+
+        return {
+            aspectRatio: Number(Math.max(0.5, Math.min(2.4, frameWidth / frameHeight)).toFixed(4)) + ' / 1',
+            left: Number(slotLeft.toFixed(3)) + '%',
+            top: Number(slotTop.toFixed(3)) + '%',
+            width: Number(slotWidth.toFixed(3)) + '%',
+            height: Number(slotHeight.toFixed(3)) + '%',
+            radius: getSafeComputedValue(imageStyle.borderRadius, '0px', 500),
+            clipPath: getSafeClipPath(imageStyle.clipPath),
+            maskImage: getSafeImageValue(imageStyle.webkitMaskImage || imageStyle.maskImage, 'none'),
+            maskSize: getSafeComputedValue(imageStyle.webkitMaskSize || imageStyle.maskSize, 'cover', 1000),
+            maskPosition: getSafeComputedValue(imageStyle.webkitMaskPosition || imageStyle.maskPosition, 'center', 1000),
+            maskRepeat: getSafeComputedValue(imageStyle.webkitMaskRepeat || imageStyle.maskRepeat, 'no-repeat', 500),
+            objectFit: getSafeComputedValue(imageStyle.objectFit, 'cover', 100),
+            objectPosition: getSafeComputedValue(imageStyle.objectPosition, 'center', 500),
+            transform: rotation,
+            geometry: {
+                frameLeft: frameX,
+                frameTop: frameY,
+                frameWidth: frameWidth,
+                frameHeight: frameHeight,
+                backgroundSize: cardFrame.backgroundSize,
+                backgroundPosition: cardFrame.backgroundPosition,
+                imageLeft: imageX,
+                imageTop: imageY,
+                imageWidth: transformedImageWidth,
+                imageHeight: transformedImageHeight,
+            },
+        };
+    }
+
+    function readPreviewShape(avatar, cardFrame, frameComposition) {
+        var image = avatar && avatar.querySelector('img');
+        var source = cardFrame ? avatar : (image || avatar);
+        var sourceStyle = source ? getComputedStyle(source) : null;
+        var frameAspect = frameComposition && frameComposition.aspectRatio;
+        var radius = cardFrame
+            ? '0px'
+            : getSafeComputedValue(sourceStyle && sourceStyle.borderRadius, '0px', 500);
+        var maskImage = cardFrame
+            ? 'none'
+            : getSafeImageValue(
+                sourceStyle && (sourceStyle.webkitMaskImage || sourceStyle.maskImage),
+                'none'
+            );
+        return {
+            aspectRatio: frameAspect || getComputedAspectRatio(source, '', '4 / 3'),
+            radius: radius,
+            border: cardFrame ? '1px solid transparent' : getVisibleBorder(sourceStyle, '1px solid transparent'),
+            shadow: getSafeComputedValue(sourceStyle && sourceStyle.boxShadow, 'none', 1000),
+            clipPath: cardFrame ? 'none' : getSafeClipPath(sourceStyle && sourceStyle.clipPath),
+            maskImage: maskImage,
+            maskSize: getSafeComputedValue(
+                sourceStyle && (sourceStyle.webkitMaskSize || sourceStyle.maskSize),
+                'cover',
+                1000
+            ),
+            maskPosition: getSafeComputedValue(
+                sourceStyle && (sourceStyle.webkitMaskPosition || sourceStyle.maskPosition),
+                'center',
+                1000
+            ),
+            maskRepeat: getSafeComputedValue(
+                sourceStyle && (sourceStyle.webkitMaskRepeat || sourceStyle.maskRepeat),
+                'no-repeat',
+                500
+            ),
+            slot: frameComposition || {
+                left: '0%',
+                top: '0%',
+                width: '100%',
+                height: '100%',
+                radius: getSafeComputedValue(sourceStyle && sourceStyle.borderRadius, '0px', 500),
+                clipPath: getSafeClipPath(sourceStyle && sourceStyle.clipPath),
+                maskImage: getSafeImageValue(
+                    sourceStyle && (sourceStyle.webkitMaskImage || sourceStyle.maskImage),
+                    'none'
+                ),
+                maskSize: getSafeComputedValue(
+                    sourceStyle && (sourceStyle.webkitMaskSize || sourceStyle.maskSize),
+                    'cover',
+                    1000
+                ),
+                maskPosition: getSafeComputedValue(
+                    sourceStyle && (sourceStyle.webkitMaskPosition || sourceStyle.maskPosition),
+                    'center',
+                    1000
+                ),
+                maskRepeat: getSafeComputedValue(
+                    sourceStyle && (sourceStyle.webkitMaskRepeat || sourceStyle.maskRepeat),
+                    'no-repeat',
+                    500
+                ),
+                objectFit: getSafeComputedValue(sourceStyle && sourceStyle.objectFit, 'cover', 100),
+                objectPosition: getSafeComputedValue(sourceStyle && sourceStyle.objectPosition, 'center', 500),
+                transform: 'none',
+            },
+        };
+    }
+
+    function getBackgroundPositionOffset(value, freeSpace, horizontal) {
+        var tokens = String(value || 'center').trim().split(/\s+/);
+        var token = horizontal ? tokens[0] : (tokens[1] || tokens[0]);
+        if (token === 'left' || token === 'top') return 0;
+        if (token === 'right' || token === 'bottom') return freeSpace;
+        if (token === 'center') return freeSpace / 2;
+        if (/%$/.test(token)) return freeSpace * (parseFloat(token) || 0) / 100;
+        if (/px$/.test(token)) return parseFloat(token) || 0;
+        return freeSpace / 2;
+    }
+
+    function createTrimmedFrameShape(previewShape, frameShape, analysis) {
+        var sourceSlot = frameShape && frameShape.slot;
+        var geometry = sourceSlot && sourceSlot.geometry;
+        var slot = sourceSlot || previewShape.slot;
+        if (geometry && analysis.originalWidth > 0 && analysis.originalHeight > 0) {
+            var frameWidth = geometry.frameWidth;
+            var frameHeight = geometry.frameHeight;
+            var size = String(geometry.backgroundSize || 'contain').toLowerCase();
+            var scale = size.indexOf('cover') >= 0
+                ? Math.max(frameWidth / analysis.originalWidth, frameHeight / analysis.originalHeight)
+                : Math.min(frameWidth / analysis.originalWidth, frameHeight / analysis.originalHeight);
+            var renderedWidth = analysis.originalWidth * scale;
+            var renderedHeight = analysis.originalHeight * scale;
+            var originX = getBackgroundPositionOffset(
+                geometry.backgroundPosition,
+                frameWidth - renderedWidth,
+                true
+            );
+            var originY = getBackgroundPositionOffset(
+                geometry.backgroundPosition,
+                frameHeight - renderedHeight,
+                false
+            );
+            var cropLeft = geometry.frameLeft + originX + analysis.left * scale;
+            var cropTop = geometry.frameTop + originY + analysis.top * scale;
+            var cropWidth = analysis.width * scale;
+            var cropHeight = analysis.height * scale;
+            if (cropWidth > 0 && cropHeight > 0) {
+                slot = Object.assign({}, sourceSlot, {
+                    left: Number(clampPercent(
+                        (geometry.imageLeft - cropLeft) / cropWidth * 100,
+                        -35,
+                        95,
+                        0
+                    ).toFixed(3)) + '%',
+                    top: Number(clampPercent(
+                        (geometry.imageTop - cropTop) / cropHeight * 100,
+                        -35,
+                        95,
+                        0
+                    ).toFixed(3)) + '%',
+                    width: Number(clampPercent(
+                        geometry.imageWidth / cropWidth * 100,
+                        12,
+                        140,
+                        100
+                    ).toFixed(3)) + '%',
+                    height: Number(clampPercent(
+                        geometry.imageHeight / cropHeight * 100,
+                        12,
+                        140,
+                        100
+                    ).toFixed(3)) + '%',
+                });
+            }
+        }
+        return {
+            aspectRatio: Number(Math.max(0.5, Math.min(2.4, analysis.width / analysis.height)).toFixed(4)) + ' / 1',
+            radius: '0px',
+            border: '1px solid transparent',
+            shadow: previewShape.shadow,
+            clipPath: 'none',
+            maskImage: 'none',
+            maskSize: 'cover',
+            maskPosition: 'center',
+            maskRepeat: 'no-repeat',
+            slot: slot,
+        };
+    }
+
+    function readCurrentThemeSurface() {
+        var message = getRepresentativeMessage();
+        var messageStyle = message ? getComputedStyle(message) : null;
+        var panel = document.querySelector('.drawer-content') || document.getElementById('send_form');
+        var panelStyle = panel ? getComputedStyle(panel) : null;
+        var control = document.querySelector('.menu_button');
+        var controlStyle = control ? getComputedStyle(control) : null;
+        var messageText = document.querySelector('#chat .mes_text');
+        var textStyle = messageText ? getComputedStyle(messageText) : messageStyle;
+        var motif = getThemeSurfaceMotif(message);
+        var managerBackground = getThemeManagerBackground();
+        var topSettings = document.getElementById('top-settings-holder');
+        var nativeTopBar = document.getElementById('top-bar');
+        var topBar = readFirstBackgroundDecoration([
+            { element: topSettings, pseudo: '' },
+            { element: nativeTopBar, pseudo: '' },
+            { element: topSettings, pseudo: '::after' },
+            { element: nativeTopBar, pseudo: '::after' },
+            { element: topSettings, pseudo: '::before' },
+            { element: nativeTopBar, pseudo: '::before' },
+        ]);
+        var topIcon = readImageDecoration(
+            getFirstVisibleElement('#top-settings-holder .drawer-icon'),
+            '',
+            28
+        );
+        var bottomBar = readBackgroundDecoration(document.getElementById('send_form'));
+        var bottomIcons = {
+            refresh: readFirstTargetedImageDecoration(
+                ['#send_but', '#mes_continue', '#mes_stop'],
+                30
+            ),
+            batch: readFirstTargetedImageDecoration(
+                ['#extensionsMenuButton'],
+                30
+            ),
+            settings: readFirstTargetedImageDecoration(
+                ['#options_button'],
+                30
+            ),
+        };
+        var avatar = message && message.querySelector('.avatar');
+        var cardFrame = readImageDecoration(avatar, '::after', 30);
+        var frameComposition = readFrameComposition(avatar, cardFrame);
+        var previewShape = readPreviewShape(avatar, null, null);
+        var frameShape = readPreviewShape(avatar, cardFrame, frameComposition);
+
+        return {
+            cardRadius: getLargestPixelRadius(messageStyle && messageStyle.borderRadius, '10px', 30),
+            panelRadius: getLargestPixelRadius(panelStyle && panelStyle.borderRadius, '18px', 32),
+            controlRadius: getLargestPixelRadius(controlStyle && controlStyle.borderRadius, '8px', 20),
+            cardBorder: getVisibleBorder(messageStyle, '2px solid transparent'),
+            controlBorder: getVisibleBorder(controlStyle, '1px solid transparent'),
+            cardShadow: getSafeComputedValue(messageStyle && messageStyle.boxShadow, 'none', 1000),
+            panelShadow: getSafeComputedValue(panelStyle && panelStyle.boxShadow, 'none', 1000),
+            controlShadow: getSafeComputedValue(controlStyle && controlStyle.boxShadow, 'none', 1000),
+            cardBlur: getSafeComputedValue(messageStyle && messageStyle.backdropFilter, 'none', 500),
+            panelBlur: getSafeComputedValue(panelStyle && panelStyle.backdropFilter, 'none', 500),
+            fontFamily: getSafeComputedValue(textStyle && textStyle.fontFamily, 'inherit', 500),
+            cardBackground: getSafeComputedValue(messageStyle && messageStyle.backgroundColor, '', 200),
+            panelBackground: getSafeComputedValue(panelStyle && panelStyle.backgroundColor, '', 200),
+            controlBackground: getSafeComputedValue(controlStyle && controlStyle.backgroundColor, '', 200),
+            motif: motif,
+            managerBackground: managerBackground,
+            topBar: topBar,
+            topIcon: topIcon,
+            bottomBar: bottomBar,
+            bottomIcons: bottomIcons,
+            cardFrame: cardFrame,
+            previewShape: previewShape,
+            frameShape: frameShape,
+        };
+    }
+
+    function hasVisibleColor(value) {
+        if (!appearanceApi || typeof appearanceApi.parseCssColor !== 'function') return Boolean(value);
+        var color = appearanceApi.parseCssColor(value);
+        return Boolean(color && color.a > 0.08);
+    }
+
+    function setThemedButtonIconVars(ov, prefix, decoration) {
+        ov.style.setProperty(prefix + '-image', decoration ? decoration.image : 'none');
+        ov.style.setProperty(prefix + '-transform', decoration ? decoration.transform : 'none');
+        ov.style.setProperty(prefix + '-size', decoration ? decoration.size : '24px');
+        ov.style.setProperty(prefix + '-bg-size', decoration ? decoration.backgroundSize : 'contain');
+        ov.style.setProperty(prefix + '-bg-position', decoration ? decoration.backgroundPosition : 'center');
+        ov.style.setProperty(prefix + '-bg-repeat', decoration ? decoration.backgroundRepeat : 'no-repeat');
+        ov.style.setProperty(prefix + '-filter', decoration ? decoration.filter : 'none');
+        ov.style.setProperty(prefix + '-opacity', decoration ? decoration.opacity : '1');
+    }
+
+    function applyCurrentThemeSurface(ov, palette, settings) {
+        var surface = readCurrentThemeSurface();
+        var frameAnalysis = settings.showThemeAvatarFrame === true && surface.cardFrame
+            ? analyzeFrameAsset(surface.cardFrame.image)
+            : null;
+        var frameAnalysisPending = frameAnalysis && frameAnalysis.status === 'loading';
+        var trimmedFrame = frameAnalysis && frameAnalysis.status === 'ready'
+            ? frameAnalysis.result
+            : null;
+        var effectiveCardFrame = surface.cardFrame;
+        if (trimmedFrame) {
+            effectiveCardFrame = Object.assign({}, surface.cardFrame, {
+                image: trimmedFrame.image,
+                backgroundSize: 'contain',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+            });
+        }
+        var followCardFrame = settings.showThemeAvatarFrame === true &&
+            Boolean(surface.cardFrame) &&
+            !frameAnalysisPending;
+        var followPreviewShape = settings.followThemePreviewShape === true;
+        var effectivePreviewShape = followCardFrame
+            ? (trimmedFrame
+                ? createTrimmedFrameShape(surface.previewShape, surface.frameShape, trimmedFrame)
+                : surface.frameShape)
+            : surface.previewShape;
+        ov.style.setProperty('--tm-card-radius', surface.cardRadius);
+        ov.style.setProperty('--tm-panel-radius', surface.panelRadius);
+        ov.style.setProperty('--tm-control-radius', surface.controlRadius);
+        ov.style.setProperty('--tm-card-border-style', surface.cardBorder);
+        ov.style.setProperty('--tm-control-border-style', surface.controlBorder);
+        ov.style.setProperty('--tm-card-shadow', surface.cardShadow);
+        ov.style.setProperty('--tm-card-hover-shadow', surface.cardShadow);
+        ov.style.setProperty('--tm-panel-shadow', surface.panelShadow);
+        ov.style.setProperty('--tm-control-shadow', surface.controlShadow);
+        ov.style.setProperty('--tm-card-blur', surface.cardBlur);
+        ov.style.setProperty('--tm-panel-blur', surface.panelBlur);
+        ov.style.setProperty('--tm-theme-font', surface.fontFamily);
+        if (hasVisibleColor(surface.cardBackground)) ov.style.setProperty('--tm-card-bg', surface.cardBackground);
+        if (hasVisibleColor(surface.panelBackground)) {
+            ov.style.setProperty('--tm-head-bg', surface.panelBackground);
+        }
+        if (hasVisibleColor(surface.controlBackground)) ov.style.setProperty('--tm-control-bg', surface.controlBackground);
+
+        if (surface.motif) {
+            ov.style.setProperty('--tm-theme-surface-image', surface.motif.image);
+            ov.style.setProperty('--tm-theme-surface-size', surface.motif.size);
+            ov.style.setProperty('--tm-theme-surface-position', surface.motif.position);
+            ov.style.setProperty('--tm-theme-surface-repeat', surface.motif.repeat);
+            ov.style.setProperty('--tm-theme-surface-opacity', palette.mode === 'dark' ? '.12' : '.1');
+            ov.style.setProperty('--tm-theme-card-motif-opacity', palette.mode === 'dark' ? '.22' : '.18');
+        } else {
+            ov.style.setProperty('--tm-theme-surface-image', 'none');
+            ov.style.setProperty('--tm-theme-surface-opacity', '0');
+            ov.style.setProperty('--tm-theme-card-motif-opacity', '0');
+        }
+
+        setBackgroundDecorationVars(ov, '--tm-theme-manager', surface.managerBackground);
+        ov.style.setProperty('--tm-theme-manager-opacity', surface.managerBackground ? '.96' : '0');
+        setBackgroundDecorationVars(ov, '--tm-theme-topbar', surface.topBar);
+        var nativeTopHeight = Math.max(
+            document.getElementById('top-settings-holder')?.getBoundingClientRect().height || 0,
+            document.getElementById('top-bar')?.getBoundingClientRect().height || 0
+        );
+        var hasTopBarOverhang = Boolean(
+            surface.topBar &&
+            surface.topBar.pseudo &&
+            surface.topBar.width > 0 &&
+            surface.topBar.height > Math.max(72, nativeTopHeight * 1.8)
+        );
+        var topBarHeight = hasTopBarOverhang
+            ? Number(Math.min(60, surface.topBar.height / surface.topBar.width * 100).toFixed(3)) + 'vw'
+            : '100%';
+        var topBarTop = hasTopBarOverhang && surface.topBar.width > 0
+            ? Number((surface.topBar.top / surface.topBar.width * 100).toFixed(3)) + 'vw'
+            : '0px';
+        ov.style.setProperty('--tm-theme-topbar-overlay-height', topBarHeight);
+        ov.style.setProperty('--tm-theme-topbar-overlay-top', topBarTop);
+        ov.style.setProperty('--tm-theme-top-icon-image', surface.topIcon ? surface.topIcon.image : 'normal');
+        ov.style.setProperty('--tm-theme-top-icon-transform', surface.topIcon ? surface.topIcon.transform : 'none');
+        ov.style.setProperty('--tm-theme-top-icon-size', surface.topIcon ? surface.topIcon.size : '24px');
+        setBackgroundDecorationVars(ov, '--tm-theme-bottombar', surface.bottomBar);
+        setThemedButtonIconVars(ov, '--tm-theme-bottom-refresh', surface.bottomIcons.refresh);
+        setThemedButtonIconVars(ov, '--tm-theme-bottom-batch', surface.bottomIcons.batch);
+        setThemedButtonIconVars(ov, '--tm-theme-bottom-settings', surface.bottomIcons.settings);
+        ov.style.setProperty('--tm-theme-card-frame-image', effectiveCardFrame ? effectiveCardFrame.image : 'none');
+        ov.style.setProperty('--tm-theme-card-frame-size', effectiveCardFrame ? effectiveCardFrame.backgroundSize : 'contain');
+        ov.style.setProperty('--tm-theme-card-frame-position', effectiveCardFrame ? effectiveCardFrame.backgroundPosition : 'center');
+        ov.style.setProperty('--tm-theme-card-frame-repeat', effectiveCardFrame ? effectiveCardFrame.backgroundRepeat : 'no-repeat');
+        ov.style.setProperty('--tm-theme-card-frame-blend', effectiveCardFrame ? effectiveCardFrame.mixBlendMode : 'normal');
+        ov.style.setProperty('--tm-theme-card-frame-filter', effectiveCardFrame ? effectiveCardFrame.filter : 'none');
+        ov.style.setProperty('--tm-theme-card-frame-opacity', effectiveCardFrame ? effectiveCardFrame.opacity : '1');
+        ov.style.setProperty('--tm-preview-aspect', effectivePreviewShape.aspectRatio);
+        ov.style.setProperty('--tm-preview-radius', effectivePreviewShape.radius);
+        ov.style.setProperty('--tm-preview-border-style', effectivePreviewShape.border);
+        ov.style.setProperty('--tm-preview-shadow', effectivePreviewShape.shadow);
+        ov.style.setProperty('--tm-preview-clip-path', effectivePreviewShape.clipPath);
+        ov.style.setProperty('--tm-preview-mask-image', effectivePreviewShape.maskImage);
+        ov.style.setProperty('--tm-preview-mask-size', effectivePreviewShape.maskSize);
+        ov.style.setProperty('--tm-preview-mask-position', effectivePreviewShape.maskPosition);
+        ov.style.setProperty('--tm-preview-mask-repeat', effectivePreviewShape.maskRepeat);
+        ov.style.setProperty('--tm-preview-slot-left', effectivePreviewShape.slot.left);
+        ov.style.setProperty('--tm-preview-slot-top', effectivePreviewShape.slot.top);
+        ov.style.setProperty('--tm-preview-slot-width', effectivePreviewShape.slot.width);
+        ov.style.setProperty('--tm-preview-slot-height', effectivePreviewShape.slot.height);
+        ov.style.setProperty('--tm-preview-slot-radius', effectivePreviewShape.slot.radius);
+        ov.style.setProperty('--tm-preview-slot-clip-path', effectivePreviewShape.slot.clipPath);
+        ov.style.setProperty('--tm-preview-slot-mask-image', effectivePreviewShape.slot.maskImage);
+        ov.style.setProperty('--tm-preview-slot-mask-size', effectivePreviewShape.slot.maskSize);
+        ov.style.setProperty('--tm-preview-slot-mask-position', effectivePreviewShape.slot.maskPosition);
+        ov.style.setProperty('--tm-preview-slot-mask-repeat', effectivePreviewShape.slot.maskRepeat);
+        ov.style.setProperty('--tm-preview-slot-object-fit', effectivePreviewShape.slot.objectFit);
+        ov.style.setProperty('--tm-preview-slot-object-position', effectivePreviewShape.slot.objectPosition);
+        ov.style.setProperty('--tm-preview-slot-transform', effectivePreviewShape.slot.transform || 'none');
+
+        ov.classList.toggle('tm-has-manager-background', Boolean(surface.managerBackground));
+        ov.classList.toggle('tm-has-topbar-decoration', Boolean(surface.topBar));
+        ov.classList.toggle('tm-topbar-overhang', hasTopBarOverhang);
+        ov.classList.toggle('tm-has-top-icon', Boolean(surface.topIcon));
+        ov.classList.toggle('tm-has-bottombar-decoration', Boolean(surface.bottomBar));
+        ov.classList.toggle('tm-has-bottom-refresh-icon', Boolean(surface.bottomIcons.refresh));
+        ov.classList.toggle('tm-has-bottom-batch-icon', Boolean(surface.bottomIcons.batch));
+        ov.classList.toggle('tm-has-bottom-settings-icon', Boolean(surface.bottomIcons.settings));
+        ov.classList.toggle('tm-has-card-frame', Boolean(surface.cardFrame));
+        ov.classList.toggle('tm-follow-card-frame', followCardFrame);
+        ov.classList.toggle(
+            'tm-card-frame-blended',
+            followCardFrame && effectiveCardFrame && effectiveCardFrame.mixBlendMode !== 'normal'
+        );
+        ov.classList.toggle('tm-follow-preview-shape', followPreviewShape);
+        ov.classList.toggle('tm-follow-grid', followCardFrame || followPreviewShape);
+    }
+
+    function updateAppearanceToggleButton(ov, following, mode) {
+        var button = ov && ov.querySelector('#tm-theme-toggle');
+        if (!button) return;
+        if (following) {
+            button.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i>';
+            button.title = '外观：跟随当前美化（点击切换固定明暗）';
+            return;
+        }
+        var isDark = mode === 'dark';
+        button.innerHTML = isDark
+            ? '<i class="fa-solid fa-moon"></i>'
+            : '<i class="fa-regular fa-sun"></i>';
+        button.title = isDark ? '外观：固定深色（点击切换浅色）' : '外观：固定浅色（点击切换深色）';
+    }
+
+    function syncManagerAppearance() {
+        var ov = document.querySelector('.tm-overlay');
+        if (!ov) return;
+        var d = load();
+        var following = d.followThemeAppearance === true && appearanceApi && typeof appearanceApi.createPalette === 'function';
+        var autoHideHeader = d.autoHideHeader === true;
+
+        ov.classList.toggle('tm-follow', following);
+        ov.classList.toggle('tm-auto-hide-head', autoHideHeader);
+        if (!autoHideHeader) ov.classList.remove('tm-head-revealed');
+        var head = ov.querySelector('.tm-head');
+        if (head) {
+            if (autoHideHeader) {
+                head.setAttribute('tabindex', '0');
+                head.setAttribute('title', '点击显示顶栏内容');
+            } else {
+                head.removeAttribute('tabindex');
+                head.removeAttribute('title');
+            }
+        }
+        if (!following) {
+            clearManagerAppearanceVars(ov);
+            ov.classList.remove('tm-compact-card-info');
+            ov.classList.toggle('tm-dark', darkMode);
+            ov.classList.toggle('tm-light', !darkMode);
+            ov.dataset.tmAppearanceMode = darkMode ? 'dark' : 'light';
+            updateAppearanceToggleButton(ov, false, ov.dataset.tmAppearanceMode);
+            return;
+        }
+
+        var palette = appearanceApi.createPalette(readCurrentThemeAppearance());
+        ov.classList.toggle('tm-dark', palette.mode === 'dark');
+        ov.classList.toggle('tm-light', palette.mode !== 'dark');
+        ov.dataset.tmAppearanceMode = palette.mode;
+        ov.style.setProperty('--tm-bg', palette.background);
+        ov.style.setProperty('--tm-bg2', palette.surface);
+        ov.style.setProperty('--tm-text', palette.text);
+        ov.style.setProperty('--tm-border', palette.border);
+        ov.style.setProperty('--tm-card-bg', palette.card);
+        ov.style.setProperty('--tm-card-border', palette.border);
+        ov.style.setProperty('--tm-head-bg', palette.surfaceStrong);
+        ov.style.setProperty('--tm-control-bg', palette.control);
+        ov.style.setProperty('--tm-control-hover', palette.controlHover);
+        ov.style.setProperty('--tm-control-border', palette.border);
+        ov.style.setProperty('--tm-shadow', palette.shadow);
+        ov.style.setProperty('--tm-accent-text', palette.accentText);
+        ov.style.setProperty('--SmartThemeQuoteColor', palette.accent);
+        applyCurrentBackgroundAppearance(ov, palette);
+        applyCurrentThemeSurface(ov, palette, d);
+        ov.classList.toggle(
+            'tm-compact-card-info',
+            d.simplifyGridText === true &&
+            (
+                d.showThemeAvatarFrame === true ||
+                d.followThemePreviewShape === true
+            )
+        );
+        updateAppearanceToggleButton(ov, true, palette.mode);
+    }
+
+    function scheduleManagerAppearanceSync() {
+        if (!document.querySelector('.tm-overlay')) return;
+        if (managerAppearanceTimer) clearTimeout(managerAppearanceTimer);
+        if (managerAppearanceSettleTimer) clearTimeout(managerAppearanceSettleTimer);
+        managerAppearanceTimer = setTimeout(function () {
+            managerAppearanceTimer = null;
+            syncManagerAppearance();
+        }, 40);
+        managerAppearanceSettleTimer = setTimeout(function () {
+            managerAppearanceSettleTimer = null;
+            syncManagerAppearance();
+        }, 360);
+    }
+
+    function disconnectManagerAppearanceObserver() {
+        if (managerAppearanceObserver) managerAppearanceObserver.disconnect();
+        managerAppearanceObserver = null;
+        if (managerAppearanceTimer) clearTimeout(managerAppearanceTimer);
+        if (managerAppearanceSettleTimer) clearTimeout(managerAppearanceSettleTimer);
+        managerAppearanceTimer = null;
+        managerAppearanceSettleTimer = null;
+    }
+
+    function bindManagerAppearanceObserver() {
+        disconnectManagerAppearanceObserver();
+        if (typeof MutationObserver !== 'function') return;
+        managerAppearanceObserver = new MutationObserver(scheduleManagerAppearanceSync);
+        managerAppearanceObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ['style'],
+        });
+        var bg = document.getElementById('bg1');
+        if (bg) {
+            managerAppearanceObserver.observe(bg, {
+                attributes: true,
+                attributeFilter: ['style', 'class'],
+            });
+        }
+        var customStyle = document.getElementById('custom-style');
+        if (customStyle) {
+            managerAppearanceObserver.observe(customStyle, {
+                childList: true,
+                characterData: true,
+                subtree: true,
+            });
+        }
+    }
+
     // ── 打开全屏主界面 ────────────────────────────────────────
     function openPopup() {
         if (document.querySelector('.tm-overlay')) return;
         injectStyles();
-        batchMode = false; batchSelected = []; searchQuery = ''; searchOpen = false; sortOpen = false;
+        batchMode = false; batchSelected = []; batchDeleting = false; searchQuery = ''; searchOpen = false; sortOpen = false;
 
         var ov = document.createElement('div');
         ov.className = 'tm-overlay ' + (darkMode ? 'tm-dark' : 'tm-light');
@@ -1433,10 +2670,12 @@
             '<button class="tm-bottom-btn" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i></button>' +
             '</div>' +
-            '<div id="tm-popup-slot" style="position:absolute;inset:0;pointer-events:none;z-index:1;"></div>' +
+            '<div id="tm-popup-slot" style="position:absolute;inset:0;pointer-events:none;z-index:20;isolation:isolate;"></div>' +
             '</div>';
 
         document.body.appendChild(ov);
+        syncManagerAppearance();
+        bindManagerAppearanceObserver();
 
         // 防止悬浮球点击穿透：添加一个透明遮罩吸收残余触摸事件，400ms后移除
         var shield = document.createElement('div');
@@ -1448,12 +2687,37 @@
         setTimeout(function () { if (shield.parentNode) shield.parentNode.removeChild(shield); }, 400);
 
         // 绑定事件
+        var managerHead = ov.querySelector('.tm-head');
+        ov.addEventListener('pointerdown', function (e) {
+            if (!ov.classList.contains('tm-auto-hide-head')) return;
+            if (managerHead.contains(e.target)) {
+                if (!ov.classList.contains('tm-head-revealed')) {
+                    ov.classList.add('tm-head-revealed');
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                return;
+            }
+            ov.classList.remove('tm-head-revealed');
+        }, true);
+        managerHead.addEventListener('keydown', function (e) {
+            if (!ov.classList.contains('tm-auto-hide-head')) return;
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            ov.classList.add('tm-head-revealed');
+            e.preventDefault();
+        });
         ov.querySelector('#tm-x').addEventListener('click', closePopup);
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
-            darkMode = !darkMode;
-            ov.classList.toggle('tm-dark', darkMode);
-            ov.classList.toggle('tm-light', !darkMode);
-            this.innerHTML = darkMode ? '<i class="fa-solid fa-circle-half-stroke"></i>' : '<i class="fa-regular fa-sun"></i>';
+            var dd = load();
+            if (dd.followThemeAppearance === true) {
+                dd.followThemeAppearance = false;
+                darkMode = ov.dataset.tmAppearanceMode !== 'dark';
+                save(dd);
+                toast('已切换为固定' + (darkMode ? '深色' : '浅色') + '，可在设置中恢复跟随');
+            } else {
+                darkMode = !darkMode;
+            }
+            syncManagerAppearance();
         });
         ov.querySelector('#tm-refresh').addEventListener('click', function () {
             ov.querySelector('#tm-grid-area').innerHTML = '<div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在刷新…</span></div>';
@@ -1494,6 +2758,7 @@
 
         // 底栏
         ov.querySelector('#tm-batch-toggle').addEventListener('click', function () {
+            if (batchDeleting) return;
             batchMode = !batchMode; batchSelected = [];
             ov.querySelector('#tm-batch-toggle').classList.toggle('on', batchMode);
             renderGrid();
@@ -1520,6 +2785,7 @@
     }
 
     function closePopup() {
+        disconnectManagerAppearanceObserver();
         var ov = document.querySelector('.tm-overlay'); if (ov) ov.parentNode.removeChild(ov);
     }
 
@@ -1625,15 +2891,19 @@
 
         if (batchArea) {
             if (batchMode) {
+                var disabledAttr = batchDeleting ? ' disabled' : '';
                 batchArea.style.display = '';
-                batchArea.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">已选 <b id="tm-batch-count">' + batchSelected.length + '</b> 个</span>' +
+                batchArea.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">' +
+                (batchDeleting ? '正在删除 <b>' + batchSelected.length + '</b> 个…' : '已选 <b id="tm-batch-count">' + batchSelected.length + '</b> 个') +
+                '</span>' +
                 '<div class="tm-batch-divider"></div>' +
                 '<div class="tm-batch-acts">' +
-                '<button class="tm-batch-btn" id="tm-batch-selall">全选</button>' +
-                '<button class="tm-batch-btn" id="tm-batch-none">取消</button>' +
-                '<button class="tm-batch-btn" id="tm-batch-cat"><i class="fa-solid fa-folder"></i> 分类</button>' +
-                '<button class="tm-batch-btn" id="tm-batch-star"><i class="fa-solid fa-star"></i> 收藏</button>' +
-                '<button class="tm-batch-btn" id="tm-batch-tag"><i class="fa-solid fa-tag"></i> 标签</button>' +
+                '<button class="tm-batch-btn" id="tm-batch-selall"' + disabledAttr + '>全选</button>' +
+                '<button class="tm-batch-btn" id="tm-batch-none"' + disabledAttr + '>取消</button>' +
+                '<button class="tm-batch-btn" id="tm-batch-cat"' + disabledAttr + '><i class="fa-solid fa-folder"></i> 分类</button>' +
+                '<button class="tm-batch-btn" id="tm-batch-star"' + disabledAttr + '><i class="fa-solid fa-star"></i> 收藏</button>' +
+                '<button class="tm-batch-btn" id="tm-batch-tag"' + disabledAttr + '><i class="fa-solid fa-tag"></i> 标签</button>' +
+                '<button class="tm-batch-btn danger" id="tm-batch-delete"' + disabledAttr + '><i class="fa-solid fa-trash"></i> 删除</button>' +
                 '</div></div>';
             } else {
                 batchArea.style.display = 'none';
@@ -1715,8 +2985,74 @@
                 save(dd); toast('🏷️ 已添加标签：' + tag); batchSelected = []; renderGrid();
             });
 
+            var bdeleteBtn = batchRoot.querySelector('#tm-batch-delete');
+            if (bdeleteBtn) bdeleteBtn.addEventListener('click', function () {
+                if (batchDeleting) return;
+                if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
+
+                var names = batchSelected.slice();
+                var currentTheme = getCurrentThemeName();
+                var deletingCurrent = names.indexOf(currentTheme) !== -1;
+                var fallbackTheme = deletingCurrent
+                    ? stThemeList.find(function (name) { return names.indexOf(name) === -1; })
+                    : '';
+                if (deletingCurrent && !fallbackTheme) {
+                    toast('当前美化也在所选范围内，请至少保留一个可切换的美化', true);
+                    return;
+                }
+
+                var shownNames = names.slice(0, 8).map(function (name) { return '• ' + name; }).join('\n');
+                if (names.length > 8) shownNames += '\n…另有 ' + (names.length - 8) + ' 个';
+                var message = '确定删除选中的 ' + names.length + ' 个美化？\n\n' + shownNames +
+                    '\n\n这会从 SillyTavern 主题列表中真实删除，无法通过管理器撤销。';
+                if (deletingCurrent) message += '\n当前美化将先切换为「' + fallbackTheme + '」。';
+                if (!confirm(message)) return;
+
+                batchDeleting = true;
+                renderGrid();
+
+                function finishDeleteStart() {
+                    deleteThemesEverywhere(names, function (ok, outcome) {
+                        batchDeleting = false;
+                        if (!ok) {
+                            renderGrid();
+                            toast('批量删除后无法完成验证，本地标注未清理，请刷新后确认', true);
+                            return;
+                        }
+
+                        batchSelected = outcome.failed.map(function (item) { return item.name; });
+                        renderGrid();
+                        if (outcome.failed.length > 0) {
+                            toast('已删除 ' + outcome.removed.length + ' 个；未删除 ' + outcome.failed.length + ' 个：' +
+                                outcome.failed.map(function (item) { return item.name; }).join('、'), true);
+                        } else {
+                            toast('✅ 已删除 ' + outcome.removed.length + ' 个美化');
+                        }
+                    });
+                }
+
+                if (!deletingCurrent) {
+                    finishDeleteStart();
+                    return;
+                }
+
+                applyTheme(fallbackTheme, function (ok, reason) {
+                    if (!ok) {
+                        batchDeleting = false;
+                        renderGrid();
+                        if (reason !== 'superseded') toast('无法安全切换当前美化，批量删除已取消', true);
+                        return;
+                    }
+                    renderGrid();
+                    renderBottomStatus();
+                    updateBtn();
+                    finishDeleteStart();
+                });
+            });
+
             area.querySelectorAll('.tm-card').forEach(function (card) {
                 card.addEventListener('click', function () {
+                    if (batchDeleting) return;
                     var name = card.dataset.name;
                     var idx = batchSelected.indexOf(name);
                     if (idx !== -1) batchSelected.splice(idx, 1); else batchSelected.push(name);
@@ -2109,6 +3445,11 @@
             '<div class="tm-sec-title">分类管理</div>',
             '<button class="tm-btn tm-btn-outline" id="tm-open-cats" style="width:100%;text-align:left;margin-bottom:10px"><i class="fa-solid fa-tags" style="margin-right:6px"></i>管理分类（' + d.categories.length + '个）</button>',
             '<div class="tm-sec-title">显示</div>',
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>',
+            '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>',
+            '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>',
+            '<div class="tm-row-inline tm-follow-detail tm-grid-text-detail"><label class="tm-setting-copy"><span>简洁网格文字</span><small>头像框或预览形状任一开启时，名称和标签取消底纹并居中</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>',
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>隐藏标题与按钮；点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + ' /></div>',
             '<div class="tm-row-inline"><label>显示悬浮球</label><input type="checkbox" class="tm-chk" id="tm-show-ball" ' + (d.showBall !== false ? 'checked' : '') + ' /></div>',
             '<div class="tm-row-inline" style="margin-top:6px"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>',
             '<div class="tm-sec-title">悬浮球自定义</div>',
@@ -2140,6 +3481,63 @@
             '<div class="tm-hint" style="margin-top:8px">※ 标注只包含分类、标签、截图等附加信息；美化包会打包 ST 当前所有主题 JSON，并附带分类等轻量标注</div>',
         ].join(''));
 
+        var followAppearanceInput = sheet.querySelector('#tm-follow-appearance');
+        var showThemeAvatarFrameInput = sheet.querySelector('#tm-show-theme-avatar-frame');
+        var followThemePreviewShapeInput = sheet.querySelector('#tm-follow-preview-shape');
+        var simplifyGridTextInput = sheet.querySelector('#tm-simplify-grid-text');
+        var autoHideHeaderInput = sheet.querySelector('#tm-auto-hide-header');
+        function syncFollowDetailState() {
+            var enabled = followAppearanceInput.checked;
+            [showThemeAvatarFrameInput, followThemePreviewShapeInput].forEach(function (input) {
+                input.disabled = !enabled;
+                var row = input.closest('.tm-follow-detail');
+                if (row) row.classList.toggle('is-disabled', !enabled);
+            });
+            var gridTextEnabled = enabled &&
+                (
+                    showThemeAvatarFrameInput.checked ||
+                    followThemePreviewShapeInput.checked
+                );
+            simplifyGridTextInput.disabled = !gridTextEnabled;
+            var gridTextRow = simplifyGridTextInput.closest('.tm-follow-detail');
+            if (gridTextRow) gridTextRow.classList.toggle('is-disabled', !gridTextEnabled);
+        }
+        syncFollowDetailState();
+
+        followAppearanceInput.addEventListener('change', function () {
+            var dd = load();
+            dd.followThemeAppearance = this.checked;
+            save(dd);
+            syncFollowDetailState();
+            syncManagerAppearance();
+            toast(this.checked ? '✨ 管理器界面将跟随当前美化' : '管理器已恢复固定明暗外观');
+        });
+        showThemeAvatarFrameInput.addEventListener('change', function () {
+            var dd = load();
+            dd.showThemeAvatarFrame = this.checked;
+            save(dd);
+            syncFollowDetailState();
+            syncManagerAppearance();
+        });
+        followThemePreviewShapeInput.addEventListener('change', function () {
+            var dd = load();
+            dd.followThemePreviewShape = this.checked;
+            save(dd);
+            syncFollowDetailState();
+            syncManagerAppearance();
+        });
+        simplifyGridTextInput.addEventListener('change', function () {
+            var dd = load();
+            dd.simplifyGridText = this.checked;
+            save(dd);
+            syncManagerAppearance();
+        });
+        autoHideHeaderInput.addEventListener('change', function () {
+            var dd = load();
+            dd.autoHideHeader = this.checked;
+            save(dd);
+            syncManagerAppearance();
+        });
         sheet.querySelector('#tm-show-ball').addEventListener('change', function () {
             var dd = load(); dd.showBall = this.checked; save(dd);
             removeFab();

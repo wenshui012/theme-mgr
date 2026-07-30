@@ -8,9 +8,11 @@ require('../src/theme-api.js');
 require('../src/theme-runtime.js');
 require('../src/theme-transactions.js');
 require('../src/theme-transfer.js');
+require('../src/theme-appearance.js');
 
 const modules = global.ThemeMgrModules;
 const schema = modules.themeSchema;
+const appearance = modules.themeAppearance;
 
 function clone(value) {
     return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -208,6 +210,75 @@ test('runtime aborts when a lazy placeholder cannot hydrate', async (t) => {
         runtime.resolveUsableTheme('Lazy', { name: 'Lazy', __baibaokuLazyTheme: true }),
         (error) => error.code === 'incomplete',
     );
+});
+
+test('theme appearance derives readable palettes from both light and dark beautifications', () => {
+    const light = appearance.createPalette({
+        text: 'rgba(77, 75, 79, 1)',
+        background: 'rgba(255, 245, 250, 0.96)',
+        accent: 'rgba(236, 190, 216, 1)',
+    });
+    const dark = appearance.createPalette({
+        text: '#eeeeee',
+        background: 'rgba(20, 18, 28, 0.94)',
+        accent: '#8c73c9',
+    });
+
+    assert.equal(light.mode, 'light');
+    assert.equal(dark.mode, 'dark');
+    assert.ok(appearance.contrastRatio(
+        appearance.parseCssColor(light.text),
+        appearance.parseCssColor(light.background),
+    ) >= 4.5);
+    assert.ok(appearance.contrastRatio(
+        appearance.parseCssColor(dark.text),
+        appearance.parseCssColor(dark.background),
+    ) >= 4.5);
+    assert.ok(appearance.contrastRatio(
+        appearance.parseCssColor(light.accent),
+        appearance.parseCssColor(light.background),
+    ) >= 3);
+});
+
+test('theme appearance safely falls back for transparent or malformed theme colors', () => {
+    const palette = appearance.createPalette({
+        text: 'not-a-color',
+        background: 'rgba(0, 0, 0, 0)',
+        chat: 'transparent',
+        accent: 'also-invalid',
+    });
+
+    assert.match(palette.background, /^rgba\(/);
+    assert.match(palette.text, /^rgba\(/);
+    assert.equal(Object.values(palette).some((value) => String(value).includes('NaN')), false);
+    assert.ok(appearance.contrastRatio(
+        appearance.parseCssColor(palette.text),
+        appearance.parseCssColor(palette.background),
+    ) >= 4.5);
+});
+
+test('runtime evicts a detached batch inventory object from SillyTavern native theme cache', (t) => {
+    const previousHydrate = global.baibaokuHydrateTheme;
+    t.after(() => { global.baibaokuHydrateTheme = previousHydrate; });
+
+    const nativeThemes = [completeTheme('Delete Me', { main_text_color: '#native-old' })];
+    global.baibaokuHydrateTheme = (theme) => {
+        const index = nativeThemes.findIndex((item) => item.name === theme.name);
+        if (index === -1) nativeThemes.push(theme);
+        else nativeThemes[index] = theme;
+    };
+
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([]), getRawSettingsInventory: () => Promise.resolve([]) },
+    });
+    const detachedInventoryTheme = completeTheme('Delete Me', { main_text_color: '#detached' });
+
+    runtime.evictNativeTheme('Delete Me', detachedInventoryTheme);
+
+    assert.equal(nativeThemes.some((theme) => theme.name === 'Delete Me'), false);
+    assert.equal(nativeThemes.find((theme) => theme.name === 'Delete Me'), undefined);
+    assert.match(detachedInventoryTheme.name, /^__theme_mgr_deleted__/);
 });
 
 test('theme API never submits markers or name-only objects but permits legacy partials', async (t) => {
@@ -702,6 +773,64 @@ test('delete failure is reported only after a fresh read confirms the old theme 
         (error) => error.code === 'delete-failed',
     );
     assert.deepEqual(harness.store['Keep Me'], old);
+});
+
+test('batch delete uses one initial and one final inventory for every selected theme', async () => {
+    const harness = makeTransactionHarness([
+        completeTheme('Delete A'),
+        completeTheme('Delete B'),
+        completeTheme('Keep C'),
+    ]);
+
+    const result = await harness.transactions.deleteThemesVerified(['Delete A', 'Delete B', 'Delete A']);
+
+    assert.deepEqual(result.results.map((item) => [item.name, item.ok]), [
+        ['Delete A', true],
+        ['Delete B', true],
+    ]);
+    assert.equal(harness.store['Delete A'], undefined);
+    assert.equal(harness.store['Delete B'], undefined);
+    assert.notEqual(harness.store['Keep C'], undefined);
+    assert.equal(harness.getInventoryCount(), 2);
+    assert.equal(harness.getHeaderCount(), 1);
+    assert.deepEqual(
+        harness.calls.filter((call) => call.type === 'delete').map((call) => call.name),
+        ['Delete A', 'Delete B'],
+    );
+});
+
+test('batch delete reports verified partial success without hiding failed items', async () => {
+    const harness = makeTransactionHarness([
+        completeTheme('Delete A'),
+        completeTheme('Keep B'),
+    ], { deleteErrorName: 'Keep B' });
+
+    const result = await harness.transactions.deleteThemesVerified(['Delete A', 'Keep B']);
+
+    assert.equal(result.results[0].name, 'Delete A');
+    assert.equal(result.results[0].ok, true);
+    assert.equal(result.results[1].name, 'Keep B');
+    assert.equal(result.results[1].ok, false);
+    assert.equal(result.results[1].requestError instanceof Error, true);
+    assert.equal(harness.store['Delete A'], undefined);
+    assert.notEqual(harness.store['Keep B'], undefined);
+    assert.equal(harness.getInventoryCount(), 2);
+});
+
+test('batch delete read failure sends no delete requests', async () => {
+    const harness = makeTransactionHarness([
+        completeTheme('Keep A'),
+        completeTheme('Keep B'),
+    ], { inventoryErrorAt: 1 });
+
+    await assert.rejects(
+        harness.transactions.deleteThemesVerified(['Keep A', 'Keep B']),
+        (error) => error.code === 'batch-delete-read-failed',
+    );
+
+    assert.deepEqual(harness.calls.filter((call) => call.type === 'delete'), []);
+    assert.notEqual(harness.store['Keep A'], undefined);
+    assert.notEqual(harness.store['Keep B'], undefined);
 });
 
 test('rename delete failure restores the old theme and safely removes the new theme', async () => {

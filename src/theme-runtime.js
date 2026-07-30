@@ -7,6 +7,7 @@
         var api = opts.api;
         var fullThemeCache = {};
         var applyRequestId = 0;
+        var nativeEvictionSequence = 0;
 
         function makeError(code, message) {
             var error = new Error(message || code);
@@ -62,9 +63,22 @@
         }
 
         function evictNativeTheme(themeName, nativeThemeRef) {
-            if (schema.isPlainObject(nativeThemeRef) && nativeThemeRef.name === themeName) {
-                Object.keys(nativeThemeRef).forEach(function (key) { delete nativeThemeRef[key]; });
-                nativeThemeRef.name = '__theme_mgr_deleted__' + Date.now();
+            var target = schema.isPlainObject(nativeThemeRef) && nativeThemeRef.name === themeName
+                ? nativeThemeRef
+                : null;
+            if (target) {
+                try {
+                    if (typeof global.baibaokuHydrateTheme === 'function') {
+                        // Bind this exact object into SillyTavern's private theme array before
+                        // turning it into a tombstone. Batch inventories are detached JSON objects.
+                        global.baibaokuHydrateTheme(target);
+                    }
+                } catch (err) {
+                    console.warn('[美化管理] 同步移除酒馆原生主题缓存失败:', err);
+                }
+                Object.keys(target).forEach(function (key) { delete target[key]; });
+                nativeEvictionSequence += 1;
+                target.name = '__theme_mgr_deleted__' + Date.now() + '_' + nativeEvictionSequence;
             }
             forget(themeName);
         }

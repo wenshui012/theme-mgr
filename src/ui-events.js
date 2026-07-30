@@ -167,8 +167,8 @@
             if (span) span.textContent = LAUNCHER_NAME;
             btn.title = title;
             if (inner) inner.title = title;
-            btn.style.color = curTheme ? 'var(--SmartThemeQuoteColor)' : '';
-            if (inner) inner.style.color = curTheme ? 'var(--SmartThemeQuoteColor)' : '';
+            btn.style.removeProperty('color');
+            if (inner) inner.style.removeProperty('color');
         }
 
         function openLauncher() {
@@ -203,7 +203,6 @@
             var btn = document.createElement('div');
             btn.id = BTN_ID;
             btn.title = curTheme ? (LAUNCHER_NAME + '：' + curTheme) : LAUNCHER_NAME;
-            if (curTheme) btn.style.color = 'var(--SmartThemeQuoteColor)';
             if (menu.id === 'extensionsMenu') {
                 btn.className = 'extension_container interactable';
                 btn.tabIndex = 0;

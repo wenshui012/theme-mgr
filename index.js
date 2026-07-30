@@ -37,6 +37,7 @@
             'src/theme-runtime.js',
             'src/theme-transactions.js',
             'src/theme-transfer.js',
+            'src/theme-appearance.js',
             'src/storage.js',
             'src/image-tools.js',
             'src/styles.js',

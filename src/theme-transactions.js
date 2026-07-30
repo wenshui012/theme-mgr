@@ -383,6 +383,97 @@
                 });
         }
 
+        function deleteThemesVerified(themeNames, options) {
+            options = options || {};
+            var seen = {};
+            var names = (themeNames || []).map(function (name) {
+                return String(name || '').trim();
+            }).filter(function (name) {
+                if (!name || seen[name]) return false;
+                seen[name] = true;
+                return true;
+            });
+            if (names.length === 0) {
+                return Promise.resolve({ results: [], themes: [], initialInventory: [] });
+            }
+
+            var initialInventory = null;
+            var headers = null;
+            var requestErrors = {};
+            var nativeRefs = {};
+
+            return freshInventory(options.readReason || 'theme-manager-delete-batch-read')
+                .catch(function (err) {
+                    throw error('batch-delete-read-failed', err && err.message ? err.message : '批量删除前无法读取主题列表');
+                })
+                .then(function (themes) {
+                    initialInventory = themes || [];
+                    names.forEach(function (name) {
+                        nativeRefs[name] = runtime.findTheme(initialInventory, name);
+                    });
+                    var pendingNames = names.filter(function (name) { return Boolean(nativeRefs[name]); });
+                    if (pendingNames.length === 0) {
+                        return {
+                            results: names.map(function (name) {
+                                runtime.forget(name);
+                                return {
+                                    name: name,
+                                    ok: true,
+                                    alreadyAbsent: true,
+                                    requestError: null,
+                                    nativeThemeRef: null,
+                                };
+                            }),
+                            themes: initialInventory,
+                            initialInventory: initialInventory,
+                        };
+                    }
+
+                    return api.getPostHeaders()
+                        .catch(function (err) {
+                            throw error('batch-delete-headers-failed', err && err.message ? err.message : '批量删除无法取得请求头');
+                        })
+                        .then(function (postHeaders) {
+                            headers = postHeaders;
+                            return pendingNames.reduce(function (pending, name) {
+                                return pending.then(function () {
+                                    return api.deleteTheme(name, headers).catch(function (err) {
+                                        requestErrors[name] = err;
+                                    });
+                                });
+                            }, Promise.resolve());
+                        })
+                        .then(function () {
+                            runtime.invalidate(options.deleteReason || 'theme-manager-delete-batch-written');
+                            return freshInventory(options.verifyReason || 'theme-manager-delete-batch-verify')
+                                .catch(function (err) {
+                                    throw error('batch-delete-verify-failed', err && err.message ? err.message : '批量删除后无法验证主题列表', {
+                                        requestFailures: Object.keys(requestErrors),
+                                    });
+                                });
+                        })
+                        .then(function (finalInventory) {
+                            var results = names.map(function (name) {
+                                var remaining = runtime.findTheme(finalInventory, name);
+                                var ok = !remaining;
+                                if (ok) runtime.forget(name);
+                                return {
+                                    name: name,
+                                    ok: ok,
+                                    alreadyAbsent: !nativeRefs[name],
+                                    requestError: requestErrors[name] || null,
+                                    nativeThemeRef: nativeRefs[name] || null,
+                                };
+                            });
+                            return {
+                                results: results,
+                                themes: finalInventory,
+                                initialInventory: initialInventory,
+                            };
+                        });
+                });
+        }
+
         function collectThemeNames(themes, extraNames) {
             var seen = {};
             var names = [];
@@ -688,6 +779,7 @@
             saveVerifiedTheme: saveVerifiedTheme,
             saveVerifiedThemes: saveVerifiedThemes,
             deleteThemeVerified: deleteThemeVerified,
+            deleteThemesVerified: deleteThemesVerified,
             getRenameConflict: getRenameConflict,
             renameTheme: renameTheme,
             error: error,
