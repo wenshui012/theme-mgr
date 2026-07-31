@@ -31,6 +31,10 @@
     var themeRuntime = null;
     var themeTransactions = null;
     var themeTransfer = null;
+    var pairsApi = null;
+    var seriesApi = null;
+    var bindingsApi = null;
+    var bindingController = null;
     var appearanceApi = null;
     var backgroundsApi = null;
     var uiSheetsApi = null;
@@ -48,6 +52,10 @@
     var managerAppearanceObserver = null;
     var managerAppearanceTimer = null;
     var managerAppearanceSettleTimer = null;
+    var lastBindingWarningKey = '';
+    var pendingVerifiedManualThemes = {};
+    var colorSchemeWatcher = null;
+    var temporaryPairOverride = null;
     var frameAssetAnalysisCache = Object.create(null);
     var frameAssetAnalysisOrder = [];
     var IMAGE_FIELD_KEYS = { imageData: true, thumbData: true, previewData: true, fabImage: true };
@@ -78,6 +86,9 @@
             var ok = true;
             if (!ok || !modules.themeSchema || !modules.createThemeApi || !modules.createThemeRuntime ||
                 !modules.createThemeTransactions || !modules.createThemeTransfer ||
+                !modules.themePairs ||
+                !modules.themeSeries ||
+                !modules.themeBindings ||
                 !modules.themeAppearance ||
                 !modules.createBackgrounds ||
                 !modules.createUiSheets ||
@@ -94,6 +105,9 @@
                     if (!modules.createThemeRuntime) missing.push('theme-runtime.js');
                     if (!modules.createThemeTransactions) missing.push('theme-transactions.js');
                     if (!modules.createThemeTransfer) missing.push('theme-transfer.js');
+                    if (!modules.themePairs) missing.push('theme-pairs.js');
+                    if (!modules.themeSeries) missing.push('theme-series.js');
+                    if (!modules.themeBindings) missing.push('theme-bindings.js');
                     if (!modules.themeAppearance) missing.push('theme-appearance.js');
                     if (!modules.createBackgrounds) missing.push('backgrounds.js');
                     if (!modules.createUiSheets) missing.push('ui-sheets.js');
@@ -117,6 +131,44 @@
                 runtime: themeRuntime,
                 transactions: themeTransactions,
             });
+            pairsApi = modules.themePairs;
+            seriesApi = modules.themeSeries;
+            bindingsApi = modules.themeBindings;
+            bindingController = bindingsApi.createController({
+                load: load,
+                save: save,
+                getContext: function () {
+                    try {
+                        return global.SillyTavern && typeof global.SillyTavern.getContext === 'function'
+                            ? global.SillyTavern.getContext()
+                            : {};
+                    } catch (e) {
+                        return {};
+                    }
+                },
+                getCurrentThemeName: getCurrentThemeName,
+                makeTargetForTheme: function (themeName) {
+                    return pairsApi.targetForTheme(load(), themeName);
+                },
+                resolveTargetTheme: function (target) {
+                    return resolveLogicalTargetTheme(target);
+                },
+                beforeAutomaticReconcile: function () {
+                    clearTemporaryPairOverride();
+                },
+                applyTheme: applyTheme,
+                cancelApply: function () {
+                    if (themeRuntime) themeRuntime.beginApply();
+                },
+                onApplied: function () {
+                    lastBindingWarningKey = '';
+                    renderGrid();
+                    renderBottomStatus();
+                    updateBtn();
+                },
+                onError: handleBindingApplyError,
+            });
+            bindColorSchemeListener();
             appearanceApi = modules.themeAppearance;
             uiSheetsApi = modules.createUiSheets({
                 getPopupLayer: getPopupLayer,
@@ -183,6 +235,9 @@
     // {
     //   themeMeta: { "主题名": { category, tags[], starred, imageData, useCount, lastUsed, author, description } },
     //   categories: [],
+    //   dayNight: { pairs: { id: { name, dayTheme, nightTheme, meta } } },
+    //   series: { groups: { id: { name, category, members[] } } },
+    //   bindings: { characters, chats, manualTarget },
     //   showBall: true,
     //   fabImage: '',
     //   fabSize: 38,
@@ -201,6 +256,12 @@
         if (typeof d.followThemePreviewShape !== 'boolean') d.followThemePreviewShape = false;
         if (typeof d.simplifyGridText !== 'boolean') d.simplifyGridText = false;
         if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
+        if (pairsApi) pairsApi.ensureState(d);
+        else if (!d.dayNight || typeof d.dayNight !== 'object') d.dayNight = { version: 1, pairs: {} };
+        if (seriesApi) seriesApi.ensureState(d);
+        else if (!d.series || typeof d.series !== 'object') d.series = { version: 1, groups: {} };
+        if (bindingsApi) bindingsApi.ensureState(d);
+        else if (!d.bindings || typeof d.bindings !== 'object') d.bindings = { version: 2, characters: {}, chats: {}, manualTheme: '', manualTarget: null };
         if (typeof d.fabImage !== 'string') d.fabImage = '';
         if (typeof d.fabSize !== 'number') d.fabSize = 38;
         if (typeof d.bgPickerSize !== 'number') d.bgPickerSize = 132;
@@ -232,7 +293,10 @@
             showThemeAvatarFrame: false,
             followThemePreviewShape: false,
             simplifyGridText: false,
-            autoHideHeader: false
+            autoHideHeader: false,
+            dayNight: { version: 1, pairs: {} },
+            series: { version: 1, groups: {} },
+            bindings: { version: 2, characters: {}, chats: {}, manualTheme: '', manualTarget: null }
         };
     }
 
@@ -242,6 +306,149 @@
         if (d.themeMeta[name].thumbData === undefined) d.themeMeta[name].thumbData = null;
         if (d.themeMeta[name].crop === undefined) d.themeMeta[name].crop = null;
         return d.themeMeta[name];
+    }
+
+    function getSystemDayNightVariant() {
+        if (colorSchemeWatcher) return colorSchemeWatcher.getVariant();
+        try {
+            return typeof global.matchMedia === 'function' &&
+                global.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'night'
+                : 'day';
+        } catch (e) {
+            return 'day';
+        }
+    }
+
+    function getPreferredPairVariant(pairId) {
+        if (temporaryPairOverride && temporaryPairOverride.pairId === pairId) {
+            return temporaryPairOverride.variant;
+        }
+        return getSystemDayNightVariant();
+    }
+
+    function clearTemporaryPairOverride() {
+        temporaryPairOverride = null;
+    }
+
+    function setTemporaryPairOverride(pairId, variant) {
+        temporaryPairOverride = {
+            pairId: String(pairId || ''),
+            variant: variant === 'night' ? 'night' : 'day',
+        };
+    }
+
+    function resolveLogicalTargetTheme(target) {
+        if (!pairsApi) return bindingsApi ? bindingsApi.getThemeName(target) : '';
+        var variant = target && target.kind === 'day-night'
+            ? getPreferredPairVariant(target.pairId)
+            : getSystemDayNightVariant();
+        return pairsApi.resolveTargetTheme(load(), target, variant);
+    }
+
+    function bindColorSchemeListener() {
+        if (colorSchemeWatcher || !pairsApi || typeof pairsApi.createColorSchemeWatcher !== 'function') return;
+        colorSchemeWatcher = pairsApi.createColorSchemeWatcher({
+            matchMedia: typeof global.matchMedia === 'function'
+                ? function (query) { return global.matchMedia(query); }
+                : null,
+            document: global.document,
+            window: global,
+            intervalMs: 1000,
+            onChange: function () {
+                clearTemporaryPairOverride();
+                if (bindingController) bindingController.reconcile();
+                renderGrid();
+                renderBottomStatus();
+            },
+        });
+        colorSchemeWatcher.start();
+    }
+
+    function getLogicalItems(d) {
+        return pairsApi
+            ? pairsApi.buildLogicalItems(d, stThemeList)
+            : stThemeList.map(function (name) {
+                return { key: 'theme:' + name, kind: 'theme', name: name, themeName: name, themeNames: [name], meta: d.themeMeta[name] || {} };
+            });
+    }
+
+    function getLogicalItem(ref, d) {
+        d = d || load();
+        return pairsApi
+            ? pairsApi.getLogicalItem(d, stThemeList, ref)
+            : getLogicalItems(d).find(function (item) { return item.key === ref || item.themeName === ref; }) || null;
+    }
+
+    function getItemMeta(d, item) {
+        if (!item) return {};
+        if (item.kind === 'pair') {
+            var pair = pairsApi.getPair(d, item.pairId);
+            return pair ? pair.meta : {};
+        }
+        return getMeta(d, item.themeName);
+    }
+
+    function getItemDisplayTheme(d, item, variant) {
+        if (!item) return '';
+        if (item.kind !== 'pair') return item.themeName;
+        return pairsApi.getVariantTheme(d, item.pairId, variant || getPreferredPairVariant(item.pairId));
+    }
+
+    function getCurrentLogicalItem(d) {
+        d = d || load();
+        return getLogicalItem(getCurrentThemeName(), d);
+    }
+
+    function isItemActive(item, currentTheme) {
+        return !!item && item.themeNames.indexOf(currentTheme) !== -1;
+    }
+
+    function getItemTarget(item) {
+        return pairsApi
+            ? pairsApi.targetForItem(item)
+            : bindingsApi.makeThemeTarget(item && item.themeName);
+    }
+
+    function expandItemThemeNames(items) {
+        var names = [];
+        (items || []).forEach(function (item) {
+            (item.themeNames || []).forEach(function (name) {
+                if (name && names.indexOf(name) === -1) names.push(name);
+            });
+        });
+        return names;
+    }
+
+    function getSeriesForItem(d, item) {
+        return seriesApi && item ? seriesApi.findSeriesByTarget(d, getItemTarget(item)) : null;
+    }
+
+    function displayCategoryMatches(category, cat) {
+        category = typeof category === 'string' ? category : '';
+        if (cat === '__all__') return true;
+        if (cat === '__uncategorized__') return !category;
+        return category === cat;
+    }
+
+    function getItemsForDisplayCategory(d, cat) {
+        return getLogicalItems(d).filter(function (item) {
+            var group = getSeriesForItem(d, item);
+            var category = group ? group.category : getItemMeta(d, item).category;
+            return displayCategoryMatches(category, cat);
+        });
+    }
+
+    function itemMatchesSearch(d, item, query) {
+        if (!query) return true;
+        var q = String(query).toLowerCase();
+        if (item.name.toLowerCase().indexOf(q) !== -1) return true;
+        if (item.themeNames.some(function (name) { return name.toLowerCase().indexOf(q) !== -1; })) return true;
+        var meta = getItemMeta(d, item);
+        if (!meta) return false;
+        if (meta.author && meta.author.toLowerCase().indexOf(q) !== -1) return true;
+        if (meta.tags && meta.tags.some(function (tag) { return String(tag).toLowerCase().indexOf(q) !== -1; })) return true;
+        return !!(meta.description && meta.description.toLowerCase().indexOf(q) !== -1);
     }
 
     function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
@@ -567,6 +774,9 @@
         document.addEventListener('change', function (e) {
             if (!e.target || e.target.id !== 'themes') return;
             var name = getThemeNameFromControl(e.target);
+            if (bindingController && name && !pendingVerifiedManualThemes[name] && !bindingController.isAutomatedThemeChange(name)) {
+                bindingController.recordManualTheme(name);
+            }
             var verifiedTheme = name ? themeRuntime.getCached(name) : null;
             if (!verifiedTheme || hydrateVerifiedNativeTheme(verifiedTheme)) return;
             applyUsableNativeThemeFallback(verifiedTheme, function (ok) {
@@ -672,19 +882,53 @@
 
     function migrateThemeMetaName(oldName, newName) {
         var dd = load();
+        var changed = false;
         if (dd.themeMeta[oldName]) {
             dd.themeMeta[newName] = dd.themeMeta[oldName];
             delete dd.themeMeta[oldName];
-            save(dd);
+            changed = true;
         }
+        if (pairsApi && pairsApi.renameThemeReferences(dd, oldName, newName) > 0) changed = true;
+        if (seriesApi && seriesApi.renameThemeReferences(dd, oldName, newName) > 0) changed = true;
+        if (bindingsApi && bindingsApi.renameThemeReferences(dd, oldName, newName) > 0) changed = true;
+        if (changed) save(dd);
+    }
+
+    function cleanupRemovedThemeData(dd, themeNames) {
+        themeNames = Array.isArray(themeNames) ? themeNames : [themeNames];
+        var changed = false;
+        var migrations = pairsApi ? pairsApi.removeThemeReferences(dd, themeNames) : [];
+        migrations.forEach(function (migration) {
+            if (seriesApi) {
+                var seriesMigration = seriesApi.replacePairReference(
+                    dd,
+                    migration.pairId,
+                    migration.replacementTheme ? [migration.replacementTheme] : []
+                );
+                if (seriesMigration && !seriesMigration.ok) {
+                    seriesMigration = seriesApi.replacePairReference(dd, migration.pairId, []);
+                }
+                if (seriesMigration && seriesMigration.changed) changed = true;
+            }
+            if (bindingsApi && bindingsApi.replacePairReferences(dd, migration.pairId, migration.replacementTheme) > 0) {
+                changed = true;
+            }
+            changed = true;
+        });
+        themeNames.forEach(function (themeName) {
+            if (dd.themeMeta[themeName]) {
+                delete dd.themeMeta[themeName];
+                changed = true;
+            }
+            if (bindingsApi && bindingsApi.removeThemeReferences(dd, themeName) > 0) changed = true;
+        });
+        if (seriesApi && seriesApi.removeThemeReferences(dd, themeNames) > 0) changed = true;
+        return changed;
     }
 
     function removeThemeMetaName(themeName) {
         var dd = load();
-        if (dd.themeMeta[themeName]) {
-            delete dd.themeMeta[themeName];
-            save(dd);
-        }
+        if (cleanupRemovedThemeData(dd, [themeName])) save(dd);
     }
 
     function syncCurrentThemeRenameState(oldName, newName, wasCurrent) {
@@ -798,15 +1042,12 @@
                 var removed = result.results.filter(function (item) { return item.ok; });
                 var failed = result.results.filter(function (item) { return !item.ok; });
                 var dd = load();
-                var metaChanged = false;
+                var removedNames = removed.map(function (item) { return item.name; });
+                var metaChanged = cleanupRemovedThemeData(dd, removedNames);
 
                 removed.forEach(function (item) {
                     themeRuntime.evictNativeTheme(item.name, item.nativeThemeRef);
                     removeThemeOption(item.name);
-                    if (dd.themeMeta[item.name]) {
-                        delete dd.themeMeta[item.name];
-                        metaChanged = true;
-                    }
                 });
                 if (metaChanged) save(dd);
 
@@ -951,9 +1192,33 @@
             if (!theme || !theme.name) return;
             var m = d.themeMeta[theme.name];
             var clean = cleanThemeMetaForBundle(m);
+            var pair = pairsApi ? pairsApi.findPairByTheme(d, theme.name) : null;
+            if (pair) clean = Object.assign(clean, cleanThemeMetaForBundle(pair.meta));
             if (Object.keys(clean).length > 0) meta[theme.name] = clean;
         });
         return meta;
+    }
+
+    function buildSeriesManifestForBundle(data, themes, exportedPairs) {
+        if (!seriesApi) return { version: 1, groups: [] };
+        return {
+            version: 1,
+            groups: seriesApi.exportSeries(
+                data,
+                (themes || []).map(function (theme) { return theme.name; }),
+                (exportedPairs || []).map(function (pair) { return pair.id; })
+            ),
+        };
+    }
+
+    function countSeriesForItems(data, items) {
+        if (!seriesApi) return 0;
+        var ids = {};
+        (items || []).forEach(function (item) {
+            var group = getSeriesForItem(data, item);
+            if (group) ids[group.id] = true;
+        });
+        return Object.keys(ids).length;
     }
 
     function extractThemeObjects(parsed, sourceName) {
@@ -977,12 +1242,31 @@
         var themes = extractThemeObjects(parsed, sourceName);
         var metaSrc = {};
         var cats = [];
+        var dayNightPairs = [];
+        var seriesGroups = [];
 
         if (parsed && parsed.themeMeta && typeof parsed.themeMeta === 'object') metaSrc = parsed.themeMeta;
         else if (parsed && parsed.meta && parsed.meta.themeMeta && typeof parsed.meta.themeMeta === 'object') metaSrc = parsed.meta.themeMeta;
 
         if (parsed && Array.isArray(parsed.categories)) cats = parsed.categories.slice();
         else if (parsed && parsed.meta && Array.isArray(parsed.meta.categories)) cats = parsed.meta.categories.slice();
+        if (parsed && Array.isArray(parsed.dayNightPairs)) dayNightPairs = parsed.dayNightPairs.slice();
+        else if (parsed && parsed.dayNight && parsed.dayNight.pairs) {
+            var rawPairs = parsed.dayNight.pairs;
+            dayNightPairs = Array.isArray(rawPairs)
+                ? rawPairs.slice()
+                : Object.keys(rawPairs).map(function (id) {
+                    var pair = cloneJson(rawPairs[id]);
+                    if (pair && !pair.id) pair.id = id;
+                    return pair;
+                });
+        }
+        if (parsed && parsed.seriesManifest) {
+            var manifest = parsed.seriesManifest;
+            if (Array.isArray(manifest)) seriesGroups = manifest.slice();
+            else if (Array.isArray(manifest.groups)) seriesGroups = manifest.groups.slice();
+            else if (Array.isArray(manifest.series)) seriesGroups = manifest.series.slice();
+        }
 
         var metaByName = {};
         themes.forEach(function (theme) {
@@ -990,7 +1274,14 @@
             if (m) metaByName[theme.name] = cleanThemeMetaForBundle(m);
         });
 
-        return { themes: themes, themeMeta: metaByName, categories: cats, sourceName: sourceName };
+        return {
+            themes: themes,
+            themeMeta: metaByName,
+            categories: cats,
+            dayNightPairs: dayNightPairs,
+            seriesGroups: seriesGroups,
+            sourceName: sourceName,
+        };
     }
 
     function mergeThemePayload(target, payload) {
@@ -999,7 +1290,71 @@
         payload.categories.forEach(function (cat) {
             if (cat && target.categories.indexOf(cat) === -1) target.categories.push(cat);
         });
+        if (!Array.isArray(target.dayNightPairs)) target.dayNightPairs = [];
+        (payload.dayNightPairs || []).forEach(function (pair) { target.dayNightPairs.push(pair); });
+        if (!Array.isArray(target.seriesGroups)) target.seriesGroups = [];
+        (payload.seriesGroups || []).forEach(function (group) { target.seriesGroups.push(group); });
         return target;
+    }
+
+    function getPayloadThemeCategory(payload, themeName) {
+        var category = payload.themeMeta[themeName] && payload.themeMeta[themeName].category
+            ? String(payload.themeMeta[themeName].category)
+            : '';
+        var pairById = {};
+        (payload.dayNightPairs || []).forEach(function (pair) {
+            if (pair && pair.id) pairById[String(pair.id)] = pair;
+        });
+        (payload.seriesGroups || []).some(function (group) {
+            if (!group || !Array.isArray(group.members)) return false;
+            var contains = group.members.some(function (member) {
+                if (!member || typeof member !== 'object') return false;
+                if (member.kind === 'theme') return String(member.themeName || '') === themeName;
+                if (member.kind !== 'day-night') return false;
+                var pair = pairById[String(member.pairId || '')];
+                return !!pair && (pair.dayTheme === themeName || pair.nightTheme === themeName);
+            });
+            if (!contains) return false;
+            category = typeof group.category === 'string' ? group.category : '';
+            return true;
+        });
+        return category;
+    }
+
+    function filterImportedSeriesGroups(groups, selectedThemeNames, selectedPairIds, forcedCategory) {
+        var themes = {};
+        var pairs = {};
+        (selectedThemeNames || []).forEach(function (name) { themes[name] = true; });
+        (selectedPairIds || []).forEach(function (id) { pairs[id] = true; });
+        return (groups || []).map(function (raw) {
+            if (!raw || !Array.isArray(raw.members) || raw.members.length < 2) return null;
+            var complete = raw.members.every(function (member) {
+                if (!member || typeof member !== 'object') return false;
+                if (member.kind === 'theme') return !!themes[member.themeName];
+                if (member.kind === 'day-night') return !!pairs[member.pairId];
+                return false;
+            });
+            if (!complete) return null;
+            var copy = cloneJson(raw);
+            if (forcedCategory !== null && forcedCategory !== undefined) copy.category = forcedCategory;
+            return copy;
+        }).filter(Boolean);
+    }
+
+    function countPartiallySelectedSeriesGroups(groups, selectedThemeNames, selectedPairIds) {
+        var themes = {};
+        var pairs = {};
+        (selectedThemeNames || []).forEach(function (name) { themes[name] = true; });
+        (selectedPairIds || []).forEach(function (id) { pairs[id] = true; });
+        return (groups || []).filter(function (group) {
+            if (!group || !Array.isArray(group.members) || group.members.length < 2) return false;
+            var matched = group.members.filter(function (member) {
+                if (!member || typeof member !== 'object') return false;
+                return member.kind === 'theme' ? !!themes[member.themeName] :
+                    (member.kind === 'day-night' ? !!pairs[member.pairId] : false);
+            }).length;
+            return matched > 0 && matched < group.members.length;
+        }).length;
     }
 
     function mergeImportedThemeMeta(themeNames, metaByName, categories, forceCategory) {
@@ -1036,9 +1391,11 @@
             if (counts[cat] === undefined) counts[cat] = 0;
         }
         payload.categories.forEach(function (cat) { if (cat) addCat(String(cat)); });
+        (payload.seriesGroups || []).forEach(function (group) {
+            if (group && group.category) addCat(String(group.category));
+        });
         payload.themes.forEach(function (theme) {
-            var meta = payload.themeMeta[theme.name] || {};
-            var cat = meta.category ? String(meta.category) : '';
+            var cat = getPayloadThemeCategory(payload, theme.name);
             if (cat) {
                 addCat(cat);
                 counts[cat] = (counts[cat] || 0) + 1;
@@ -1121,8 +1478,7 @@
             var selectedThemes = [];
             var selectedMeta = {};
             payload.themes.forEach(function (theme) {
-                var meta = payload.themeMeta[theme.name] || {};
-                var cat = meta.category || '';
+                var cat = getPayloadThemeCategory(payload, theme.name);
                 var shouldImport = info.categories.length === 0 || (cat && selected[cat]) || (!cat && includeUncat);
                 if (shouldImport) {
                     selectedThemes.push(theme);
@@ -1131,12 +1487,26 @@
                 }
             });
             if (selectedThemes.length === 0) { toast('请至少选择一个分类', true); return; }
+            var selectedThemeNames = selectedThemes.map(function (theme) { return theme.name; });
+            var selectedPairs = (payload.dayNightPairs || []).filter(function (pair) {
+                return pair && selectedThemeNames.indexOf(pair.dayTheme) !== -1 && selectedThemeNames.indexOf(pair.nightTheme) !== -1;
+            });
+            var selectedPairIds = selectedPairs.map(function (pair) { return pair.id; });
+            var selectedSeriesGroups = filterImportedSeriesGroups(
+                payload.seriesGroups,
+                selectedThemeNames,
+                selectedPairIds,
+                targetCat === '__keep__' ? null : targetCat
+            );
             closeSheet(sheet);
             importThemeObjects(selectedThemes, {
                 failText: opts.failText,
                 metaByName: selectedMeta,
                 categories: targetCat === '__keep__' ? selectedCats : (targetCat ? [targetCat] : []),
                 forceCategory: targetCat !== '__keep__',
+                dayNightPairs: selectedPairs,
+                seriesGroups: selectedSeriesGroups,
+                skippedSeriesGroups: countPartiallySelectedSeriesGroups(payload.seriesGroups, selectedThemeNames, selectedPairIds),
             });
         });
     }
@@ -1181,6 +1551,26 @@
                 });
                 var okNames = successful.map(function (res) { return res.theme.name; });
                 if (okNames.length > 0) mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories, opts.forceCategory);
+                var pairImport = { imported: 0, skipped: 0, idMap: {}, skippedIds: [] };
+                var seriesImport = { imported: 0, skipped: 0 };
+                var relationData = load();
+                var relationThemeNames = okNames.slice();
+                if (pairsApi && opts.dayNightPairs && opts.dayNightPairs.length > 0) {
+                    pairImport = pairsApi.importPairs(relationData, opts.dayNightPairs, relationThemeNames);
+                }
+                if (seriesApi && opts.seriesGroups && opts.seriesGroups.length > 0) {
+                    seriesImport = seriesApi.importSeries(relationData, opts.seriesGroups, {
+                        availableThemeNames: relationThemeNames,
+                        availablePairIds: Object.keys(pairsApi.ensureState(relationData).pairs),
+                        pairIdMap: pairImport.idMap || {},
+                        skippedPairIds: pairImport.skippedIds || [],
+                        requirePairIdMap: true,
+                    });
+                }
+                if (pairImport.imported > 0 || seriesImport.imported > 0) save(relationData);
+                var skippedSeriesCount = (opts.skippedSeriesGroups || 0) + (seriesImport.skipped || 0);
+                var seriesImportText = (seriesImport.imported ? '，恢复 ' + seriesImport.imported + ' 个系列' : '') +
+                    (skippedSeriesCount ? '；' + skippedSeriesCount + ' 个系列未新增（可能已存在、成员缺失或归属冲突）' : '');
 
                 if (outcome.legacyPartials && outcome.legacyPartials.length > 0) {
                     console.info('[美化管理] 旧版部分主题已使用同一份固定 baseline 按 SillyTavern 语义补齐:', outcome.legacyPartials);
@@ -1192,11 +1582,13 @@
                     if (failed.length > 0) {
                         toast('导入完成：成功 ' + successful.length + ' 个；失败并已保护旧主题：' + failed.map(function (res) {
                             return res.theme.name;
-                        }).join('、'), true);
+                        }).join('、') + seriesImportText, true);
                     } else if (successful.length === 1) {
-                        toast('✅ 已导入并验证美化：' + successful[0].theme.name);
+                        toast('✅ 已导入并验证美化：' + successful[0].theme.name + seriesImportText);
                     } else {
-                        toast('✅ 已导入并验证美化：' + successful.length + ' 个');
+                        toast('✅ 已导入并验证美化：' + successful.length + ' 个' +
+                            (pairImport.imported ? '，恢复 ' + pairImport.imported + ' 组日夜美化' : '') +
+                            seriesImportText);
                     }
                 });
             })
@@ -1228,6 +1620,37 @@
                 console.warn('[美化管理] 切换美化失败:', err);
                 if (cb) cb(false, err && err.code ? err.code : 'load-failed');
             });
+    }
+
+    function recordManualTheme(themeName) {
+        if (bindingController) bindingController.recordManualTheme(themeName);
+    }
+
+    function applyManualTheme(themeName, cb) {
+        pendingVerifiedManualThemes[themeName] = (pendingVerifiedManualThemes[themeName] || 0) + 1;
+        applyTheme(themeName, function (ok, reason) {
+            pendingVerifiedManualThemes[themeName] -= 1;
+            if (pendingVerifiedManualThemes[themeName] <= 0) delete pendingVerifiedManualThemes[themeName];
+            if (ok) recordManualTheme(themeName);
+            if (cb) cb(ok, reason);
+        });
+    }
+
+    function handleBindingApplyError(themeName, reason, resolution) {
+        if (reason === 'superseded') return;
+        var context = resolution && resolution.context ? resolution.context : {};
+        var key = [
+            resolution && resolution.scope ? resolution.scope : 'manual',
+            context.chatKey || context.characterKey || '',
+            themeName,
+            reason,
+        ].join('|');
+        if (lastBindingWarningKey === key) return;
+        lastBindingWarningKey = key;
+        var prefix = resolution && resolution.scope === 'chat'
+            ? '当前聊天绑定的'
+            : (resolution && resolution.scope === 'character' ? '当前角色绑定的' : '要恢复的全局');
+        toast(prefix + '美化「' + themeName + '」暂时无法应用，已保留当前美化', true);
     }
 
     function applyPreparedNativeTheme(prepared, requestId, isCurrent) {
@@ -1412,16 +1835,22 @@
     var searchOpen = false;
     var sortOpen = false;
     var gridSizeSaveTimer = null;
+    var expandedSeriesId = '';
+    var seriesScrollPositions = {};
+    var seriesResizeBound = false;
+    var seriesResizeTimer = null;
+    var seriesGridResizeObserver = null;
+    var lastSeriesColumnCount = 0;
 
-    function sortThemes(list, mode, d) {
+    function sortItems(list, mode, d) {
         var sorted = list.slice();
         switch (mode) {
-            case 'name': sorted.sort(function (a, b) { return a.localeCompare(b, 'zh'); }); break;
-            case 'recent': sorted.sort(function (a, b) { return ((d.themeMeta[b] || {}).lastUsed || 0) - ((d.themeMeta[a] || {}).lastUsed || 0); }); break;
-            case 'freq': sorted.sort(function (a, b) { return ((d.themeMeta[b] || {}).useCount || 0) - ((d.themeMeta[a] || {}).useCount || 0); }); break;
+            case 'name': sorted.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); }); break;
+            case 'recent': sorted.sort(function (a, b) { return (getItemMeta(d, b).lastUsed || 0) - (getItemMeta(d, a).lastUsed || 0); }); break;
+            case 'freq': sorted.sort(function (a, b) { return (getItemMeta(d, b).useCount || 0) - (getItemMeta(d, a).useCount || 0); }); break;
             case 'starred': sorted.sort(function (a, b) {
-                var sa = (d.themeMeta[a] || {}).starred ? 1 : 0, sb = (d.themeMeta[b] || {}).starred ? 1 : 0;
-                return sb - sa || a.localeCompare(b, 'zh');
+                var sa = getItemMeta(d, a).starred ? 1 : 0, sb = getItemMeta(d, b).starred ? 1 : 0;
+                return sb - sa || a.name.localeCompare(b.name, 'zh');
             }); break;
         }
         return sorted;
@@ -1435,7 +1864,58 @@
 
     function applyGridCardSize(size) {
         var area = document.getElementById('tm-grid-area');
-        if (area) area.style.setProperty('--tm-grid-card-min', normalizeGridCardSize(size) + 'px');
+        if (area) {
+            area.style.setProperty('--tm-grid-card-min', normalizeGridCardSize(size) + 'px');
+            syncSeriesCardWidth(area, size);
+        }
+    }
+
+    function getGridLayoutMetrics(area, size) {
+        var gap = 9;
+        var min = normalizeGridCardSize(size);
+        var width = area ? area.clientWidth : 0;
+        if (area && global.getComputedStyle) {
+            var computed = global.getComputedStyle(area);
+            width -= (parseFloat(computed.paddingLeft) || 0) + (parseFloat(computed.paddingRight) || 0);
+        }
+        width = Math.max(min, width || min);
+        var columns = Math.max(1, Math.floor((width + gap) / (min + gap)));
+        var cardWidth = Math.max(min, (width - gap * (columns - 1)) / columns);
+        return { width: width, gap: gap, columns: columns, cardWidth: cardWidth };
+    }
+
+    function syncSeriesCardWidth(area, size) {
+        if (!area) return;
+        var metrics = getGridLayoutMetrics(area, size);
+        area.style.setProperty('--tm-series-card-width', metrics.cardWidth.toFixed(2) + 'px');
+        lastSeriesColumnCount = metrics.columns;
+    }
+
+    function scheduleSeriesResizeCheck() {
+        if (seriesResizeTimer) clearTimeout(seriesResizeTimer);
+        seriesResizeTimer = setTimeout(function () {
+            seriesResizeTimer = null;
+            var area = document.getElementById('tm-grid-area');
+            if (!area) return;
+            var d = load();
+            var nextColumns = getGridLayoutMetrics(area, d.gridCardSize).columns;
+            if (nextColumns !== lastSeriesColumnCount) renderGrid();
+            else syncSeriesCardWidth(area, d.gridCardSize);
+        }, 100);
+    }
+
+    function bindSeriesResizeListener() {
+        if (!seriesResizeBound && global.addEventListener) {
+            seriesResizeBound = true;
+            global.addEventListener('resize', scheduleSeriesResizeCheck);
+        }
+        if (seriesGridResizeObserver) seriesGridResizeObserver.disconnect();
+        seriesGridResizeObserver = null;
+        var area = document.getElementById('tm-grid-area');
+        if (area && typeof ResizeObserver === 'function') {
+            seriesGridResizeObserver = new ResizeObserver(scheduleSeriesResizeCheck);
+            seriesGridResizeObserver.observe(area);
+        }
     }
 
     function adjustGridCardSize(delta) {
@@ -1448,6 +1928,7 @@
         }
         d.gridCardSize = next;
         applyGridCardSize(next);
+        renderGrid();
         if (gridSizeSaveTimer) clearTimeout(gridSizeSaveTimer);
         gridSizeSaveTimer = setTimeout(function () {
             gridSizeSaveTimer = null;
@@ -2632,8 +3113,12 @@
     // ── 打开全屏主界面 ────────────────────────────────────────
     function openPopup() {
         if (document.querySelector('.tm-overlay')) return;
+        var schemeChanged = colorSchemeWatcher ? colorSchemeWatcher.check('manager-open') : false;
+        clearTemporaryPairOverride();
+        if (bindingController && !schemeChanged) bindingController.reconcile();
         injectStyles();
         batchMode = false; batchSelected = []; batchDeleting = false; searchQuery = ''; searchOpen = false; sortOpen = false;
+        expandedSeriesId = ''; seriesScrollPositions = {}; lastSeriesColumnCount = 0;
 
         var ov = document.createElement('div');
         ov.className = 'tm-overlay ' + (darkMode ? 'tm-dark' : 'tm-light');
@@ -2674,6 +3159,7 @@
             '</div>';
 
         document.body.appendChild(ov);
+        bindSeriesResizeListener();
         syncManagerAppearance();
         bindManagerAppearanceObserver();
 
@@ -2786,6 +3272,10 @@
 
     function closePopup() {
         disconnectManagerAppearanceObserver();
+        if (seriesGridResizeObserver) seriesGridResizeObserver.disconnect();
+        seriesGridResizeObserver = null;
+        if (seriesResizeTimer) clearTimeout(seriesResizeTimer);
+        seriesResizeTimer = null;
         var ov = document.querySelector('.tm-overlay'); if (ov) ov.parentNode.removeChild(ov);
     }
 
@@ -2860,38 +3350,255 @@
     }
 
     // ── 网格 ─────────────────────────────────────────────────
+    function buildGridCardHtml(item, d, curTheme) {
+        var meta = getItemMeta(d, item);
+        var displayTheme = getItemDisplayTheme(d, item);
+        var variantMeta = d.themeMeta[displayTheme] || {};
+        var isActive = isItemActive(item, curTheme);
+        var selected = batchSelected.indexOf(item.key) !== -1;
+        var checkBox = batchMode
+            ? '<div class="tm-card-check' + (selected ? ' checked' : '') + '" data-key="' + esc(item.key) + '"><i class="fa-solid fa-check"></i></div>'
+            : '';
+        var badge = (isActive && !batchMode) ? '<div class="tm-badge-on"><i class="fa-solid fa-check"></i></div>' : '';
+        var starBadge = (meta.starred && !batchMode) ? '<div class="tm-badge-star"><i class="fa-solid fa-star"></i></div>' : '';
+        var freqBadge = (d.showFreq !== false && (meta.useCount || 0) > 5 && !batchMode)
+            ? '<div class="tm-badge-freq">' + meta.useCount + '次</div>'
+            : '';
+        var previewImage = variantMeta.thumbData || variantMeta.imageData;
+        var imgContent = previewImage
+            ? '<img src="' + esc(previewImage) + '" alt="' + esc(item.name) + '" loading="lazy" decoding="async" />'
+            : '<div class="tm-card-noimg"><i class="fa-solid fa-palette"></i><span>' + esc(item.name.slice(0, 6)) + '</span></div>';
+        var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-key="' + esc(item.key) + '" title="操作"><i class="fa-solid fa-ellipsis"></i></button>';
+        var tagText = (meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || '');
+
+        return '<div class="tm-card' + (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + '" data-key="' + esc(item.key) + '">' +
+            '<div class="tm-card-img">' + checkBox + imgContent + badge + starBadge + freqBadge + menuBtn + '</div>' +
+            '<div class="tm-card-info"><div class="tm-card-name">' + esc(item.name) + '</div>' +
+            (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
+            '</div></div>';
+    }
+
+    function buildSeriesLayoutUnits(d, sortedItems, cat, query) {
+        var groups = {};
+        var membership = seriesApi ? seriesApi.getMembershipMap(d) : {};
+        if (seriesApi) seriesApi.listSeries(d).forEach(function (group) { groups[group.id] = group; });
+        var unitBySeries = {};
+        var rawUnits = [];
+
+        sortedItems.forEach(function (item) {
+            var targetKey = seriesApi ? seriesApi.targetKey(getItemTarget(item)) : '';
+            var seriesId = targetKey ? membership[targetKey] : '';
+            var group = seriesId ? groups[seriesId] : null;
+            if (!group) {
+                rawUnits.push({ type: 'item', item: item });
+                return;
+            }
+            var unit = unitBySeries[group.id];
+            if (!unit) {
+                unit = { type: 'series', group: group, items: [] };
+                unitBySeries[group.id] = unit;
+                rawUnits.push(unit);
+            }
+            unit.items.push(item);
+        });
+
+        var filtered = rawUnits.filter(function (unit) {
+            if (unit.type === 'item') {
+                if (!displayCategoryMatches(getItemMeta(d, unit.item).category, cat)) return false;
+                return itemMatchesSearch(d, unit.item, query);
+            }
+            if (!displayCategoryMatches(unit.group.category, cat)) return false;
+            if (!query) return true;
+            var q = String(query).toLowerCase();
+            return unit.group.name.toLowerCase().indexOf(q) !== -1 || unit.items.some(function (item) {
+                return itemMatchesSearch(d, item, query);
+            });
+        });
+        var displayedItems = [];
+        filtered.forEach(function (unit) {
+            if (unit.type === 'item') displayedItems.push(unit.item);
+            else unit.items.forEach(function (item) { displayedItems.push(item); });
+        });
+        return { units: filtered, displayedItems: displayedItems };
+    }
+
+    function alignSeriesUnitsForGrid(units, columns) {
+        var output = [];
+        var rowCards = [];
+        var deferredSeries = [];
+        function flushRow() {
+            rowCards.splice(0).forEach(function (unit) { output.push(unit); });
+            deferredSeries.splice(0).forEach(function (unit) { output.push(unit); });
+        }
+        (units || []).forEach(function (unit) {
+            if (unit.type === 'item') {
+                rowCards.push(unit);
+                if (rowCards.length >= columns) flushRow();
+                return;
+            }
+            if (rowCards.length === 0) output.push(unit);
+            else deferredSeries.push(unit);
+        });
+        if (rowCards.length > 0 || deferredSeries.length > 0) flushRow();
+        return output;
+    }
+
+    function buildSeriesBlockHtml(unit, d, curTheme) {
+        var group = unit.group;
+        var expanded = expandedSeriesId === group.id;
+        var controlId = 'tm-series-members-' + group.id;
+        return '<section class="tm-series-block' + (expanded ? ' is-expanded' : '') + '" data-series-id="' + esc(group.id) + '">' +
+            '<div class="tm-series-head">' +
+            '<button type="button" class="tm-series-manage" data-series-id="' + esc(group.id) + '" title="管理系列">' +
+            '<i class="fa-solid fa-layer-group"></i><span>' + esc(group.name) + '</span><small>' + group.members.length + ' 款</small></button>' +
+            '<button type="button" class="tm-series-toggle" data-series-id="' + esc(group.id) + '" aria-expanded="' + (expanded ? 'true' : 'false') + '" aria-controls="' + esc(controlId) + '" title="' + (expanded ? '收起系列' : '展开全系列') + '">' +
+            '<i class="fa-solid fa-chevron-down"></i></button></div>' +
+            '<div class="tm-series-track" id="' + esc(controlId) + '">' +
+            unit.items.map(function (item) { return buildGridCardHtml(item, d, curTheme); }).join('') +
+            '</div></section>';
+    }
+
+    function captureSeriesScrollPositions(area) {
+        if (!area) return;
+        area.querySelectorAll('.tm-series-block').forEach(function (block) {
+            var track = block.querySelector('.tm-series-track');
+            if (track && !block.classList.contains('is-expanded')) {
+                seriesScrollPositions[block.dataset.seriesId] = track.scrollLeft;
+            }
+        });
+    }
+
+    function bindSeriesRailEvents(area) {
+        if (!area) return;
+        area.querySelectorAll('.tm-series-block').forEach(function (block) {
+            var seriesId = block.dataset.seriesId;
+            var track = block.querySelector('.tm-series-track');
+            var savedLeft = Number(seriesScrollPositions[seriesId]) || 0;
+            if (track && !block.classList.contains('is-expanded')) track.scrollLeft = savedLeft;
+
+            var manage = block.querySelector('.tm-series-manage');
+            if (manage) manage.addEventListener('click', function () { openSeriesManageSheet(seriesId); });
+            var toggle = block.querySelector('.tm-series-toggle');
+            if (toggle) toggle.addEventListener('click', function () {
+                var opening = !block.classList.contains('is-expanded');
+                var previous = area.querySelector('.tm-series-block.is-expanded');
+                if (opening && previous && previous !== block) {
+                    previous.classList.remove('is-expanded');
+                    var previousToggle = previous.querySelector('.tm-series-toggle');
+                    if (previousToggle) {
+                        previousToggle.setAttribute('aria-expanded', 'false');
+                        previousToggle.title = '展开全系列';
+                    }
+                    var previousTrack = previous.querySelector('.tm-series-track');
+                    if (previousTrack) previousTrack.scrollLeft = Number(seriesScrollPositions[previous.dataset.seriesId]) || 0;
+                }
+                if (opening) {
+                    if (track) seriesScrollPositions[seriesId] = track.scrollLeft;
+                    block.classList.add('is-expanded');
+                    expandedSeriesId = seriesId;
+                } else {
+                    block.classList.remove('is-expanded');
+                    expandedSeriesId = '';
+                    if (track) track.scrollLeft = Number(seriesScrollPositions[seriesId]) || 0;
+                }
+                toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+                toggle.title = opening ? '收起系列' : '展开全系列';
+            });
+
+            if (!track) return;
+            track.addEventListener('scroll', function () {
+                if (!block.classList.contains('is-expanded')) seriesScrollPositions[seriesId] = track.scrollLeft;
+            }, { passive: true });
+            var pointerStartX = 0;
+            var pointerStartY = 0;
+            var pointerStartScroll = 0;
+            var pointerType = '';
+            var moved = false;
+            var guardUntil = 0;
+            track.addEventListener('pointerdown', function (event) {
+                if (block.classList.contains('is-expanded') || (event.pointerType === 'mouse' && event.button !== 0)) return;
+                pointerStartX = event.clientX;
+                pointerStartY = event.clientY;
+                pointerStartScroll = track.scrollLeft;
+                pointerType = event.pointerType;
+                moved = false;
+                if (pointerType === 'mouse') {
+                    track.classList.add('is-dragging');
+                    try { track.setPointerCapture(event.pointerId); } catch (e) {}
+                }
+            });
+            track.addEventListener('pointermove', function (event) {
+                if (!pointerType || block.classList.contains('is-expanded')) return;
+                var dx = event.clientX - pointerStartX;
+                var dy = event.clientY - pointerStartY;
+                if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) moved = true;
+                if (pointerType === 'mouse' && moved) {
+                    event.preventDefault();
+                    track.scrollLeft = pointerStartScroll - dx;
+                }
+            });
+            function finishPointer(event) {
+                if (moved || Math.abs(track.scrollLeft - pointerStartScroll) > 5) guardUntil = Date.now() + 260;
+                if (event && pointerType === 'mouse') {
+                    try { track.releasePointerCapture(event.pointerId); } catch (e) {}
+                }
+                pointerType = '';
+                track.classList.remove('is-dragging');
+            }
+            track.addEventListener('pointerup', finishPointer);
+            track.addEventListener('pointercancel', finishPointer);
+            track.addEventListener('click', function (event) {
+                if (Date.now() > guardUntil) return;
+                event.preventDefault();
+                event.stopPropagation();
+            }, true);
+            track.addEventListener('wheel', function (event) {
+                if (block.classList.contains('is-expanded') || track.scrollWidth <= track.clientWidth) return;
+                var delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+                if (!delta) return;
+                var before = track.scrollLeft;
+                track.scrollLeft += delta;
+                if (track.scrollLeft !== before) event.preventDefault();
+            }, { passive: false });
+        });
+    }
+
+    function syncBatchActionState(d) {
+        var count = document.getElementById('tm-batch-count');
+        if (count) count.textContent = batchSelected.length;
+        var pairButton = document.getElementById('tm-batch-day-night');
+        if (pairButton) {
+            pairButton.disabled = batchDeleting || batchSelected.length !== 2 || !batchSelected.every(function (key) {
+                var item = getLogicalItem(key, d || load());
+                return item && item.kind === 'theme';
+            });
+        }
+        var seriesButton = document.getElementById('tm-batch-series');
+        if (seriesButton) seriesButton.disabled = batchDeleting || batchSelected.length === 0;
+    }
+
     function renderGrid() {
         var area = document.getElementById('tm-grid-area'); if (!area) return;
         var batchArea = document.getElementById('tm-batch-area');
         var d = load();
         var curTheme = getCurrentThemeName();
+        captureSeriesScrollPositions(area);
         applyGridCardSize(d.gridCardSize);
 
-        // 过滤
-        var list = stThemeList.slice();
-        if (curCat === '__uncategorized__') {
-            list = list.filter(function (name) { var m = d.themeMeta[name]; return !m || !m.category; });
-        } else if (curCat !== '__all__') {
-            list = list.filter(function (name) { var m = d.themeMeta[name]; return m && m.category === curCat; });
-        }
-        if (searchQuery) {
-            var q = searchQuery.toLowerCase();
-            list = list.filter(function (name) {
-                if (name.toLowerCase().indexOf(q) !== -1) return true;
-                var m = d.themeMeta[name];
-                if (!m) return false;
-                if (m.author && m.author.toLowerCase().indexOf(q) !== -1) return true;
-                if (m.tags && m.tags.some(function (t) { return t.toLowerCase().indexOf(q) !== -1; })) return true;
-                if (m.description && m.description.toLowerCase().indexOf(q) !== -1) return true;
-                return false;
-            });
-        }
-
-        list = sortThemes(list, d.sortMode || 'name', d);
+        var sortedItems = sortItems(getLogicalItems(d), d.sortMode || 'name', d);
+        var layout = buildSeriesLayoutUnits(d, sortedItems, curCat, searchQuery);
+        var metrics = getGridLayoutMetrics(area, d.gridCardSize);
+        var units = alignSeriesUnitsForGrid(layout.units, metrics.columns);
+        var list = layout.displayedItems;
+        syncSeriesCardWidth(area, d.gridCardSize);
 
         if (batchArea) {
             if (batchMode) {
                 var disabledAttr = batchDeleting ? ' disabled' : '';
+                var pairReady = batchSelected.length === 2 && batchSelected.every(function (key) {
+                    var selectedItem = getLogicalItem(key, d);
+                    return selectedItem && selectedItem.kind === 'theme';
+                });
                 batchArea.style.display = '';
                 batchArea.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">' +
                 (batchDeleting ? '正在删除 <b>' + batchSelected.length + '</b> 个…' : '已选 <b id="tm-batch-count">' + batchSelected.length + '</b> 个') +
@@ -2903,6 +3610,12 @@
                 '<button class="tm-batch-btn" id="tm-batch-cat"' + disabledAttr + '><i class="fa-solid fa-folder"></i> 分类</button>' +
                 '<button class="tm-batch-btn" id="tm-batch-star"' + disabledAttr + '><i class="fa-solid fa-star"></i> 收藏</button>' +
                 '<button class="tm-batch-btn" id="tm-batch-tag"' + disabledAttr + '><i class="fa-solid fa-tag"></i> 标签</button>' +
+                '<button class="tm-batch-btn tm-batch-day-night" id="tm-batch-day-night"' +
+                (batchDeleting || !pairReady ? ' disabled' : '') +
+                '><i class="fa-solid fa-circle-half-stroke"></i> 日夜</button>' +
+                '<button class="tm-batch-btn tm-batch-series" id="tm-batch-series"' +
+                (batchDeleting || batchSelected.length === 0 ? ' disabled' : '') +
+                '><i class="fa-solid fa-layer-group"></i> 系列</button>' +
                 '<button class="tm-batch-btn danger" id="tm-batch-delete"' + disabledAttr + '><i class="fa-solid fa-trash"></i> 删除</button>' +
                 '</div></div>';
             } else {
@@ -2919,40 +3632,26 @@
                 (searchQuery ? '没有匹配「' + esc(searchQuery) + '」的主题' : (curCat !== '__all__' ? '该分类暂无主题' : '没有找到主题，请点击底栏刷新按钮')) +
                 '</span></div>';
         } else {
-            list.forEach(function (name) {
-                var meta = d.themeMeta[name] || {};
-                var isActive = curTheme === name;
-                var bsel = batchSelected.indexOf(name) !== -1;
-                var checkBox = batchMode ? '<div class="tm-card-check' + (bsel ? ' checked' : '') + '" data-name="' + esc(name) + '"><i class="fa-solid fa-check"></i></div>' : '';
-                var badge = (isActive && !batchMode) ? '<div class="tm-badge-on"><i class="fa-solid fa-check"></i></div>' : '';
-                var starBadge = (meta.starred && !batchMode) ? '<div class="tm-badge-star"><i class="fa-solid fa-star"></i></div>' : '';
-                var freqBadge = (d.showFreq !== false && (meta.useCount || 0) > 5 && !batchMode) ? '<div class="tm-badge-freq">' + meta.useCount + '次</div>' : '';
-
-                var previewImage = meta.thumbData || meta.imageData;
-                var imgContent = previewImage
-                    ? '<img src="' + previewImage + '" alt="' + esc(name) + '" loading="lazy" decoding="async" />'
-                    : '<div class="tm-card-noimg"><i class="fa-solid fa-palette"></i><span>' + esc(name.slice(0, 6)) + '</span></div>';
-
-                var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-name="' + esc(name) + '" title="操作"><i class="fa-solid fa-ellipsis"></i></button>';
-                var tagText = (meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || '');
-
-                html += '<div class="tm-card' + (isActive ? ' on' : '') + (bsel ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + '" data-name="' + esc(name) + '">' +
-                    '<div class="tm-card-img">' + checkBox + imgContent + badge + starBadge + freqBadge + menuBtn + '</div>' +
-                    '<div class="tm-card-info"><div class="tm-card-name">' + esc(name) + '</div>' +
-                    (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
-                    '</div></div>';
+            units.forEach(function (unit) {
+                html += unit.type === 'series'
+                    ? buildSeriesBlockHtml(unit, d, curTheme)
+                    : buildGridCardHtml(unit.item, d, curTheme);
             });
             html += '</div>';
         }
 
         area.innerHTML = html;
+        bindSeriesRailEvents(area);
 
         // 事件绑定
         if (batchMode) {
             var batchRoot = batchArea || area;
             var selall = batchRoot.querySelector('#tm-batch-selall');
             var selnone = batchRoot.querySelector('#tm-batch-none');
-            if (selall) selall.addEventListener('click', function () { batchSelected = list.slice(); renderGrid(); });
+            if (selall) selall.addEventListener('click', function () {
+                batchSelected = list.map(function (item) { return item.key; });
+                renderGrid();
+            });
             if (selnone) selnone.addEventListener('click', function () { batchSelected = []; renderGrid(); });
 
             var bcatBtn = batchRoot.querySelector('#tm-batch-cat');
@@ -2964,15 +3663,48 @@
                 var choice = prompt(msg); if (choice === null) return;
                 var ci = parseInt(choice) - 1;
                 if (ci < 0 || ci >= cats.length) { toast('无效选择', true); return; }
-                batchSelected.forEach(function (name) { getMeta(dd, name).category = cats[ci]; });
-                save(dd); toast('✅ 已将 ' + batchSelected.length + ' 个移到「' + cats[ci] + '」'); batchSelected = []; renderGrid();
+                var selectedItems = batchSelected.map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
+                var selectedKeys = {};
+                selectedItems.forEach(function (item) { selectedKeys[item.key] = true; });
+                var selectedGroups = {};
+                selectedItems.forEach(function (item) {
+                    var group = getSeriesForItem(dd, item);
+                    if (group) selectedGroups[group.id] = group;
+                });
+                var incompleteGroup = Object.keys(selectedGroups).find(function (seriesId) {
+                    return getLogicalItems(dd).some(function (item) {
+                        var owner = getSeriesForItem(dd, item);
+                        return owner && owner.id === seriesId && !selectedKeys[item.key];
+                    });
+                });
+                if (incompleteGroup) {
+                    toast('系列需要整组调整分类：请选中该系列全部成员，或点击系列标题修改展示分类', true);
+                    return;
+                }
+                selectedItems.forEach(function (item) {
+                    if (!getSeriesForItem(dd, item)) getItemMeta(dd, item).category = cats[ci];
+                });
+                Object.keys(selectedGroups).forEach(function (seriesId) {
+                    seriesApi.setSeriesCategory(dd, seriesId, cats[ci]);
+                });
+                save(dd);
+                toast('✅ 已将所选美化' + (Object.keys(selectedGroups).length ? '及系列' : '') + '移到「' + cats[ci] + '」');
+                batchSelected = [];
+                renderCatbar();
+                renderGrid();
             });
 
             var bstarBtn = batchRoot.querySelector('#tm-batch-star');
             if (bstarBtn) bstarBtn.addEventListener('click', function () {
                 if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
                 var dd = load();
-                batchSelected.forEach(function (name) { var m = getMeta(dd, name); m.starred = !m.starred; });
+                batchSelected.forEach(function (key) {
+                    var item = getLogicalItem(key, dd);
+                    if (item) {
+                        var m = getItemMeta(dd, item);
+                        m.starred = !m.starred;
+                    }
+                });
                 save(dd); toast('⭐ 已切换收藏'); batchSelected = []; renderGrid();
             });
 
@@ -2981,8 +3713,37 @@
                 if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
                 var tag = prompt('为所选主题添加标签：'); if (!tag || !tag.trim()) return; tag = tag.trim();
                 var dd = load();
-                batchSelected.forEach(function (name) { var m = getMeta(dd, name); if (m.tags.indexOf(tag) === -1) m.tags.push(tag); });
+                batchSelected.forEach(function (key) {
+                    var item = getLogicalItem(key, dd);
+                    if (!item) return;
+                    var m = getItemMeta(dd, item);
+                    if (!Array.isArray(m.tags)) m.tags = [];
+                    if (m.tags.indexOf(tag) === -1) m.tags.push(tag);
+                });
                 save(dd); toast('🏷️ 已添加标签：' + tag); batchSelected = []; renderGrid();
+            });
+
+            var dayNightBtn = batchRoot.querySelector('#tm-batch-day-night');
+            if (dayNightBtn) dayNightBtn.addEventListener('click', function () {
+                if (batchSelected.length !== 2) {
+                    toast('请选择两个尚未组合的美化', true);
+                    return;
+                }
+                var dd = load();
+                var selectedItems = batchSelected.map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
+                if (selectedItems.length !== 2 || selectedItems.some(function (item) { return item.kind !== 'theme'; })) {
+                    toast('已组成日夜美化的卡片不能再次组合', true);
+                    return;
+                }
+                openDayNightPairSheet(selectedItems[0], selectedItems[1]);
+            });
+
+            var seriesBtn = batchRoot.querySelector('#tm-batch-series');
+            if (seriesBtn) seriesBtn.addEventListener('click', function () {
+                var dd = load();
+                var selectedItems = batchSelected.map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
+                if (selectedItems.length === 0) { toast('请先选择美化', true); return; }
+                openSeriesBatchSheet(selectedItems);
             });
 
             var bdeleteBtn = batchRoot.querySelector('#tm-batch-delete');
@@ -2990,7 +3751,8 @@
                 if (batchDeleting) return;
                 if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
 
-                var names = batchSelected.slice();
+                var selectedItems = batchSelected.map(function (key) { return getLogicalItem(key, d); }).filter(Boolean);
+                var names = expandItemThemeNames(selectedItems);
                 var currentTheme = getCurrentThemeName();
                 var deletingCurrent = names.indexOf(currentTheme) !== -1;
                 var fallbackTheme = deletingCurrent
@@ -3001,9 +3763,9 @@
                     return;
                 }
 
-                var shownNames = names.slice(0, 8).map(function (name) { return '• ' + name; }).join('\n');
-                if (names.length > 8) shownNames += '\n…另有 ' + (names.length - 8) + ' 个';
-                var message = '确定删除选中的 ' + names.length + ' 个美化？\n\n' + shownNames +
+                var shownNames = selectedItems.slice(0, 8).map(function (item) { return '• ' + item.name; }).join('\n');
+                if (selectedItems.length > 8) shownNames += '\n…另有 ' + (selectedItems.length - 8) + ' 个';
+                var message = '确定删除选中的 ' + selectedItems.length + ' 个美化？\n\n' + shownNames +
                     '\n\n这会从 SillyTavern 主题列表中真实删除，无法通过管理器撤销。';
                 if (deletingCurrent) message += '\n当前美化将先切换为「' + fallbackTheme + '」。';
                 if (!confirm(message)) return;
@@ -3020,7 +3782,10 @@
                             return;
                         }
 
-                        batchSelected = outcome.failed.map(function (item) { return item.name; });
+                        batchSelected = outcome.failed.map(function (failedItem) {
+                            var logical = getLogicalItem(failedItem.name, load());
+                            return logical ? logical.key : '';
+                        }).filter(function (key, idx, all) { return key && all.indexOf(key) === idx; });
                         renderGrid();
                         if (outcome.failed.length > 0) {
                             toast('已删除 ' + outcome.removed.length + ' 个；未删除 ' + outcome.failed.length + ' 个：' +
@@ -3053,29 +3818,32 @@
             area.querySelectorAll('.tm-card').forEach(function (card) {
                 card.addEventListener('click', function () {
                     if (batchDeleting) return;
-                    var name = card.dataset.name;
-                    var idx = batchSelected.indexOf(name);
-                    if (idx !== -1) batchSelected.splice(idx, 1); else batchSelected.push(name);
+                    var key = card.dataset.key;
+                    var idx = batchSelected.indexOf(key);
+                    if (idx !== -1) batchSelected.splice(idx, 1); else batchSelected.push(key);
                     var chk = card.querySelector('.tm-card-check');
-                    if (chk) chk.classList.toggle('checked', batchSelected.indexOf(name) !== -1);
-                    card.classList.toggle('batch-sel', batchSelected.indexOf(name) !== -1);
-                    var cnt = document.getElementById('tm-batch-count');
-                    if (cnt) cnt.textContent = batchSelected.length;
+                    if (chk) chk.classList.toggle('checked', batchSelected.indexOf(key) !== -1);
+                    card.classList.toggle('batch-sel', batchSelected.indexOf(key) !== -1);
+                    syncBatchActionState(load());
                 });
             });
         } else {
             area.querySelectorAll('.tm-card').forEach(function (card) {
                 card.addEventListener('click', function (e) {
                     if (e.target.closest('.tm-card-menu')) return;
-                    var name = card.dataset.name;
-                    applyTheme(name, function (ok, reason) {
+                    var item = getLogicalItem(card.dataset.key, load());
+                    if (!item) return;
+                    if (item.kind === 'pair') clearTemporaryPairOverride();
+                    var themeName = getItemDisplayTheme(load(), item);
+                    applyManualTheme(themeName, function (ok, reason) {
                         if (ok) {
                             var dd = load();
-                            var m = getMeta(dd, name);
+                            var refreshedItem = getLogicalItem(item.key, dd);
+                            var m = refreshedItem ? getItemMeta(dd, refreshedItem) : {};
                             m.useCount = (m.useCount || 0) + 1;
                             m.lastUsed = Date.now();
                             save(dd);
-                            toast('✅ 已应用：' + name);
+                            toast('✅ 已应用：' + item.name);
                             renderGrid(); renderBottomStatus(); updateBtn();
                         } else if (reason !== 'superseded') {
                             if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
@@ -3090,10 +3858,448 @@
             area.querySelectorAll('.tm-card-menu').forEach(function (btn) {
                 btn.addEventListener('click', function (e) {
                     e.stopPropagation();
-                    openContextMenu(btn.dataset.name);
+                    openContextMenu(btn.dataset.key);
                 });
             });
         }
+    }
+
+    function seriesCategoryOptions(d, selected) {
+        var html = '<option value=""' + (!selected ? ' selected' : '') + '>未分类</option>';
+        (d.categories || []).forEach(function (category) {
+            html += '<option value="' + esc(category) + '"' + (category === selected ? ' selected' : '') + '>' + esc(category) + '</option>';
+        });
+        html += '<option value="__new__">+ 新建分类…</option>';
+        return html;
+    }
+
+    function resolveSeriesCategory(sheet, d) {
+        var select = sheet.querySelector('.tm-series-category-select');
+        if (!select) return '';
+        var category = select.value;
+        if (category !== '__new__') return category;
+        var input = sheet.querySelector('.tm-series-new-category');
+        category = input ? input.value.trim() : '';
+        return category || null;
+    }
+
+    function bindSeriesCategorySelect(sheet) {
+        var select = sheet.querySelector('.tm-series-category-select');
+        var wrap = sheet.querySelector('.tm-series-new-category-wrap');
+        if (!select || !wrap) return;
+        function sync() { wrap.style.display = select.value === '__new__' ? '' : 'none'; }
+        select.addEventListener('change', sync);
+        sync();
+    }
+
+    function buildSeriesSelectedPreview(items) {
+        return '<div class="tm-series-selected-list">' + items.map(function (item) {
+            return '<span><i class="fa-solid ' + (item.kind === 'pair' ? 'fa-circle-half-stroke' : 'fa-palette') + '"></i>' + esc(item.name) + '</span>';
+        }).join('') + '</div>';
+    }
+
+    function suggestedSeriesName(items) {
+        var base = items && items[0] ? String(items[0].name || '').trim() : '';
+        return (base ? base.slice(0, 48) + ' ' : '') + '系列';
+    }
+
+    function openSeriesBatchSheet(items) {
+        if (!seriesApi) { toast('系列模块尚未就绪', true); return; }
+        var d = load();
+        var targets = [];
+        var ownerIds = [];
+        items.forEach(function (item) {
+            var target = getItemTarget(item);
+            var key = seriesApi.targetKey(target);
+            if (key && !targets.some(function (existing) { return seriesApi.targetKey(existing) === key; })) targets.push(target);
+            var owner = seriesApi.findSeriesByTarget(d, target);
+            if (owner && ownerIds.indexOf(owner.id) === -1) ownerIds.push(owner.id);
+        });
+        if (ownerIds.length > 1) {
+            toast('所选美化分属不同系列，请先移出后再重新组合', true);
+            return;
+        }
+        if (ownerIds.length === 1) {
+            var ownerGroup = seriesApi.getSeries(d, ownerIds[0]);
+            var additions = targets.filter(function (target) { return !seriesApi.findSeriesByTarget(d, target); });
+            if (additions.length === 0) {
+                openSeriesManageSheet(ownerGroup.id);
+                return;
+            }
+            var additionItems = items.filter(function (item) {
+                return additions.some(function (target) { return seriesApi.targetsEqual(target, getItemTarget(item)); });
+            });
+            var addSheet = createSheet([
+                '<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>加入现有系列</div>',
+                '<div class="tm-hint">以下美化会加入「' + esc(ownerGroup.name) + '」；已有成员不会重复添加。</div>',
+                buildSeriesSelectedPreview(additionItems),
+                '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-series-add-cancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-series-add-save">确认加入</button></div>',
+            ].join(''));
+            addSheet.querySelector('#tm-series-add-cancel').addEventListener('click', function () { closeSheet(addSheet); });
+            addSheet.querySelector('#tm-series-add-save').addEventListener('click', function () {
+                var dd = load();
+                var result = seriesApi.addMembers(dd, ownerGroup.id, additions);
+                if (!result.ok) { toast('系列关系已变化，请刷新后重试', true); return; }
+                save(dd);
+                batchSelected = [];
+                closeSheet(addSheet);
+                renderGrid();
+                toast('✅ 已加入「' + ownerGroup.name + '」');
+            });
+            return;
+        }
+
+        var groups = seriesApi.listSeries(d);
+        if (items.length < 2 && groups.length === 0) {
+            toast('创建系列至少需要选择两个美化', true);
+            return;
+        }
+        var commonCategory = '';
+        if (curCat !== '__all__' && curCat !== '__uncategorized__') commonCategory = curCat;
+        else if (items.length > 0) {
+            var firstCategory = getItemMeta(d, items[0]).category || '';
+            if (items.every(function (item) { return (getItemMeta(d, item).category || '') === firstCategory; })) commonCategory = firstCategory;
+        }
+        var operationOptions = '<option value="new">创建新系列</option>' + groups.map(function (group) {
+            return '<option value="' + esc(group.id) + '">加入「' + esc(group.name) + '」</option>';
+        }).join('');
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>保存为系列</div>',
+            '<div class="tm-hint tm-series-hint">系列只收纳展示关系，不会复制或修改真实美化；解散系列也不会删除成员。成员顺序始终跟随当前排序。</div>',
+            buildSeriesSelectedPreview(items),
+            '<div class="tm-field"><label>操作</label><select id="tm-series-operation">' + operationOptions + '</select></div>',
+            '<div id="tm-series-create-fields">' +
+            '<div class="tm-field"><label>系列名称</label><input type="text" id="tm-series-name" maxlength="80" value="' + esc(suggestedSeriesName(items)) + '" /></div>' +
+            '<div class="tm-field"><label>展示分类</label><select class="tm-series-category-select">' + seriesCategoryOptions(d, commonCategory) + '</select></div>' +
+            '<div class="tm-field tm-series-new-category-wrap" style="display:none"><label>新分类名称</label><input type="text" class="tm-series-new-category" maxlength="40" /></div>' +
+            '</div>',
+            '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-series-create-cancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-series-create-save">保存系列</button></div>',
+        ].join(''));
+        var operation = sheet.querySelector('#tm-series-operation');
+        var createFields = sheet.querySelector('#tm-series-create-fields');
+        var saveButton = sheet.querySelector('#tm-series-create-save');
+        if (items.length < 2 && groups.length > 0) operation.value = groups[0].id;
+        function syncOperation() {
+            var creating = operation.value === 'new';
+            createFields.style.display = creating ? '' : 'none';
+            saveButton.textContent = creating ? '保存系列' : '确认加入';
+        }
+        operation.addEventListener('change', syncOperation);
+        syncOperation();
+        bindSeriesCategorySelect(sheet);
+        sheet.querySelector('#tm-series-create-cancel').addEventListener('click', function () { closeSheet(sheet); });
+        saveButton.addEventListener('click', function () {
+            var dd = load();
+            var result;
+            if (operation.value === 'new') {
+                if (targets.length < 2) { toast('创建系列至少需要两个美化', true); return; }
+                var name = sheet.querySelector('#tm-series-name').value.trim();
+                if (!name) { toast('请输入系列名称', true); return; }
+                if (seriesApi.listSeries(dd).some(function (group) { return group.name === name; })) {
+                    toast('已有同名系列，请换一个名称', true);
+                    return;
+                }
+                var category = resolveSeriesCategory(sheet, dd);
+                if (category === null) { toast('请输入新分类名称', true); return; }
+                result = seriesApi.createSeries(dd, { name: name, category: category, members: targets });
+            } else {
+                result = seriesApi.addMembers(dd, operation.value, targets);
+            }
+            if (!result.ok) {
+                toast(result.reason === 'already-series' ? '其中一个美化已经属于其他系列' : '无法保存系列，请重试', true);
+                return;
+            }
+            if (category && dd.categories.indexOf(category) === -1) dd.categories.push(category);
+            save(dd);
+            batchSelected = [];
+            closeSheet(sheet);
+            renderCatbar();
+            renderGrid();
+            toast(operation.value === 'new' ? '✅ 已创建系列' : '✅ 已加入系列');
+        });
+    }
+
+    function getSeriesMemberView(d, target) {
+        var item = getLogicalItems(d).find(function (candidate) {
+            return seriesApi.targetsEqual(getItemTarget(candidate), target);
+        });
+        if (item) return { name: item.name, kind: item.kind, available: true };
+        return {
+            name: target.kind === 'day-night' ? ('日夜组合 ' + target.pairId) : target.themeName,
+            kind: target.kind === 'day-night' ? 'pair' : 'theme',
+            available: false,
+        };
+    }
+
+    function openSeriesManageSheet(seriesId) {
+        if (!seriesApi) return;
+        var d = load();
+        var group = seriesApi.getSeries(d, seriesId);
+        if (!group) { toast('这个系列已经不存在', true); renderGrid(); return; }
+        var memberHtml = group.members.map(function (target, index) {
+            var view = getSeriesMemberView(d, target);
+            return '<div class="tm-series-member-row" data-member-index="' + index + '">' +
+                '<i class="fa-solid ' + (view.kind === 'pair' ? 'fa-circle-half-stroke' : 'fa-palette') + '"></i>' +
+                '<div><strong>' + esc(view.name) + '</strong>' + (view.available ? '' : '<small>当前主题列表中不可用</small>') + '</div>' +
+                '<button type="button" class="tm-btn-sm tm-series-member-remove" data-member-index="' + index + '" title="移出系列"><i class="fa-solid fa-xmark"></i></button></div>';
+        }).join('');
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>管理系列</div>',
+            '<div class="tm-field"><label>系列名称</label><input type="text" id="tm-series-manage-name" maxlength="80" value="' + esc(group.name) + '" /></div>',
+            '<div class="tm-field"><label>展示分类</label><select class="tm-series-category-select">' + seriesCategoryOptions(d, group.category) + '</select></div>',
+            '<div class="tm-field tm-series-new-category-wrap" style="display:none"><label>新分类名称</label><input type="text" class="tm-series-new-category" maxlength="40" /></div>',
+            '<div class="tm-sec-title">成员 · ' + group.members.length + ' 款</div>',
+            '<div class="tm-hint">这里只管理收纳关系；移出、解散都不会删除真实美化。</div>',
+            '<div class="tm-series-member-list">' + memberHtml + '</div>',
+            '<div class="tm-edit-foot tm-series-manage-actions"><button class="tm-btn tm-btn-danger" id="tm-series-dissolve">解散系列</button><span></span><button class="tm-btn tm-btn-outline" id="tm-series-manage-cancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-series-manage-save">保存修改</button></div>',
+        ].join(''));
+        bindSeriesCategorySelect(sheet);
+        sheet.querySelector('#tm-series-manage-cancel').addEventListener('click', function () { closeSheet(sheet); });
+        sheet.querySelector('#tm-series-manage-save').addEventListener('click', function () {
+            var dd = load();
+            var current = seriesApi.getSeries(dd, seriesId);
+            if (!current) { closeSheet(sheet); toast('这个系列已经不存在', true); renderGrid(); return; }
+            var name = sheet.querySelector('#tm-series-manage-name').value.trim();
+            if (!name) { toast('请输入系列名称', true); return; }
+            if (seriesApi.listSeries(dd).some(function (other) { return other.id !== seriesId && other.name === name; })) {
+                toast('已有同名系列，请换一个名称', true);
+                return;
+            }
+            var category = resolveSeriesCategory(sheet, dd);
+            if (category === null) { toast('请输入新分类名称', true); return; }
+            seriesApi.renameSeries(dd, seriesId, name);
+            seriesApi.setSeriesCategory(dd, seriesId, category);
+            if (category && dd.categories.indexOf(category) === -1) dd.categories.push(category);
+            save(dd);
+            closeSheet(sheet);
+            renderCatbar();
+            renderGrid();
+            toast('✅ 已保存系列');
+        });
+        sheet.querySelector('#tm-series-dissolve').addEventListener('click', function () {
+            if (!confirm('解散系列「' + group.name + '」？\n所有真实美化都会保留。')) return;
+            var dd = load();
+            seriesApi.dissolveSeries(dd, seriesId);
+            save(dd);
+            if (expandedSeriesId === seriesId) expandedSeriesId = '';
+            closeSheet(sheet);
+            renderGrid();
+            toast('已解散系列，美化均已保留');
+        });
+        sheet.querySelectorAll('.tm-series-member-remove').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var index = parseInt(button.dataset.memberIndex, 10);
+                var target = group.members[index];
+                if (!target) return;
+                if (group.members.length <= 2 && !confirm('移出后系列将自动解散，所有真实美化仍会保留。是否继续？')) return;
+                var dd = load();
+                var result = seriesApi.removeMember(dd, seriesId, target);
+                if (!result.ok) { toast('成员关系已变化，请刷新后重试', true); return; }
+                save(dd);
+                closeSheet(sheet);
+                if (result.dissolved) {
+                    if (expandedSeriesId === seriesId) expandedSeriesId = '';
+                    renderGrid();
+                    toast('系列已自动解散，美化均已保留');
+                } else {
+                    renderGrid();
+                    toast('已移出系列');
+                    openSeriesManageSheet(seriesId);
+                }
+            });
+        });
+    }
+
+    function openDayNightPairSheet(firstItem, secondItem) {
+        if (!pairsApi || !firstItem || !secondItem || firstItem.kind !== 'theme' || secondItem.kind !== 'theme') return;
+        var d = load();
+        var dayTheme = firstItem.themeName;
+        var nightTheme = secondItem.themeName;
+        var suggestedName = pairsApi.suggestPairName(dayTheme, nightTheme);
+
+        function optionHtml(selected) {
+            return [firstItem, secondItem].map(function (item) {
+                return '<option value="' + esc(item.themeName) + '"' + (item.themeName === selected ? ' selected' : '') + '>' +
+                    esc(item.name) + '</option>';
+            }).join('');
+        }
+
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-circle-half-stroke"></i>组成日夜美化</div>',
+            '<div class="tm-hint tm-day-night-hint">保存后两张卡片会合并成一个美化；系统浅色模式使用日间版，深色模式使用夜间版。</div>',
+            '<div class="tm-field"><label>合并后的名称</label><input type="text" id="tm-pair-name" maxlength="80" value="' + esc(suggestedName) + '" placeholder="例如：春日花园" /></div>',
+            '<div class="tm-day-night-assign">',
+            '<div class="tm-day-night-choice is-day"><div class="tm-day-night-choice-label"><i class="fa-solid fa-sun"></i><span>日间版本</span></div><select id="tm-pair-day">' + optionHtml(dayTheme) + '</select></div>',
+            '<button type="button" class="tm-day-night-swap" id="tm-pair-swap" title="交换日夜" aria-label="交换日间和夜间版本">' +
+            '<svg class="tm-day-night-swap-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12m0 0-3-3m3 3-3 3M18 17H6m0 0 3 3m-3-3 3-3"></path></svg></button>',
+            '<div class="tm-day-night-choice is-night"><div class="tm-day-night-choice-label"><i class="fa-solid fa-moon"></i><span>夜间版本</span></div><select id="tm-pair-night">' + optionHtml(nightTheme) + '</select></div>',
+            '</div>',
+            '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-pair-cancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-pair-save">保存组合</button></div>',
+        ].join(''));
+
+        var daySelect = sheet.querySelector('#tm-pair-day');
+        var nightSelect = sheet.querySelector('#tm-pair-night');
+        function keepDistinct(changed) {
+            if (daySelect.value !== nightSelect.value) return;
+            var other = changed === daySelect ? nightSelect : daySelect;
+            other.value = changed.value === firstItem.themeName ? secondItem.themeName : firstItem.themeName;
+        }
+        daySelect.addEventListener('change', function () { keepDistinct(daySelect); });
+        nightSelect.addEventListener('change', function () { keepDistinct(nightSelect); });
+        sheet.querySelector('#tm-pair-swap').addEventListener('click', function () {
+            var previous = daySelect.value;
+            daySelect.value = nightSelect.value;
+            nightSelect.value = previous;
+        });
+        sheet.querySelector('#tm-pair-cancel').addEventListener('click', function () { closeSheet(sheet); });
+        sheet.querySelector('#tm-pair-save').addEventListener('click', function () {
+            var name = sheet.querySelector('#tm-pair-name').value.trim();
+            if (!name) { toast('请输入合并后的名称', true); return; }
+            if (daySelect.value === nightSelect.value) { toast('日间版和夜间版不能是同一个美化', true); return; }
+            var currentData = load();
+            var duplicate = getLogicalItems(currentData).some(function (item) {
+                return item.key !== firstItem.key && item.key !== secondItem.key && item.name === name;
+            });
+            if (duplicate) { toast('已有同名美化，请换一个名称', true); return; }
+            if (seriesApi) {
+                var firstSeries = seriesApi.findSeriesByTarget(currentData, { kind: 'theme', themeName: daySelect.value });
+                var secondSeries = seriesApi.findSeriesByTarget(currentData, { kind: 'theme', themeName: nightSelect.value });
+                if (firstSeries && secondSeries && firstSeries.id !== secondSeries.id) {
+                    toast('这两个美化分属不同系列，请先移出其中一个再组成日夜美化', true);
+                    return;
+                }
+            }
+            var result = pairsApi.createPair(currentData, {
+                name: name,
+                dayTheme: daySelect.value,
+                nightTheme: nightSelect.value,
+            });
+            if (!result.ok) {
+                toast(result.reason === 'already-paired' ? '其中一个美化已经属于日夜组合' : '无法保存日夜组合', true);
+                return;
+            }
+            if (seriesApi) {
+                var seriesMerge = seriesApi.mergeThemeTargetsIntoPair(
+                    currentData,
+                    [result.pair.dayTheme, result.pair.nightTheme],
+                    result.pair.id
+                );
+                if (!seriesMerge.ok) {
+                    pairsApi.dissolvePair(currentData, result.pair.id);
+                    toast('系列关系发生变化，日夜组合未保存，请重试', true);
+                    return;
+                }
+            }
+            if (bindingsApi) {
+                bindingsApi.mergeThemeReferencesIntoPair(
+                    currentData,
+                    [result.pair.dayTheme, result.pair.nightTheme],
+                    result.pair.id
+                );
+            }
+            save(currentData);
+            batchSelected = [];
+            closeSheet(sheet);
+            renderCatbar();
+            renderGrid();
+            renderBottomStatus();
+            toast('☀️🌙 已合并为「' + name + '」');
+        });
+    }
+
+    function dissolveDayNightPair(pairId, sheet) {
+        var d = load();
+        var pair = pairsApi.getPair(d, pairId);
+        if (!pair) return;
+        var preferredTheme = pairsApi.getVariantTheme(d, pairId, getPreferredPairVariant(pairId));
+        var replacementTheme = stThemeList.indexOf(preferredTheme) !== -1
+            ? preferredTheme
+            : (stThemeList.indexOf(pair.dayTheme) !== -1 ? pair.dayTheme : (stThemeList.indexOf(pair.nightTheme) !== -1 ? pair.nightTheme : ''));
+        if (seriesApi) {
+            var seriesResult = seriesApi.replacePairReference(d, pairId, [pair.dayTheme, pair.nightTheme]);
+            if (!seriesResult.ok) {
+                toast('这组日夜美化与其他系列存在成员冲突，请先整理系列关系后再解除', true);
+                return;
+            }
+        }
+        pairsApi.dissolvePair(d, pairId);
+        if (bindingsApi) bindingsApi.replacePairReferences(d, pairId, replacementTheme);
+        save(d);
+        clearTemporaryPairOverride();
+        if (sheet) closeSheet(sheet);
+        renderCatbar();
+        renderGrid();
+        renderBottomStatus();
+        toast('已解除日夜组合，两个美化均已保留');
+    }
+
+    function deleteDayNightPair(pairId, sheet) {
+        var d = load();
+        var pair = pairsApi.getPair(d, pairId);
+        if (!pair) return;
+        var names = [pair.dayTheme, pair.nightTheme].filter(function (name) {
+            return stThemeList.indexOf(name) !== -1;
+        });
+        if (names.length === 0) {
+            dissolveDayNightPair(pairId, sheet);
+            return;
+        }
+        var currentTheme = getCurrentThemeName();
+        var deletingCurrent = names.indexOf(currentTheme) !== -1;
+        var fallbackTheme = deletingCurrent
+            ? stThemeList.find(function (name) { return names.indexOf(name) === -1; })
+            : '';
+        if (deletingCurrent && !fallbackTheme) {
+            toast('请至少保留一个可切换的美化后再删除这组日夜美化', true);
+            return;
+        }
+        if (sheet) closeSheet(sheet);
+
+        function startDelete() {
+            deleteThemesEverywhere(names, function (ok, outcome) {
+                if (!ok) {
+                    toast('删除后无法完成验证，日夜关系与本地标注已保留', true);
+                    return;
+                }
+                if (outcome.failed.length > 0) {
+                    toast('已删除 ' + outcome.removed.length + ' 个；未删除：' +
+                        outcome.failed.map(function (item) { return item.name; }).join('、'), true);
+                } else {
+                    toast('已删除日夜组合及两个真实美化');
+                }
+            });
+        }
+
+        if (!deletingCurrent) {
+            startDelete();
+            return;
+        }
+        applyTheme(fallbackTheme, function (ok, reason) {
+            if (!ok) {
+                if (reason !== 'superseded') toast('无法安全切换当前美化，删除已取消', true);
+                return;
+            }
+            startDelete();
+        });
+    }
+
+    function openDayNightDeleteSheet(pairId) {
+        var d = load();
+        var pair = pairsApi.getPair(d, pairId);
+        if (!pair) return;
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-circle-half-stroke"></i>管理日夜组合</div>',
+            '<div class="tm-hint">「解除组合」只拆开关系并保留两个真实美化；「删除整组」会在 SillyTavern 中真实删除日间版和夜间版。</div>',
+            '<div class="tm-day-night-members"><span><i class="fa-solid fa-sun"></i>' + esc(pair.dayTheme) + '</span><span><i class="fa-solid fa-moon"></i>' + esc(pair.nightTheme) + '</span></div>',
+            '<div class="tm-edit-foot tm-day-night-delete-actions"><button class="tm-btn tm-btn-outline" id="tm-pair-manage-cancel">取消</button><button class="tm-btn tm-btn-outline" id="tm-pair-dissolve">解除组合</button><button class="tm-btn tm-btn-danger" id="tm-pair-delete-all">删除整组</button></div>',
+        ].join(''));
+        sheet.querySelector('#tm-pair-manage-cancel').addEventListener('click', function () { closeSheet(sheet); });
+        sheet.querySelector('#tm-pair-dissolve').addEventListener('click', function () {
+            dissolveDayNightPair(pairId, sheet);
+        });
+        sheet.querySelector('#tm-pair-delete-all').addEventListener('click', function () {
+            deleteDayNightPair(pairId, sheet);
+        });
     }
 
     // ── 底栏状态 ─────────────────────────────────────────────
@@ -3101,38 +4307,56 @@
         var el = document.getElementById('tm-bottom-status'); if (!el) return;
         var curTheme = getCurrentThemeName();
         var dotClass = curTheme ? 'green' : 'gray';
-        var text = curTheme || '未选择主题';
+        var item = curTheme ? getLogicalItem(curTheme, load()) : null;
+        var text = item ? item.name : (curTheme || '未选择主题');
         el.innerHTML = '<div class="tm-status-dot ' + dotClass + '"></div><span class="tm-status-text">' + esc(text) + '</span>';
     }
 
     // ── 操作菜单 ─────────────────────────────────────────────
-    function openContextMenu(themeName) {
+    function openContextMenu(itemRef) {
         var d = load();
-        var meta = d.themeMeta[themeName] || {};
+        var item = getLogicalItem(itemRef, d);
+        if (!item) return;
+        var meta = getItemMeta(d, item);
+        var themeName = getItemDisplayTheme(d, item);
         var curTheme = getCurrentThemeName();
-        var isActive = curTheme === themeName;
+        var isActive = isItemActive(item, curTheme);
         var imgThemes = stThemeList.filter(function (n) { var m = d.themeMeta[n]; return m && (m.imageData || m.thumbData); });
+        var variantMeta = d.themeMeta[themeName] || {};
+        var itemLabel = item.name;
+        var seriesGroup = getSeriesForItem(d, item);
 
         var sheet = createSheet([
-            '<div class="tm-ctx-theme-name"><i class="fa-solid fa-palette" style="margin-right:6px;opacity:.5;"></i>' + esc(themeName) + '</div>',
+            '<div class="tm-ctx-theme-name"><i class="fa-solid fa-palette" style="margin-right:6px;opacity:.5;"></i>' + esc(itemLabel) + '</div>',
             isActive
                 ? '<div class="tm-ctx-item" style="opacity:.5"><i class="fa-solid fa-circle-check"></i>当前正在使用</div>'
-                : '<div class="tm-ctx-item" id="tm-ctx-apply"><i class="fa-solid fa-circle-check"></i>应用主题</div>',
-            (meta.imageData || meta.thumbData) ? '<div class="tm-ctx-item" id="tm-ctx-view"><i class="fa-solid fa-expand"></i>查看截图</div>' : '',
-            meta.backgroundName ? '<div class="tm-ctx-item" style="opacity:.75"><i class="fa-solid fa-image"></i>背景：' + esc(meta.backgroundName) + '</div>' : '',
+                : '<div class="tm-ctx-item" id="tm-ctx-apply"><i class="fa-solid fa-circle-check"></i>应用美化</div>',
+            (variantMeta.imageData || variantMeta.thumbData) ? '<div class="tm-ctx-item" id="tm-ctx-view"><i class="fa-solid fa-expand"></i>查看截图</div>' : '',
+            variantMeta.backgroundName ? '<div class="tm-ctx-item" style="opacity:.75"><i class="fa-solid fa-image"></i>背景：' + esc(variantMeta.backgroundName) + '</div>' : '',
             '<div class="tm-ctx-item" id="tm-ctx-star"><i class="fa-solid fa-star"></i>' + (meta.starred ? '取消收藏' : '加入收藏') + '</div>',
             '<div class="tm-ctx-item" id="tm-ctx-edit"><i class="fa-solid fa-pen"></i>编辑信息</div>',
-            '<div class="tm-ctx-item" id="tm-ctx-rename"><i class="fa-solid fa-i-cursor"></i>重命名美化</div>',
-            '<div class="tm-ctx-item danger" id="tm-ctx-delete"><i class="fa-solid fa-trash"></i>删除美化</div>',
+            '<div class="tm-ctx-item" id="tm-ctx-bind"><i class="fa-solid fa-link"></i>角色 / 聊天绑定</div>',
+            seriesGroup ? '<div class="tm-ctx-item" id="tm-ctx-series-remove"><i class="fa-solid fa-arrow-right-from-bracket"></i>移出系列「' + esc(seriesGroup.name) + '」</div>' : '',
+            '<div class="tm-ctx-item" id="tm-ctx-rename"><i class="fa-solid fa-i-cursor"></i>' + (item.kind === 'pair' ? '修改组合名称' : '重命名美化') + '</div>',
+            item.kind === 'pair'
+                ? '<div class="tm-ctx-item danger" id="tm-ctx-delete"><i class="fa-solid fa-circle-half-stroke"></i>解除或删除日夜组合</div>'
+                : '<div class="tm-ctx-item danger" id="tm-ctx-delete"><i class="fa-solid fa-trash"></i>删除美化</div>',
         ].join(''));
 
         var applyEl = sheet.querySelector('#tm-ctx-apply');
         if (applyEl) applyEl.addEventListener('click', function () {
             closeSheet(sheet);
-            applyTheme(themeName, function (ok, reason) {
+            if (item.kind === 'pair') clearTemporaryPairOverride();
+            themeName = getItemDisplayTheme(load(), item);
+            applyManualTheme(themeName, function (ok, reason) {
                 if (ok) {
-                    var dd = load(); var m = getMeta(dd, themeName); m.useCount = (m.useCount || 0) + 1; m.lastUsed = Date.now(); save(dd);
-                    toast('✅ 已应用：' + themeName); renderGrid(); renderBottomStatus(); updateBtn();
+                    var dd = load();
+                    var refreshed = getLogicalItem(item.key, dd);
+                    var m = refreshed ? getItemMeta(dd, refreshed) : {};
+                    m.useCount = (m.useCount || 0) + 1;
+                    m.lastUsed = Date.now();
+                    save(dd);
+                    toast('✅ 已应用：' + itemLabel); renderGrid(); renderBottomStatus(); updateBtn();
                 }
                 else if (reason !== 'superseded') {
                     if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
@@ -3151,21 +4375,56 @@
 
         sheet.querySelector('#tm-ctx-star').addEventListener('click', function () {
             closeSheet(sheet);
-            var dd = load(); var m = getMeta(dd, themeName); m.starred = !m.starred;
+            var dd = load();
+            var refreshed = getLogicalItem(item.key, dd);
+            var m = refreshed ? getItemMeta(dd, refreshed) : {};
+            m.starred = !m.starred;
             save(dd); toast(m.starred ? '⭐ 已收藏' : '已取消收藏'); renderGrid();
         });
 
         sheet.querySelector('#tm-ctx-edit').addEventListener('click', function () {
             closeSheet(sheet);
-            openEditSheet(themeName);
+            openEditSheet(item.key);
+        });
+
+        sheet.querySelector('#tm-ctx-bind').addEventListener('click', function () {
+            closeSheet(sheet);
+            openBindingSheet(item.key);
+        });
+
+        var removeSeriesEl = sheet.querySelector('#tm-ctx-series-remove');
+        if (removeSeriesEl) removeSeriesEl.addEventListener('click', function () {
+            if (seriesGroup.members.length <= 2 && !confirm('移出后系列将自动解散，所有真实美化仍会保留。是否继续？')) return;
+            var dd = load();
+            var result = seriesApi.removeMember(dd, seriesGroup.id, getItemTarget(item));
+            if (!result.ok) { toast('系列关系已变化，请刷新后重试', true); return; }
+            save(dd);
+            closeSheet(sheet);
+            if (result.dissolved && expandedSeriesId === seriesGroup.id) expandedSeriesId = '';
+            renderGrid();
+            toast(result.dissolved ? '系列已自动解散，美化均已保留' : '已移出系列');
         });
 
         sheet.querySelector('#tm-ctx-rename').addEventListener('click', function () {
-            var newName = prompt('新的美化名称：', themeName);
+            var newName = prompt(item.kind === 'pair' ? '新的组合名称：' : '新的美化名称：', itemLabel);
             if (newName === null) return;
             newName = newName.trim();
-            if (!newName || newName === themeName) return;
+            if (!newName || newName === itemLabel) return;
             closeSheet(sheet);
+            if (item.kind === 'pair') {
+                var pairData = load();
+                var duplicate = getLogicalItems(pairData).some(function (other) {
+                    return other.key !== item.key && other.name === newName;
+                });
+                if (duplicate) { toast('已有同名美化', true); return; }
+                if (pairsApi.renamePair(pairData, item.pairId, newName)) {
+                    save(pairData);
+                    renderGrid();
+                    renderBottomStatus();
+                    toast('已修改日夜美化名称');
+                }
+                return;
+            }
             renameThemeEverywhere(themeName, newName, function (ok, reason) {
                 if (ok) toast('已重命名美化');
                 else if (reason === 'duplicate') toast('已有同名美化', true);
@@ -3181,6 +4440,11 @@
         });
 
         sheet.querySelector('#tm-ctx-delete').addEventListener('click', function () {
+            if (item.kind === 'pair') {
+                closeSheet(sheet);
+                openDayNightDeleteSheet(item.pairId);
+                return;
+            }
             if (!confirm('删除美化「' + themeName + '」？\n这会从 SillyTavern 主题列表中真实删除，不只是从插件移除。')) return;
             closeSheet(sheet);
             deleteThemeEverywhere(themeName, function (ok) {
@@ -3190,23 +4454,291 @@
         });
     }
 
+    // ── 角色 / 聊天绑定 ──────────────────────────────────────
+    function openBindingSheet(itemRef, onChange) {
+        if (!bindingController || !bindingsApi) {
+            toast('绑定模块尚未就绪', true);
+            return;
+        }
+
+        var data = load();
+        var item = getLogicalItem(itemRef, data);
+        if (!item) {
+            toast('找不到要绑定的美化', true);
+            return;
+        }
+        var target = getItemTarget(item);
+        var current = bindingController.getCurrentState();
+        var info = current.context;
+
+        function bindingLabel(record) {
+            if (!record) return '';
+            var recordTarget = bindingsApi.getTarget(record);
+            if (!recordTarget) return '';
+            if (recordTarget.kind === 'day-night') {
+                var pair = pairsApi.getPair(load(), recordTarget.pairId);
+                return pair ? pair.name : '已失效的日夜组合';
+            }
+            return recordTarget.themeName || '';
+        }
+
+        function buildBindingCard(scope, title, icon, available, label, record) {
+            var boundTarget = record ? bindingsApi.getTarget(record) : null;
+            var boundLabel = bindingLabel(record);
+            var isThisTheme = bindingsApi.targetsEqual(boundTarget, target);
+            var status = boundLabel
+                ? ('已绑定：' + esc(boundLabel))
+                : '尚未绑定';
+            var actionLabel = boundLabel
+                ? (isThisTheme ? '已绑定此美化' : '改绑为此美化')
+                : '绑定此美化';
+            var priorityOn = current.resolution.scope === scope;
+            return '<div class="tm-binding-card' + (priorityOn ? ' is-active' : '') + '">' +
+                '<div class="tm-binding-head"><i class="fa-solid ' + icon + '"></i><div><strong>' + title + '</strong>' +
+                '<small>' + (available ? esc(label) : (scope === 'chat' ? '当前没有可绑定的聊天窗口' : '群聊或主页不提供单角色绑定')) + '</small></div>' +
+                (priorityOn ? '<span>当前生效</span>' : '') + '</div>' +
+                '<div class="tm-binding-status">' + status + '</div>' +
+                '<div class="tm-binding-actions">' +
+                '<button class="tm-btn tm-btn-safe" data-binding-action="bind" data-binding-scope="' + scope + '"' +
+                (!available || isThisTheme ? ' disabled' : '') + '>' + actionLabel + '</button>' +
+                (boundLabel ? '<button class="tm-btn tm-btn-outline" data-binding-action="clear" data-binding-scope="' + scope + '">解除绑定</button>' : '') +
+                '</div></div>';
+        }
+
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-link"></i>绑定：' + esc(item.name) + '</div>',
+            '<div class="tm-hint tm-binding-hint">切换聊天时自动应用；聊天绑定优先于角色绑定，离开绑定范围后恢复最后一次手动选择的美化。</div>',
+            buildBindingCard(
+                'character',
+                '当前角色卡',
+                'fa-user',
+                !info.isGroup && !!info.characterKey,
+                info.characterLabel || info.characterKey,
+                current.character
+            ),
+            buildBindingCard(
+                'chat',
+                '当前聊天窗口',
+                'fa-message',
+                !!(info.chatKey && info.chatId),
+                info.chatLabel || info.chatId,
+                current.chat
+            ),
+            '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-binding-close">关闭</button></div>',
+        ].join(''));
+
+        sheet.querySelector('#tm-binding-close').addEventListener('click', function () {
+            closeSheet(sheet);
+        });
+
+        sheet.querySelectorAll('[data-binding-action]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var scope = button.dataset.bindingScope;
+                var action = button.dataset.bindingAction;
+                var result = action === 'bind'
+                    ? bindingController.bindCurrent(scope, target)
+                    : bindingController.unbindCurrent(scope);
+                if (!result || !result.ok) {
+                    var reason = result && result.reason;
+                    if (reason === 'no-character') toast('当前不是可绑定的单角色聊天', true);
+                    else if (reason === 'no-chat') toast('当前聊天尚未完整加载，请稍后再试', true);
+                    else toast('绑定操作失败，请重试', true);
+                    return;
+                }
+                closeSheet(sheet);
+                renderGrid();
+                renderBottomStatus();
+                if (typeof onChange === 'function') onChange();
+                if (action === 'bind') {
+                    toast(scope === 'chat' ? '已绑定到当前聊天' : '已绑定到当前角色卡');
+                } else {
+                    toast(scope === 'chat' ? '已解除当前聊天绑定' : '已解除当前角色绑定');
+                }
+            });
+        });
+    }
+
+    function openBindingsOverviewSheet(itemRef, onChange) {
+        if (!bindingController || !bindingsApi) {
+            toast('绑定模块尚未就绪', true);
+            return;
+        }
+
+        var item = getLogicalItem(itemRef, load());
+        if (!item) {
+            toast('找不到要查看的美化', true);
+            return;
+        }
+
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-link"></i>绑定信息：' + esc(item.name) + '</div>',
+            '<div class="tm-hint tm-bindings-all-hint">这里可以查看并解除这个美化的全部绑定；新增或改绑当前角色、聊天，请使用卡片右上角的三个点菜单。</div>',
+            '<div id="tm-bindings-all-body"></div>',
+            '<div class="tm-edit-foot tm-bindings-all-foot"><button class="tm-btn tm-btn-danger" id="tm-bindings-clear-all">解除全部</button><button class="tm-btn tm-btn-outline" id="tm-bindings-all-close">关闭</button></div>',
+        ].join(''));
+        var body = sheet.querySelector('#tm-bindings-all-body');
+        var clearAllButton = sheet.querySelector('#tm-bindings-clear-all');
+
+        function sectionHtml(scope, title, icon, references) {
+            if (!references.length) return '';
+            return '<section class="tm-bindings-all-section"><div class="tm-bindings-all-head"><span><i class="fa-solid ' + icon + '"></i>' + title + '</span><small>' + references.length + ' 项</small></div>' +
+                '<div class="tm-bindings-all-list">' + references.map(function (reference) {
+                    return '<div class="tm-bindings-all-row"><div class="tm-bindings-all-icon"><i class="fa-solid ' + icon + '"></i></div>' +
+                        '<div class="tm-bindings-all-copy"><strong title="' + esc(reference.label) + '">' + esc(reference.label) + '</strong><small>' + (scope === 'character' ? '角色卡' : '聊天窗口') + '</small></div>' +
+                        '<button type="button" class="tm-bindings-all-remove" data-binding-scope="' + scope + '" data-binding-key="' + esc(reference.key) + '">解除</button></div>';
+                }).join('') + '</div></section>';
+        }
+
+        function refreshAfterRemoval(message) {
+            bindingController.reconcile();
+            renderGrid();
+            renderBottomStatus();
+            if (typeof onChange === 'function') onChange();
+            render();
+            toast(message);
+        }
+
+        function render() {
+            var currentData = load();
+            var currentItem = getLogicalItem(itemRef, currentData);
+            if (!currentItem) {
+                closeSheet(sheet);
+                if (typeof onChange === 'function') onChange();
+                return;
+            }
+            var target = getItemTarget(currentItem);
+            var refs = bindingsApi.listTargetReferences(currentData, target);
+            var total = refs.characters.length + refs.chats.length;
+            body.innerHTML = total
+                ? sectionHtml('character', '角色卡', 'fa-user', refs.characters) + sectionHtml('chat', '聊天窗口', 'fa-message', refs.chats)
+                : '<div class="tm-bindings-all-empty"><i class="fa-solid fa-link-slash"></i><strong>尚无绑定</strong><span>这个美化还没有绑定角色卡或聊天窗口</span></div>';
+            clearAllButton.hidden = total < 2;
+
+            body.querySelectorAll('.tm-bindings-all-remove').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    var data = load();
+                    var latestItem = getLogicalItem(itemRef, data);
+                    var latestTarget = latestItem ? getItemTarget(latestItem) : null;
+                    if (!latestTarget || !bindingsApi.targetsEqual(latestTarget, target)) {
+                        render();
+                        toast('这项绑定已经发生变化，请重新查看', true);
+                        return;
+                    }
+                    var removed = bindingsApi.removeTargetReference(
+                        data,
+                        button.dataset.bindingScope,
+                        button.dataset.bindingKey,
+                        target
+                    );
+                    if (!removed) {
+                        render();
+                        toast('这项绑定已经发生变化，请重新查看', true);
+                        return;
+                    }
+                    save(data);
+                    refreshAfterRemoval('已解除这项绑定');
+                });
+            });
+        }
+
+        clearAllButton.addEventListener('click', function () {
+            var currentData = load();
+            var currentItem = getLogicalItem(itemRef, currentData);
+            if (!currentItem) {
+                render();
+                return;
+            }
+            var target = getItemTarget(currentItem);
+            var refs = bindingsApi.listTargetReferences(currentData, target);
+            var total = refs.characters.length + refs.chats.length;
+            if (!total) {
+                render();
+                return;
+            }
+            if (!confirm('解除美化「' + currentItem.name + '」的全部 ' + total + ' 项角色 / 聊天绑定？')) return;
+            var removed = bindingsApi.removeTargetReferences(currentData, target);
+            if (!removed) {
+                render();
+                toast('绑定已经发生变化，请重新查看', true);
+                return;
+            }
+            save(currentData);
+            refreshAfterRemoval('已解除全部绑定');
+        });
+
+        sheet.querySelector('#tm-bindings-all-close').addEventListener('click', function () {
+            closeSheet(sheet);
+        });
+        render();
+    }
+
     // ── 编辑主题附加信息 ─────────────────────────────────────
-    function openEditSheet(themeName) {
+    function openEditSheet(itemRef) {
         var d = load();
-        var meta = getMeta(d, themeName);
-        var editImgData = meta.imageData || null;
-        var editThumbData = meta.thumbData || null;
-        var editCrop = meta.crop || null;
+        var item = getLogicalItem(itemRef, d);
+        if (!item) return;
+        var pair = item.kind === 'pair' ? pairsApi.getPair(d, item.pairId) : null;
+        var meta = getItemMeta(d, item);
+        var selectedVariant = pair
+            ? (pair.nightTheme === getCurrentThemeName() ? 'night' : (pair.dayTheme === getCurrentThemeName() ? 'day' : getPreferredPairVariant(pair.id)))
+            : 'day';
+        var variantDrafts = {};
+        if (pair) {
+            ['day', 'night'].forEach(function (variant) {
+                var name = variant === 'night' ? pair.nightTheme : pair.dayTheme;
+                var variantMeta = getMeta(d, name);
+                variantDrafts[variant] = {
+                    themeName: name,
+                    imageData: variantMeta.imageData || null,
+                    thumbData: variantMeta.thumbData || null,
+                    crop: variantMeta.crop || null,
+                    backgroundName: variantMeta.backgroundName || '',
+                };
+            });
+        } else {
+            var ordinaryMeta = getMeta(d, item.themeName);
+            variantDrafts.day = {
+                themeName: item.themeName,
+                imageData: ordinaryMeta.imageData || null,
+                thumbData: ordinaryMeta.thumbData || null,
+                crop: ordinaryMeta.crop || null,
+                backgroundName: ordinaryMeta.backgroundName || '',
+            };
+        }
+        var activeDraft = variantDrafts[selectedVariant] || variantDrafts.day;
+        var themeName = activeDraft.themeName;
+        var editImgData = activeDraft.imageData;
+        var editThumbData = activeDraft.thumbData;
+        var editCrop = activeDraft.crop;
         var editPreviewData = editThumbData || editImgData;
         var editTags = (meta.tags || []).slice();
-        var editBackgroundName = meta.backgroundName || '';
+        var editBackgroundName = activeDraft.backgroundName;
+        var itemTarget = getItemTarget(item);
+        function buildBindingsOverviewHtml() {
+            var refs = bindingsApi ? bindingsApi.listTargetReferences(load(), itemTarget) : { characters: [], chats: [] };
+            var total = refs.characters.length + refs.chats.length;
+            var summary = total
+                ? (refs.characters.length ? refs.characters.length + ' 个角色' : '') +
+                    (refs.characters.length && refs.chats.length ? ' · ' : '') +
+                    (refs.chats.length ? refs.chats.length + ' 个聊天' : '')
+                : '尚未绑定角色卡或聊天';
+            return '<span class="tm-theme-bind-icon"><i class="fa-solid fa-link"></i></span>' +
+                '<span class="tm-theme-bind-copy"><strong>角色 / 聊天绑定</strong><small>' + summary + '</small></span>' +
+                '<i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i>';
+        }
         var catOpts = '<option value="">无分类</option>' +
             d.categories.map(function (c) { return '<option value="' + esc(c) + '"' + (meta.category === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
 
         var sheet = createSheet([
-            '<div class="tm-sheet-title"><i class="fa-solid fa-pen"></i>编辑：' + esc(themeName) + '</div>',
+            '<div class="tm-sheet-title tm-edit-sheet-title"><span><i class="fa-solid fa-pen"></i>编辑：<b id="tm-edit-title-name">' + esc(item.name) + '</b></span>' +
+            (pair ? '<div class="tm-day-night-toggle" role="group" aria-label="切换日夜版本">' +
+                '<button type="button" data-variant="day" class="' + (selectedVariant === 'day' ? 'on' : '') + '" title="编辑并应用日间版"><i class="fa-solid fa-sun"></i></button>' +
+                '<button type="button" data-variant="night" class="' + (selectedVariant === 'night' ? 'on' : '') + '" title="编辑并应用夜间版"><i class="fa-solid fa-moon"></i></button>' +
+                '</div>' : '') + '</div>',
+            pair ? '<div class="tm-field"><label>美化名称</label><input type="text" id="tm-pair-edit-name" maxlength="80" value="' + esc(pair.name) + '" /></div>' : '',
             '<div class="tm-field"><label>分类</label><div class="tm-frow"><select id="tm-dcat">' + catOpts + '</select><button class="tm-btn tm-btn-outline" id="tm-dnewcat" style="white-space:nowrap;font-size:.8em;padding:7px 10px">+ 新建</button></div></div>',
             '<div class="tm-field"><label>绑定背景</label><button type="button" class="tm-bg-bind-card" id="tm-bg-bind">' + buildBackgroundBindHtml(editBackgroundName) + '</button></div>',
+            '<div class="tm-field"><label>绑定范围</label><button type="button" class="tm-theme-bind-card" id="tm-theme-bind-overview">' + buildBindingsOverviewHtml() + '</button></div>',
             '<div class="tm-field"><label>作者</label><input type="text" id="tm-dauthor" placeholder="主题作者名" value="' + esc(meta.author || '') + '" /></div>',
             '<div class="tm-field"><label>备注</label><textarea id="tm-ddesc" rows="2" placeholder="主题特点、适用场景等">' + esc(meta.description || '') + '</textarea></div>',
             '<div class="tm-field"><label>标签</label><div class="tm-tags-wrap" id="tm-tags-wrap"></div>' +
@@ -3227,6 +4759,13 @@
                 editBackgroundName = name || '';
                 renderBackgroundBind();
             });
+        });
+        function renderBindingsOverview() {
+            var button = sheet.querySelector('#tm-theme-bind-overview');
+            if (button) button.innerHTML = buildBindingsOverviewHtml();
+        }
+        sheet.querySelector('#tm-theme-bind-overview').addEventListener('click', function () {
+            openBindingsOverviewSheet(item.key, renderBindingsOverview);
         });
 
         // 标签
@@ -3258,6 +4797,54 @@
                 var b2 = document.createElement('button'); b2.className = 'tm-btn tm-btn-danger'; b2.id = 'tm-dclr'; b2.style.fontSize = '.8em'; b2.textContent = '删除图片';
                 b2.addEventListener('click', function () { setImg(null, null, null); }); acts.appendChild(b2);
             } else if (!preview && clrOld) clrOld.parentNode.removeChild(clrOld);
+        }
+        function captureVariantDraft() {
+            var draft = variantDrafts[selectedVariant];
+            if (!draft) return;
+            draft.imageData = editImgData;
+            draft.thumbData = editThumbData;
+            draft.crop = editCrop;
+            draft.backgroundName = editBackgroundName;
+        }
+        function loadVariantDraft(variant) {
+            var draft = variantDrafts[variant];
+            if (!draft) return;
+            selectedVariant = variant;
+            themeName = draft.themeName;
+            editBackgroundName = draft.backgroundName || '';
+            editImgData = draft.imageData || null;
+            editThumbData = draft.thumbData || null;
+            editCrop = draft.crop || null;
+            renderBackgroundBind();
+            setImg(editImgData, editThumbData, editCrop);
+            sheet.querySelectorAll('.tm-day-night-toggle button').forEach(function (button) {
+                button.classList.toggle('on', button.dataset.variant === variant);
+            });
+        }
+        if (pair) {
+            sheet.querySelectorAll('.tm-day-night-toggle button').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    var variant = button.dataset.variant === 'night' ? 'night' : 'day';
+                    if (variant === selectedVariant) return;
+                    captureVariantDraft();
+                    loadVariantDraft(variant);
+                    setTemporaryPairOverride(pair.id, variant);
+                    applyManualTheme(themeName, function (ok, reason) {
+                        if (ok) {
+                            renderGrid();
+                            renderBottomStatus();
+                            updateBtn();
+                        } else if (reason !== 'superseded') {
+                            toast('无法应用' + (variant === 'night' ? '夜间版' : '日间版') + '，当前美化已保留', true);
+                        }
+                    });
+                });
+            });
+            var pairNameInput = sheet.querySelector('#tm-pair-edit-name');
+            if (pairNameInput) pairNameInput.addEventListener('input', function () {
+                var title = sheet.querySelector('#tm-edit-title-name');
+                if (title) title.textContent = pairNameInput.value.trim() || pair.name;
+            });
         }
         function handleFile(f) {
             if (!f || f.type.indexOf('image') !== 0) return;
@@ -3291,23 +4878,89 @@
         sheet.querySelector('#tm-dcancel').addEventListener('click', function () { closeSheet(sheet); });
         sheet.querySelector('#tm-dsave').addEventListener('click', function () {
             var saveBtn = sheet.querySelector('#tm-dsave');
+            var pairName = pair ? sheet.querySelector('#tm-pair-edit-name').value.trim() : '';
+            if (pair && !pairName) { toast('美化名称不能为空', true); return; }
+            if (pair) {
+                var duplicate = getLogicalItems(load()).some(function (other) {
+                    return other.key !== item.key && other.name === pairName;
+                });
+                if (duplicate) { toast('已有同名美化，请换一个名称', true); return; }
+            }
             saveBtn.disabled = true;
             saveBtn.textContent = '保存中...';
-            function finishSave(imgUrl, thumbUrl) {
+            captureVariantDraft();
+
+            function uploadDraft(draft, callback) {
+                function uploadReady() {
+                    uploadImage(draft.imageData, function (_err, imgUrl) {
+                        uploadImage(draft.thumbData, function (_err2, thumbUrl) {
+                            callback({
+                                themeName: draft.themeName,
+                                imageData: imgUrl || null,
+                                thumbData: thumbUrl || imgUrl || null,
+                                crop: draft.crop || null,
+                                backgroundName: draft.backgroundName || '',
+                            });
+                        });
+                    });
+                }
+                if (draft.imageData && !draft.thumbData) {
+                    makeThumbFromCrop(draft.imageData, draft.crop, function (thumb) {
+                        draft.thumbData = thumb;
+                        uploadReady();
+                    });
+                } else {
+                    uploadReady();
+                }
+            }
+
+            var draftKeys = pair ? ['day', 'night'] : ['day'];
+            var uploaded = {};
+            var remaining = draftKeys.length;
+            draftKeys.forEach(function (variant) {
+                uploadDraft(variantDrafts[variant], function (result) {
+                    uploaded[variant] = result;
+                    remaining -= 1;
+                    if (remaining === 0) finishSave();
+                });
+            });
+
+            function finishSave() {
                 var dd = load();
-                var m = getMeta(dd, themeName);
-                m.category = sheet.querySelector('#tm-dcat').value;
-                m.author = sheet.querySelector('#tm-dauthor').value.trim();
-                m.description = sheet.querySelector('#tm-ddesc').value.trim();
-                m.backgroundName = editBackgroundName;
-                m.tags = editTags.slice();
-                m.imageData = imgUrl || null;
-                m.thumbData = thumbUrl || imgUrl || null;
-                m.crop = editCrop || null;
+                var refreshedItem = getLogicalItem(item.key, dd);
+                if (!refreshedItem) {
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = '保存';
+                    toast('美化已发生变化，请关闭后重试', true);
+                    return;
+                }
+                var shared = getItemMeta(dd, refreshedItem);
+                shared.category = sheet.querySelector('#tm-dcat').value;
+                shared.author = sheet.querySelector('#tm-dauthor').value.trim();
+                shared.description = sheet.querySelector('#tm-ddesc').value.trim();
+                shared.tags = editTags.slice();
+                if (refreshedItem.kind === 'pair') {
+                    pairsApi.renamePair(dd, refreshedItem.pairId, pairName);
+                    ['day', 'night'].forEach(function (variant) {
+                        var result = uploaded[variant];
+                        var variantMeta = getMeta(dd, result.themeName);
+                        variantMeta.backgroundName = result.backgroundName;
+                        variantMeta.imageData = result.imageData;
+                        variantMeta.thumbData = result.thumbData;
+                        variantMeta.crop = result.crop;
+                    });
+                } else {
+                    var ordinary = uploaded.day;
+                    shared.backgroundName = ordinary.backgroundName;
+                    shared.imageData = ordinary.imageData;
+                    shared.thumbData = ordinary.thumbData;
+                    shared.crop = ordinary.crop;
+                }
                 save(dd);
                 closeSheet(sheet);
-                if (getCurrentThemeName() === themeName) {
-                    applyBoundBackground(themeName, function () {
+                var currentTheme = getCurrentThemeName();
+                if (refreshedItem.themeNames.indexOf(currentTheme) !== -1) {
+                    applyBoundBackground(currentTheme, function () {
                         toast('✨ 已保存');
                         renderCatbar(); renderGrid(); renderBottomStatus();
                     });
@@ -3316,24 +4969,18 @@
                     renderCatbar(); renderGrid();
                 }
             }
-            if (editImgData && !editThumbData) {
-                makeThumbFromCrop(editImgData, editCrop, function (thumb) {
-                    editThumbData = thumb;
-                    uploadImage(editImgData, function (_err, imgUrl) {
-                        uploadImage(editThumbData, function (_err2, thumbUrl) { finishSave(imgUrl, thumbUrl); });
-                    });
-                });
-            } else {
-                uploadImage(editImgData, function (_err, imgUrl) {
-                    uploadImage(editThumbData, function (_err2, thumbUrl) { finishSave(imgUrl, thumbUrl); });
-                });
-            }
         });
     }
 
     function mergeImportedAnnotations(imported) {
         var dd = load();
         var importedCount = 0;
+        var importedBindingCount = 0;
+        var importedPairCount = 0;
+        var importedSeriesCount = 0;
+        var skippedImportedSeriesCount = 0;
+        var importedPairIdMap = {};
+        var skippedImportedPairIds = {};
 
         for (var k in imported.themeMeta) {
             var imp = imported.themeMeta[k] || {};
@@ -3358,25 +5005,73 @@
         }
 
         if (imported.categories) imported.categories.forEach(function (c) { if (dd.categories.indexOf(c) === -1) dd.categories.push(c); });
+        if (pairsApi && imported.dayNight) {
+            var rawPairs = imported.dayNight.pairs || imported.dayNight;
+            var pairOutcome = pairsApi.importPairs(dd, rawPairs, stThemeList);
+            importedPairCount = pairOutcome.imported;
+            importedPairIdMap = pairOutcome.idMap || {};
+            (pairOutcome.skippedIds || []).forEach(function (id) { skippedImportedPairIds[id] = true; });
+        }
+        if (seriesApi && imported.series && typeof imported.series === 'object') {
+            var importedGroups = imported.series.groups || imported.series;
+            var seriesOutcome = seriesApi.importSeries(dd, importedGroups, {
+                availableThemeNames: stThemeList,
+                availablePairIds: Object.keys(pairsApi.ensureState(dd).pairs),
+                pairIdMap: importedPairIdMap,
+                skippedPairIds: Object.keys(skippedImportedPairIds),
+                requirePairIdMap: true,
+            });
+            importedSeriesCount = seriesOutcome.imported;
+            skippedImportedSeriesCount = seriesOutcome.skipped;
+        }
+        if (bindingsApi && imported.bindings && typeof imported.bindings === 'object') {
+            var importedBindingData = { bindings: cloneJson(imported.bindings) };
+            var sourceBindings = bindingsApi.ensureState(importedBindingData);
+            var targetBindings = bindingsApi.ensureState(dd);
+            ['characters', 'chats'].forEach(function (scope) {
+                Object.keys(sourceBindings[scope]).forEach(function (key) {
+                    var record = sourceBindings[scope][key];
+                    var target = bindingsApi.getTarget(record);
+                    if (target && target.kind === 'day-night') {
+                        if (importedPairIdMap[target.pairId]) target.pairId = importedPairIdMap[target.pairId];
+                        else if (skippedImportedPairIds[target.pairId]) return;
+                        if (!pairsApi.getPair(dd, target.pairId)) return;
+                    }
+                    targetBindings[scope][key] = record;
+                    importedBindingCount += 1;
+                });
+            });
+            if (!targetBindings.manualTarget && sourceBindings.manualTarget) {
+                var manualTarget = bindingsApi.normalizeTarget(sourceBindings.manualTarget);
+                if (manualTarget && manualTarget.kind === 'day-night') {
+                    if (importedPairIdMap[manualTarget.pairId]) manualTarget.pairId = importedPairIdMap[manualTarget.pairId];
+                    else if (skippedImportedPairIds[manualTarget.pairId]) manualTarget = null;
+                    if (manualTarget && !pairsApi.getPair(dd, manualTarget.pairId)) manualTarget = null;
+                }
+                if (manualTarget) {
+                    targetBindings.manualTarget = manualTarget;
+                    targetBindings.manualTheme = manualTarget.kind === 'theme' ? manualTarget.themeName : '';
+                }
+            }
+        }
 
         save(dd);
+        if (bindingController && importedBindingCount) bindingController.reconcile();
         renderCatbar();
         renderGrid();
         renderBottomStatus();
-        toast('✅ 导入成功：' + importedCount + ' 个标注');
+        toast('✅ 导入成功：' + importedCount + ' 个美化标注' +
+            (importedPairCount ? '，' + importedPairCount + ' 组日夜美化' : '') +
+            (importedSeriesCount ? '，' + importedSeriesCount + ' 个系列' : '') +
+            (skippedImportedSeriesCount ? '；' + skippedImportedSeriesCount + ' 个系列未新增（可能已存在、成员缺失或归属冲突）' : '') +
+            (importedBindingCount ? '，' + importedBindingCount + ' 个绑定' : ''));
     }
 
     function openCategoryExportSheet() {
         var d = load();
         var rows = '';
         function countForCat(cat) {
-            var n = 0;
-            stThemeList.forEach(function (name) {
-                var m = d.themeMeta[name] || {};
-                if (cat === '__uncategorized__') { if (!m.category) n++; }
-                else if (m.category === cat) n++;
-            });
-            return n;
+            return getItemsForDisplayCategory(d, cat).length;
         }
         rows += '<button class="tm-cat-export-item" data-cat="__uncategorized__"><span>未分类</span><small>' + countForCat('__uncategorized__') + ' 个美化</small></button>';
         d.categories.forEach(function (cat) {
@@ -3398,14 +5093,14 @@
                 if (count <= 0) { toast('这个分类里没有美化', true); return; }
                 closeSheet(sheet);
                 var data = load();
-                var targetNames = stThemeList.filter(function (name) {
-                        var m = data.themeMeta[name] || {};
-                        if (cat === '__uncategorized__') return !m.category;
-                        return m.category === cat;
-                    });
+                var targetItems = getItemsForDisplayCategory(data, cat);
+                var targetNames = expandItemThemeNames(targetItems);
                 themeTransfer.prepareExport(targetNames)
                     .then(function (prepared) {
                         var catName = cat === '__uncategorized__' ? '未分类' : cat;
+                        var exportedPairs = pairsApi.exportPairs(data, prepared.themes.map(function (theme) { return theme.name; }));
+                        var seriesManifest = buildSeriesManifestForBundle(data, prepared.themes, exportedPairs);
+                        var skippedSeriesCount = Math.max(0, countSeriesForItems(data, targetItems) - seriesManifest.groups.length);
                         var bundle = {
                             type: 'theme-mgr-theme-bundle',
                             version: 1,
@@ -3414,6 +5109,8 @@
                             themes: prepared.themes,
                             categories: cat === '__uncategorized__' ? [] : [cat],
                             themeMeta: buildThemeMetaForBundle(prepared.themes),
+                            dayNightPairs: exportedPairs,
+                            seriesManifest: seriesManifest,
                             themeFingerprints: prepared.fingerprints.byFingerprint,
                             themeCompatibilityReport: prepared.report,
                         };
@@ -3422,7 +5119,9 @@
                             ? '，兼容补齐 ' + prepared.report.legacyCount + ' 个旧主题的 ' + prepared.report.filledFieldCount + ' 个字段'
                             : '';
                         downloadJsonFile('theme-mgr-' + safeName + '-' + new Date().toISOString().slice(0, 10) + '.json', bundle, function (assetCount) {
-                            toast('✅ 已安全导出「' + catName + '」：' + prepared.themes.length + ' 个' + reportText + (assetCount ? '，含 ' + assetCount + ' 张图片' : ''));
+                            toast('✅ 已安全导出「' + catName + '」：' + prepared.themes.length + ' 个' + reportText +
+                                (assetCount ? '，含 ' + assetCount + ' 张图片' : '') +
+                                (skippedSeriesCount ? '；' + skippedSeriesCount + ' 个系列因成员不完整未附带关系' : ''));
                         });
                     })
                     .catch(function (err) {
@@ -3652,7 +5351,7 @@
                         })
                         .catch(function (err) { return { file: file, error: err }; });
                 })).then(function (results) {
-                    var payload = { themes: [], themeMeta: {}, categories: [] };
+                    var payload = { themes: [], themeMeta: {}, categories: [], dayNightPairs: [], seriesGroups: [] };
                     var errors = [];
                     results.forEach(function (res) {
                         if (res.error) { errors.push(res.error.message); return; }
@@ -3673,13 +5372,19 @@
             if (stThemeList.length === 0) { toast('没有可导出的美化', true); return; }
             themeTransfer.prepareExport(stThemeList.slice())
                 .then(function (prepared) {
+                    var data = load();
+                    var exportedPairs = pairsApi.exportPairs(data, prepared.themes.map(function (theme) { return theme.name; }));
+                    var seriesManifest = buildSeriesManifestForBundle(data, prepared.themes, exportedPairs);
+                    var skippedSeriesCount = Math.max(0, seriesApi.listSeries(data).length - seriesManifest.groups.length);
                     var bundle = {
                         type: 'theme-mgr-theme-bundle',
                         version: 1,
                         exportedAt: new Date().toISOString(),
                         themes: prepared.themes,
-                        categories: load().categories.slice(),
+                        categories: data.categories.slice(),
                         themeMeta: buildThemeMetaForBundle(prepared.themes),
+                        dayNightPairs: exportedPairs,
+                        seriesManifest: seriesManifest,
                         themeFingerprints: prepared.fingerprints.byFingerprint,
                         themeCompatibilityReport: prepared.report,
                     };
@@ -3687,7 +5392,9 @@
                         ? '，兼容补齐 ' + prepared.report.legacyCount + ' 个旧主题的 ' + prepared.report.filledFieldCount + ' 个字段'
                         : '';
                     downloadJsonFile('theme-mgr-themes-' + new Date().toISOString().slice(0, 10) + '.json', bundle, function (assetCount) {
-                        toast('✅ 已安全导出美化包：' + prepared.themes.length + ' 个' + reportText + (assetCount ? '，含 ' + assetCount + ' 张图片' : ''));
+                        toast('✅ 已安全导出美化包：' + prepared.themes.length + ' 个' + reportText +
+                            (assetCount ? '，含 ' + assetCount + ' 张图片' : '') +
+                            (skippedSeriesCount ? '；' + skippedSeriesCount + ' 个系列因成员不完整未附带关系' : ''));
                     });
                 })
                 .catch(function (err) {
@@ -3699,6 +5406,15 @@
         sheet.querySelector('#tm-clear').addEventListener('click', function () {
             if (!confirm('确定清空所有标注数据（分类、标签、截图）？\n主题文件本身不受影响。')) return;
             var dd = load(); dd.themeMeta = {}; dd.categories = []; curCat = '__all__';
+            if (pairsApi) {
+                var pairState = pairsApi.ensureState(dd);
+                Object.keys(pairState.pairs).forEach(function (id) {
+                    pairState.pairs[id].meta = pairsApi.normalizeMeta({});
+                });
+            }
+            if (seriesApi) {
+                seriesApi.listSeries(dd).forEach(function (group) { group.category = ''; });
+            }
             save(dd); closeSheet(sheet);
             fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); });
             toast('已清空');
@@ -3712,7 +5428,7 @@
         var listHTML = d.categories.length === 0
             ? '<div class="tm-empty"><i class="fa-solid fa-tags"></i><span>还没有分类</span></div>'
             : d.categories.map(function (cat, idx) {
-                var n = 0; for (var k in d.themeMeta) { if (d.themeMeta[k].category === cat) n++; }
+                var n = getItemsForDisplayCategory(d, cat).length;
                 return '<div class="tm-cat-item" data-idx="' + idx + '"><span class="tm-drag-handle" draggable="true" data-idx="' + idx + '"><i class="fa-solid fa-grip-vertical"></i></span><span class="tm-cat-name">' + esc(cat) + '</span><span class="tm-cat-count">' + n + '个</span>' +
                     '<button class="tm-btn-sm tm-cat-ren" data-idx="' + idx + '"><i class="fa-solid fa-pen"></i></button>' +
                     '<button class="tm-btn-sm tm-cat-del" data-idx="' + idx + '"><i class="fa-solid fa-trash"></i></button></div>';
@@ -3907,7 +5623,15 @@
                 var dd = load(); var idx = parseInt(btn.dataset.idx); var old = dd.categories[idx];
                 var nw = prompt('重命名（原：' + old + '）：', old); if (!nw || !nw.trim() || nw.trim() === old) return;
                 nw = nw.trim(); dd.categories[idx] = nw;
-                for (var k in dd.themeMeta) { if (dd.themeMeta[k].category === old) dd.themeMeta[k].category = nw; }
+                getLogicalItems(dd).forEach(function (item) {
+                    var meta = getItemMeta(dd, item);
+                    if (meta.category === old) meta.category = nw;
+                });
+                if (seriesApi) {
+                    seriesApi.listSeries(dd).forEach(function (group) {
+                        if (group.category === old) group.category = nw;
+                    });
+                }
                 save(dd); closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('已重命名');
             });
         });
@@ -3916,7 +5640,15 @@
                 var dd = load(); var idx = parseInt(btn.dataset.idx); var name = dd.categories[idx];
                 if (!confirm('删除分类「' + name + '」？')) return;
                 dd.categories.splice(idx, 1);
-                for (var k in dd.themeMeta) { if (dd.themeMeta[k].category === name) dd.themeMeta[k].category = ''; }
+                getLogicalItems(dd).forEach(function (item) {
+                    var meta = getItemMeta(dd, item);
+                    if (meta.category === name) meta.category = '';
+                });
+                if (seriesApi) {
+                    seriesApi.listSeries(dd).forEach(function (group) {
+                        if (group.category === name) group.category = '';
+                    });
+                }
                 if (curCat === name) curCat = '__all__';
                 save(dd); closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('已删除');
             });
@@ -3975,6 +5707,7 @@
                 save(migratedData);
                 saveToDB(migratedData, function () { try { localStorage.removeItem('theme_mgr_v2'); } catch (e) {} });
             }
+            if (bindingController) bindingController.start();
             updateBtn();
         });
     }

@@ -8,11 +8,17 @@ require('../src/theme-api.js');
 require('../src/theme-runtime.js');
 require('../src/theme-transactions.js');
 require('../src/theme-transfer.js');
+require('../src/theme-pairs.js');
+require('../src/theme-series.js');
+require('../src/theme-bindings.js');
 require('../src/theme-appearance.js');
 
 const modules = global.ThemeMgrModules;
 const schema = modules.themeSchema;
 const appearance = modules.themeAppearance;
+const pairs = modules.themePairs;
+const series = modules.themeSeries;
+const bindings = modules.themeBindings;
 
 function clone(value) {
     return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -933,4 +939,888 @@ test('rename rejects direct and sanitized filename conflicts without saving', as
     );
     assert.equal(harness.calls.length, 0);
     assert.deepEqual(harness.store.Source, { name: 'Source', main_text_color: '#source' });
+});
+
+function makeBindingContext(overrides) {
+    overrides = overrides || {};
+    const chatId = overrides.chatId === undefined ? 'Chat One' : overrides.chatId;
+    return {
+        characters: overrides.characters || [{ name: 'Alice', avatar: 'alice.png', chat: chatId }],
+        groups: overrides.groups || [],
+        characterId: overrides.characterId === undefined ? 0 : overrides.characterId,
+        groupId: overrides.groupId,
+        chatId,
+        chatMetadata: overrides.chatMetadata === undefined ? { integrity: 'chat-uuid-1' } : overrides.chatMetadata,
+        getCurrentChatId() { return chatId; },
+    };
+}
+
+test('day-night pairs merge two real themes into one logical item with shared editable metadata', () => {
+    const data = {
+        themeMeta: {
+            Sunrise: { category: 'Soft', tags: ['warm'], author: 'Alice', useCount: 2, imageData: 'day.png' },
+            Moonrise: { category: 'Dark', tags: ['cool'], starred: true, useCount: 3, imageData: 'night.png' },
+        },
+    };
+
+    const result = pairs.createPair(data, {
+        id: 'pair-1',
+        name: 'Garden',
+        dayTheme: 'Sunrise',
+        nightTheme: 'Moonrise',
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.pair.meta.tags, ['warm', 'cool']);
+    assert.equal(result.pair.meta.useCount, 3);
+    assert.equal(result.pair.meta.starred, true);
+    const items = pairs.buildLogicalItems(data, ['Sunrise', 'Moonrise', 'Solo']);
+    assert.deepEqual(items.map((item) => [item.kind, item.name]), [
+        ['pair', 'Garden'],
+        ['theme', 'Solo'],
+    ]);
+    assert.equal(pairs.getVariantTheme(data, 'pair-1', 'day'), 'Sunrise');
+    assert.equal(pairs.getVariantTheme(data, 'pair-1', 'night'), 'Moonrise');
+    assert.equal(pairs.renamePair(data, 'pair-1', 'Garden 2'), true);
+    assert.equal(pairs.getPair(data, 'pair-1').name, 'Garden 2');
+});
+
+test('day-night pair export and import preserve both real themes and the logical relationship', () => {
+    const source = { themeMeta: {} };
+    pairs.createPair(source, {
+        id: 'pair-export',
+        name: 'Day and Night',
+        dayTheme: 'Light',
+        nightTheme: 'Dark',
+        meta: { category: 'Series', tags: ['paired'] },
+    });
+
+    assert.deepEqual(pairs.exportPairs(source, ['Light']), []);
+    const exported = pairs.exportPairs(source, ['Light', 'Dark']);
+    assert.equal(exported.length, 1);
+    assert.equal(exported[0].name, 'Day and Night');
+
+    const target = { themeMeta: {} };
+    const outcome = pairs.importPairs(target, exported, ['Light', 'Dark']);
+    assert.equal(outcome.imported, 1);
+    assert.equal(outcome.skipped, 0);
+    assert.equal(outcome.idMap['pair-export'], 'pair-export');
+    assert.equal(pairs.getPair(target, 'pair-export').nightTheme, 'Dark');
+});
+
+test('series groups ordinary and day-night logical items without changing their theme data', () => {
+    const data = { themeMeta: { Rose: { author: 'Alice' }, Blue: { tags: ['cool'] } } };
+    const result = series.createSeries(data, {
+        id: 'series-colors',
+        name: 'Color Set',
+        category: 'Variants',
+        members: [
+            { kind: 'theme', themeName: 'Rose' },
+            { kind: 'day-night', pairId: 'pair-colors' },
+        ],
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(series.getSeries(data, 'series-colors').category, 'Variants');
+    assert.deepEqual(data.themeMeta, { Rose: { author: 'Alice' }, Blue: { tags: ['cool'] } });
+    assert.equal(series.findSeriesByTarget(data, { kind: 'day-night', pairId: 'pair-colors' }).id, 'series-colors');
+    assert.equal(series.createSeries(data, {
+        name: 'Duplicate',
+        members: [
+            { kind: 'theme', themeName: 'Other' },
+            { kind: 'theme', themeName: 'Rose' },
+        ],
+    }).reason, 'already-series');
+});
+
+test('series references survive day-night creation and dissolution in their original position', () => {
+    const data = {};
+    series.createSeries(data, {
+        id: 'series-pair-flow',
+        name: 'Flow',
+        members: [
+            { kind: 'theme', themeName: 'Day' },
+            { kind: 'theme', themeName: 'Night' },
+            { kind: 'theme', themeName: 'Extra' },
+        ],
+    });
+
+    const merged = series.mergeThemeTargetsIntoPair(data, ['Day', 'Night'], 'pair-flow');
+    assert.equal(merged.ok, true);
+    assert.deepEqual(series.getSeries(data, 'series-pair-flow').members, [
+        { kind: 'day-night', pairId: 'pair-flow' },
+        { kind: 'theme', themeName: 'Extra' },
+    ]);
+
+    const expanded = series.replacePairReference(data, 'pair-flow', ['Day', 'Night']);
+    assert.equal(expanded.ok, true);
+    assert.deepEqual(series.getSeries(data, 'series-pair-flow').members, [
+        { kind: 'theme', themeName: 'Day' },
+        { kind: 'theme', themeName: 'Night' },
+        { kind: 'theme', themeName: 'Extra' },
+    ]);
+});
+
+test('series cleanup dissolves only the relationship when fewer than two members remain', () => {
+    const data = {};
+    series.createSeries(data, {
+        id: 'series-cleanup',
+        name: 'Cleanup',
+        members: [
+            { kind: 'theme', themeName: 'Old' },
+            { kind: 'theme', themeName: 'Keep' },
+        ],
+    });
+
+    assert.equal(series.renameThemeReferences(data, 'Old', 'New'), 1);
+    assert.equal(series.findSeriesByTarget(data, { kind: 'theme', themeName: 'New' }).id, 'series-cleanup');
+    assert.equal(series.removeThemeReferences(data, ['New']), 1);
+    assert.equal(series.getSeries(data, 'series-cleanup'), null);
+    assert.equal(data.themeMeta, undefined);
+});
+
+test('series export and import require every member and remap day-night pair ids', () => {
+    const source = {};
+    series.createSeries(source, {
+        id: 'series-export',
+        name: 'Exported Set',
+        category: 'Sets',
+        members: [
+            { kind: 'theme', themeName: 'Solo' },
+            { kind: 'day-night', pairId: 'pair-old' },
+        ],
+    });
+
+    assert.deepEqual(series.exportSeries(source, ['Solo'], ['pair-old']).map((item) => item.id), ['series-export']);
+    assert.deepEqual(series.exportSeries(source, ['Solo'], []), []);
+
+    const target = {};
+    const imported = series.importSeries(target, series.exportSeries(source, ['Solo'], ['pair-old']), {
+        availableThemeNames: ['Solo'],
+        availablePairIds: ['pair-new'],
+        pairIdMap: { 'pair-old': 'pair-new' },
+    });
+    assert.equal(imported.imported, 1);
+    assert.deepEqual(series.getSeries(target, 'series-export').members, [
+        { kind: 'theme', themeName: 'Solo' },
+        { kind: 'day-night', pairId: 'pair-new' },
+    ]);
+
+    const incomplete = {};
+    const skipped = series.importSeries(incomplete, series.exportSeries(source, ['Solo'], ['pair-old']), {
+        availableThemeNames: ['Solo'],
+        availablePairIds: [],
+        pairIdMap: {},
+    });
+    assert.equal(skipped.imported, 0);
+    assert.equal(series.listSeries(incomplete).length, 0);
+});
+
+test('series export skips the whole group when any member is outside the export', () => {
+    const data = {};
+    series.createSeries(data, {
+        id: 'series-complete-export',
+        name: 'Complete Export',
+        members: [
+            { kind: 'theme', themeName: 'First' },
+            { kind: 'theme', themeName: 'Second' },
+            { kind: 'day-night', pairId: 'pair-complete-export' },
+        ],
+    });
+
+    assert.deepEqual(
+        series.exportSeries(data, ['First', 'Second'], ['pair-complete-export']).map((group) => group.id),
+        ['series-complete-export'],
+    );
+    assert.deepEqual(series.exportSeries(data, ['First'], ['pair-complete-export']), []);
+    assert.deepEqual(series.exportSeries(data, ['First', 'Second'], []), []);
+});
+
+test('series import skips the whole group when any member is unavailable', () => {
+    const raw = [{
+        id: 'series-incomplete-import',
+        name: 'Incomplete Import',
+        members: [
+            { kind: 'theme', themeName: 'First' },
+            { kind: 'theme', themeName: 'Second' },
+            { kind: 'day-night', pairId: 'pair-source' },
+        ],
+    }];
+
+    const missingTheme = {};
+    const themeOutcome = series.importSeries(missingTheme, raw, {
+        availableThemeNames: ['First'],
+        availablePairIds: ['pair-target'],
+        pairIdMap: { 'pair-source': 'pair-target' },
+    });
+    assert.deepEqual(themeOutcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.deepEqual(series.listSeries(missingTheme), []);
+
+    const missingPair = {};
+    const pairOutcome = series.importSeries(missingPair, raw, {
+        availableThemeNames: ['First', 'Second'],
+        availablePairIds: [],
+        pairIdMap: {},
+    });
+    assert.deepEqual(pairOutcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.deepEqual(series.listSeries(missingPair), []);
+});
+
+test('series import rejects ordinary targets already represented by a local day-night item', () => {
+    const data = {
+        dayNight: {
+            version: 1,
+            pairs: {
+                'pair-local': {
+                    id: 'pair-local',
+                    name: 'Local Pair',
+                    dayTheme: 'First',
+                    nightTheme: 'Night',
+                },
+            },
+        },
+    };
+    const outcome = series.importSeries(data, [{
+        id: 'series-hidden-import',
+        name: 'Hidden Import',
+        members: [
+            { kind: 'theme', themeName: 'First' },
+            { kind: 'theme', themeName: 'Second' },
+        ],
+    }], {
+        availableThemeNames: ['First', 'Second'],
+        availablePairIds: ['pair-local'],
+    });
+
+    assert.deepEqual(outcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.deepEqual(series.listSeries(data), []);
+});
+
+test('series import does not reuse a skipped source pair id that belongs to a local pair', () => {
+    const data = {
+        dayNight: {
+            version: 1,
+            pairs: {
+                'pair-source': {
+                    id: 'pair-source',
+                    name: 'Unrelated Local Pair',
+                    dayTheme: 'Local Day',
+                    nightTheme: 'Local Night',
+                },
+            },
+        },
+    };
+    const outcome = series.importSeries(data, [{
+        id: 'series-skipped-pair',
+        name: 'Skipped Pair',
+        members: [
+            { kind: 'theme', themeName: 'Solo' },
+            { kind: 'day-night', pairId: 'pair-source' },
+        ],
+    }], {
+        availableThemeNames: ['Solo'],
+        availablePairIds: ['pair-source'],
+        skippedPairIds: ['pair-source'],
+    });
+
+    assert.deepEqual(outcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.deepEqual(series.listSeries(data), []);
+});
+
+test('series import can require an explicit pair id mapping instead of reusing an unrelated local id', () => {
+    const data = {
+        dayNight: {
+            version: 1,
+            pairs: {
+                'pair-source': {
+                    id: 'pair-source',
+                    name: 'Local Pair With Same Id',
+                    dayTheme: 'Local Day',
+                    nightTheme: 'Local Night',
+                },
+            },
+        },
+    };
+    const outcome = series.importSeries(data, [{
+        id: 'series-requires-pair-map',
+        name: 'Requires Pair Map',
+        members: [
+            { kind: 'theme', themeName: 'Solo' },
+            { kind: 'day-night', pairId: 'pair-source' },
+        ],
+    }], {
+        availableThemeNames: ['Solo'],
+        availablePairIds: ['pair-source'],
+        pairIdMap: {},
+        requirePairIdMap: true,
+    });
+
+    assert.deepEqual(outcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.deepEqual(series.listSeries(data), []);
+});
+
+test('series import is idempotent for an already imported group', () => {
+    const data = {};
+    const raw = [{
+        id: 'series-idempotent',
+        name: 'Idempotent',
+        category: 'Sets',
+        members: [
+            { kind: 'theme', themeName: 'First' },
+            { kind: 'theme', themeName: 'Second' },
+        ],
+    }];
+    const options = {
+        availableThemeNames: ['First', 'Second'],
+        availablePairIds: [],
+        pairIdMap: {},
+    };
+
+    const first = series.importSeries(data, raw, options);
+    const afterFirst = clone(data.series);
+    const second = series.importSeries(data, raw, options);
+
+    assert.deepEqual(first, {
+        imported: 1,
+        skipped: 0,
+        idMap: { 'series-idempotent': 'series-idempotent' },
+    });
+    assert.deepEqual(second, {
+        imported: 0,
+        skipped: 1,
+        idMap: { 'series-idempotent': 'series-idempotent' },
+    });
+    assert.deepEqual(data.series, afterFirst);
+    assert.equal(series.listSeries(data).length, 1);
+});
+
+test('series target replacement across two groups is rejected without mutation', () => {
+    const data = {};
+    series.createSeries(data, {
+        id: 'series-left',
+        name: 'Left',
+        members: [
+            { kind: 'theme', themeName: 'Left Source' },
+            { kind: 'theme', themeName: 'Left Keep' },
+        ],
+    });
+    series.createSeries(data, {
+        id: 'series-right',
+        name: 'Right',
+        members: [
+            { kind: 'theme', themeName: 'Right Source' },
+            { kind: 'theme', themeName: 'Right Keep' },
+        ],
+    });
+    const before = clone(data.series);
+
+    const outcome = series.replaceTargets(
+        data,
+        [
+            { kind: 'theme', themeName: 'Left Source' },
+            { kind: 'theme', themeName: 'Right Source' },
+        ],
+        [{ kind: 'day-night', pairId: 'pair-cross-series' }],
+    );
+
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.reason, 'multiple-series');
+    assert.deepEqual(outcome.seriesIds, ['series-left', 'series-right']);
+    assert.deepEqual(data.series, before);
+});
+
+test('series ensureState does not leak claims from a rejected overlapping group', () => {
+    const data = {
+        series: {
+            version: 1,
+            groups: {
+                first: {
+                    id: 'first',
+                    name: 'First',
+                    members: [
+                        { kind: 'theme', themeName: 'Claimed' },
+                        { kind: 'theme', themeName: 'Shared' },
+                    ],
+                },
+                rejected: {
+                    id: 'rejected',
+                    name: 'Rejected',
+                    members: [
+                        { kind: 'theme', themeName: 'Shared' },
+                        { kind: 'theme', themeName: 'Available Later' },
+                    ],
+                },
+                later: {
+                    id: 'later',
+                    name: 'Later',
+                    members: [
+                        { kind: 'theme', themeName: 'Available Later' },
+                        { kind: 'theme', themeName: 'Final' },
+                    ],
+                },
+            },
+        },
+    };
+
+    const state = series.ensureState(data);
+
+    assert.deepEqual(Object.keys(state.groups), ['first', 'later']);
+    assert.equal(series.findSeriesByTarget(data, { kind: 'theme', themeName: 'Available Later' }).id, 'later');
+    assert.deepEqual(state.groups.later.members, [
+        { kind: 'theme', themeName: 'Available Later' },
+        { kind: 'theme', themeName: 'Final' },
+    ]);
+});
+
+test('color-scheme watcher detects mobile WebView changes even when the original media query stays stale', () => {
+    let dark = false;
+    let poll = null;
+    let clearedTimer = null;
+    const listeners = {};
+    const mediaQueries = [];
+    const makeEventTarget = () => ({
+        addEventListener(name, handler) { listeners[name] = handler; },
+        removeEventListener(name, handler) {
+            if (listeners[name] === handler) delete listeners[name];
+        },
+    });
+    const changes = [];
+    const watcher = pairs.createColorSchemeWatcher({
+        matchMedia() {
+            const query = {
+                matches: dark,
+                addEventListener(name, handler) {
+                    if (name === 'change') this.listener = handler;
+                },
+                removeEventListener() {},
+            };
+            mediaQueries.push(query);
+            return query;
+        },
+        document: makeEventTarget(),
+        window: makeEventTarget(),
+        setInterval(handler) { poll = handler; return 7; },
+        clearInterval(id) { clearedTimer = id; },
+        onChange(next, previous, reason) { changes.push({ next, previous, reason }); },
+    });
+
+    watcher.start();
+    assert.equal(watcher.getVariant(), 'day');
+    assert.equal(mediaQueries[1].matches, false);
+    dark = true;
+    assert.equal(mediaQueries[1].matches, false);
+    poll();
+    assert.deepEqual(changes, [{ next: 'night', previous: 'day', reason: 'poll' }]);
+    poll();
+    assert.equal(changes.length, 1);
+    watcher.stop();
+    assert.equal(clearedTimer, 7);
+});
+
+test('creating and dissolving a day-night item migrates character chat and manual targets safely', () => {
+    const data = { themeMeta: {} };
+    const context = makeBindingContext();
+    const state = bindings.ensureState(data);
+    state.manualTheme = 'Day';
+    bindings.setBinding(data, 'character', context, 'Night');
+    bindings.setBinding(data, 'chat', context, 'Day');
+    pairs.createPair(data, {
+        id: 'pair-bindings',
+        name: 'Shared',
+        dayTheme: 'Day',
+        nightTheme: 'Night',
+    });
+
+    assert.equal(bindings.mergeThemeReferencesIntoPair(data, ['Day', 'Night'], 'pair-bindings'), 3);
+    assert.deepEqual(bindings.resolve(data, context).target, { kind: 'day-night', pairId: 'pair-bindings' });
+    assert.deepEqual(bindings.ensureState(data).manualTarget, { kind: 'day-night', pairId: 'pair-bindings' });
+    assert.equal(bindings.listTargetReferences(data, { kind: 'day-night', pairId: 'pair-bindings' }).chats.length, 1);
+
+    const migrations = pairs.removeThemeReferences(data, ['Day']);
+    assert.deepEqual(migrations.map((item) => [item.pairId, item.replacementTheme]), [['pair-bindings', 'Night']]);
+    assert.equal(bindings.replacePairReferences(data, 'pair-bindings', 'Night'), 3);
+    assert.equal(bindings.resolve(data, context).themeName, 'Night');
+    assert.equal(pairs.getPair(data, 'pair-bindings'), null);
+});
+
+test('binding controller resolves a logical day-night target to the current preferred variant', () => {
+    const data = { themeMeta: {} };
+    pairs.createPair(data, {
+        id: 'pair-auto',
+        name: 'Auto',
+        dayTheme: 'Day',
+        nightTheme: 'Night',
+    });
+    const context = makeBindingContext();
+    bindings.setBinding(data, 'chat', context, { kind: 'day-night', pairId: 'pair-auto' });
+    let preferred = 'night';
+    let currentTheme = 'Day';
+    const applied = [];
+    const controller = bindings.createController({
+        load() { return data; },
+        save() {},
+        getContext() { return context; },
+        getCurrentThemeName() { return currentTheme; },
+        makeTargetForTheme(name) { return pairs.targetForTheme(data, name); },
+        resolveTargetTheme(target) { return pairs.resolveTargetTheme(data, target, preferred); },
+        applyTheme(name, callback) {
+            applied.push(name);
+            currentTheme = name;
+            callback(true);
+        },
+    });
+
+    controller.reconcile();
+    assert.deepEqual(applied, ['Night']);
+    assert.equal(controller.getCurrentState().resolution.themeName, 'Night');
+    preferred = 'day';
+    controller.reconcile();
+    assert.deepEqual(applied, ['Night', 'Day']);
+});
+
+test('chat changes clear a temporary day-night override before automatic reconciliation', () => {
+    const handlers = {};
+    const eventSource = {
+        on(name, handler) { (handlers[name] ||= []).push(handler); },
+        removeListener(name, handler) {
+            handlers[name] = (handlers[name] || []).filter((item) => item !== handler);
+        },
+        emit(name) { (handlers[name] || []).slice().forEach((handler) => handler()); },
+    };
+    const context = makeBindingContext();
+    context.eventSource = eventSource;
+    context.eventTypes = { CHAT_CHANGED: 'chat-changed', CHAT_LOADED: 'chat-loaded' };
+    const data = { themeMeta: {} };
+    pairs.createPair(data, {
+        id: 'pair-temporary',
+        name: 'Temporary',
+        dayTheme: 'Day',
+        nightTheme: 'Night',
+    });
+    bindings.setBinding(data, 'chat', context, { kind: 'day-night', pairId: 'pair-temporary' });
+    let preferred = 'night';
+    let currentTheme = 'Night';
+    let resetCount = 0;
+    const applied = [];
+    const controller = bindings.createController({
+        load() { return data; },
+        save() {},
+        getContext() { return context; },
+        getCurrentThemeName() { return currentTheme; },
+        resolveTargetTheme(target) { return pairs.resolveTargetTheme(data, target, preferred); },
+        beforeAutomaticReconcile() {
+            resetCount += 1;
+            preferred = 'day';
+        },
+        applyTheme(name, callback) {
+            applied.push(name);
+            currentTheme = name;
+            callback(true);
+        },
+    });
+
+    controller.start();
+    eventSource.emit('chat-changed');
+    assert.equal(resetCount, 1);
+    assert.deepEqual(applied, ['Day']);
+    controller.stop();
+});
+
+test('binding state normalizes legacy strings and drops malformed records', () => {
+    const data = {
+        bindings: {
+            characters: {
+                'alice.png': 'Rose',
+                'broken.png': { target: { kind: 'pair', themeName: 'Future' } },
+            },
+            chats: {
+                'chat-1': { label: 'First', themeName: 'Blue' },
+                '': 'Ignored',
+            },
+            manualTheme: 42,
+        },
+    };
+
+    const state = bindings.ensureState(data);
+
+    assert.deepEqual(state.characters['alice.png'], {
+        label: '',
+        target: { kind: 'theme', themeName: 'Rose' },
+    });
+    assert.equal(state.characters['broken.png'], undefined);
+    assert.deepEqual(state.chats['chat-1'], {
+        label: 'First',
+        target: { kind: 'theme', themeName: 'Blue' },
+    });
+    assert.equal(state.manualTheme, '');
+});
+
+test('chat binding overrides character binding and both fall back to the manual theme', () => {
+    const data = {};
+    const context = makeBindingContext();
+    bindings.ensureState(data).manualTheme = 'Manual';
+
+    assert.equal(bindings.setBinding(data, 'character', context, 'Character Theme').ok, true);
+    assert.equal(bindings.setBinding(data, 'chat', context, 'Chat Theme').ok, true);
+    assert.deepEqual(
+        [bindings.resolve(data, context).scope, bindings.resolve(data, context).themeName],
+        ['chat', 'Chat Theme'],
+    );
+
+    bindings.clearBinding(data, 'chat', context);
+    assert.deepEqual(
+        [bindings.resolve(data, context).scope, bindings.resolve(data, context).themeName],
+        ['character', 'Character Theme'],
+    );
+
+    bindings.clearBinding(data, 'character', context);
+    assert.deepEqual(
+        [bindings.resolve(data, context).scope, bindings.resolve(data, context).themeName],
+        ['', 'Manual'],
+    );
+});
+
+test('binding identities use avatar and chat integrity instead of mutable indexes or chat names', () => {
+    const first = makeBindingContext({ chatId: 'Before Rename' });
+    const reordered = makeBindingContext({
+        chatId: 'After Rename',
+        characters: [
+            { name: 'Other', avatar: 'other.png', chat: 'Other Chat' },
+            { name: 'Alice', avatar: 'alice.png', chat: 'After Rename' },
+        ],
+        characterId: 1,
+        chatMetadata: { integrity: 'chat-uuid-1' },
+    });
+    const data = {};
+
+    bindings.setBinding(data, 'character', first, 'Character Theme');
+    bindings.setBinding(data, 'chat', first, 'Chat Theme');
+
+    const result = bindings.resolve(data, reordered);
+    assert.equal(result.scope, 'chat');
+    assert.equal(result.themeName, 'Chat Theme');
+    bindings.clearBinding(data, 'chat', reordered);
+    assert.equal(bindings.resolve(data, reordered).themeName, 'Character Theme');
+});
+
+test('group chats use only their chat binding and never inherit a transient member character binding', () => {
+    const data = {};
+    const direct = makeBindingContext();
+    const group = makeBindingContext({
+        groups: [{ id: 'group-1', name: 'Team', chat_id: 'Group Chat' }],
+        groupId: 'group-1',
+        chatId: 'Group Chat',
+        chatMetadata: { integrity: 'group-chat-uuid' },
+    });
+    bindings.ensureState(data).manualTheme = 'Manual';
+    bindings.setBinding(data, 'character', direct, 'Character Theme');
+
+    assert.deepEqual(
+        [bindings.resolve(data, group).scope, bindings.resolve(data, group).themeName],
+        ['', 'Manual'],
+    );
+    assert.equal(bindings.setBinding(data, 'character', group, 'Wrong').reason, 'no-character');
+    assert.equal(bindings.setBinding(data, 'chat', group, 'Group Theme').ok, true);
+    assert.deepEqual(
+        [bindings.resolve(data, group).scope, bindings.resolve(data, group).themeName],
+        ['chat', 'Group Theme'],
+    );
+});
+
+test('theme rename and deletion update every binding reference atomically in plugin data', () => {
+    const data = {};
+    const first = makeBindingContext();
+    const second = makeBindingContext({
+        chatId: 'Chat Two',
+        chatMetadata: { integrity: 'chat-uuid-2' },
+    });
+    const state = bindings.ensureState(data);
+    state.manualTheme = 'Old';
+    bindings.setBinding(data, 'character', first, 'Old');
+    bindings.setBinding(data, 'chat', first, 'Old');
+    bindings.setBinding(data, 'chat', second, 'Keep');
+
+    assert.equal(bindings.renameThemeReferences(data, 'Old', 'New'), 3);
+    assert.equal(state.manualTheme, 'New');
+    assert.equal(bindings.countThemeReferences(data, 'New'), 2);
+    assert.equal(bindings.removeThemeReferences(data, 'New'), 3);
+    assert.equal(state.manualTheme, '');
+    assert.equal(bindings.countThemeReferences(data, 'New'), 0);
+    assert.equal(bindings.countThemeReferences(data, 'Keep'), 1);
+});
+
+test('binding reference listing returns concrete character and chat labels for the edit sheet', () => {
+    const data = {};
+    const first = makeBindingContext();
+    const second = makeBindingContext({
+        characters: [{ name: 'Bella', avatar: 'bella.png', chat: 'Bella Chat' }],
+        chatId: 'Bella Chat',
+        chatMetadata: { integrity: 'chat-uuid-2' },
+    });
+    bindings.setBinding(data, 'character', first, 'Rose');
+    bindings.setBinding(data, 'chat', first, 'Rose');
+    bindings.setBinding(data, 'character', second, 'Rose');
+    bindings.setBinding(data, 'chat', second, 'Other');
+
+    assert.deepEqual(bindings.listThemeReferences(data, 'Rose'), {
+        characters: [
+            { key: 'alice.png', label: 'Alice' },
+            { key: 'bella.png', label: 'Bella' },
+        ],
+        chats: [
+            { key: 'chat-uuid-1', label: 'Alice · Chat One' },
+        ],
+    });
+});
+
+test('binding overview removal can clear one matching reference or every reference without touching another target', () => {
+    const data = {};
+    const first = makeBindingContext();
+    const second = makeBindingContext({
+        characters: [{ name: 'Bella', avatar: 'bella.png', chat: 'Bella Chat' }],
+        chatId: 'Bella Chat',
+        chatMetadata: { integrity: 'chat-uuid-2' },
+    });
+    const pairTarget = { kind: 'day-night', pairId: 'pair-overview' };
+    bindings.ensureState(data).manualTarget = pairTarget;
+    bindings.setBinding(data, 'character', first, pairTarget);
+    bindings.setBinding(data, 'chat', first, pairTarget);
+    bindings.setBinding(data, 'character', second, pairTarget);
+    bindings.setBinding(data, 'chat', second, 'Keep');
+
+    assert.equal(bindings.removeTargetReference(data, 'character', 'alice.png', pairTarget), true);
+    assert.equal(bindings.removeTargetReference(data, 'chat', 'chat-uuid-2', pairTarget), false);
+    assert.equal(bindings.ensureState(data).chats['chat-uuid-2'].target.themeName, 'Keep');
+    assert.equal(bindings.removeTargetReferences(data, pairTarget), 2);
+    assert.deepEqual(bindings.listTargetReferences(data, pairTarget), { characters: [], chats: [] });
+    assert.equal(bindings.ensureState(data).chats['chat-uuid-2'].target.themeName, 'Keep');
+    assert.deepEqual(bindings.ensureState(data).manualTarget, pairTarget);
+});
+
+test('character rename migrates the stable binding key and deletion removes it', () => {
+    const data = {};
+    bindings.setBinding(data, 'character', makeBindingContext(), 'Rose');
+
+    assert.equal(bindings.moveCharacterBinding(data, 'alice.png', 'alice-renamed.png'), true);
+    assert.equal(bindings.ensureState(data).characters['alice.png'], undefined);
+    assert.equal(bindings.getThemeName(bindings.ensureState(data).characters['alice-renamed.png']), 'Rose');
+    assert.equal(bindings.removeCharacterBinding(data, 'alice-renamed.png'), true);
+    assert.equal(bindings.countBindings(data), 0);
+});
+
+test('live character image replacement migrates its binding from the previous avatar filename', () => {
+    const handlers = {};
+    const eventSource = {
+        on(name, handler) {
+            (handlers[name] ||= []).push(handler);
+        },
+        removeListener(name, handler) {
+            handlers[name] = (handlers[name] || []).filter((item) => item !== handler);
+        },
+        emit(name, payload) {
+            (handlers[name] || []).slice().forEach((handler) => handler(payload));
+        },
+    };
+    const context = makeBindingContext();
+    context.eventSource = eventSource;
+    context.eventTypes = {
+        CHAT_CHANGED: 'chat-changed',
+        CHAT_LOADED: 'chat-loaded',
+        CHARACTER_RENAMED: 'character-renamed',
+        CHARACTER_EDITED: 'character-edited',
+        CHARACTER_DELETED: 'character-deleted',
+        CHARACTER_PAGE_LOADED: 'character-page-loaded',
+    };
+    const data = {};
+    bindings.ensureState(data).manualTheme = 'Rose';
+    bindings.setBinding(data, 'character', context, 'Rose');
+    let saveCount = 0;
+    const controller = bindings.createController({
+        load() { return data; },
+        save() { saveCount += 1; },
+        getContext() { return context; },
+        getCurrentThemeName() { return 'Rose'; },
+        applyTheme() { throw new Error('no apply expected'); },
+    });
+    controller.start();
+
+    context.characters[0] = { name: 'Alice', avatar: 'alice-new.png', chat: 'Chat One' };
+    eventSource.emit('character-edited', {
+        detail: { id: 0, character: context.characters[0] },
+    });
+
+    assert.equal(bindings.ensureState(data).characters['alice.png'], undefined);
+    assert.equal(bindings.getThemeName(bindings.ensureState(data).characters['alice-new.png']), 'Rose');
+    assert.equal(bindings.ensureState(data).characters['alice-new.png'].label, 'Alice');
+    assert.equal(saveCount, 1);
+    controller.stop();
+});
+
+test('rapid context changes cancel an obsolete binding apply even when the restored theme is already current', () => {
+    const data = {};
+    const boundContext = makeBindingContext();
+    const unboundContext = makeBindingContext({
+        characterId: null,
+        characters: [],
+        chatId: '',
+        chatMetadata: {},
+    });
+    bindings.ensureState(data).manualTheme = 'Manual';
+    bindings.setBinding(data, 'chat', boundContext, 'Bound');
+
+    let context = boundContext;
+    const currentTheme = 'Manual';
+    let cancelCount = 0;
+    let appliedCount = 0;
+    const pending = [];
+    const controller = bindings.createController({
+        load() { return data; },
+        save() {},
+        getContext() { return context; },
+        getCurrentThemeName() { return currentTheme; },
+        applyTheme(name, callback) { pending.push({ name, callback }); },
+        cancelApply() { cancelCount += 1; },
+        onApplied() { appliedCount += 1; },
+    });
+
+    controller.reconcile();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].name, 'Bound');
+    assert.equal(controller.isAutomatedThemeChange('Bound'), true);
+    assert.equal(controller.recordManualTheme('Bound'), false);
+
+    context = unboundContext;
+    controller.reconcile();
+    assert.equal(cancelCount, 1);
+
+    pending[0].callback(true);
+    assert.equal(appliedCount, 0);
+    assert.equal(controller.isAutomatedThemeChange('Bound'), false);
+});
+
+test('duplicate chat events do not cancel the still-desired automatic apply after its native change fires', () => {
+    const data = {};
+    const context = makeBindingContext();
+    bindings.ensureState(data).manualTheme = 'Manual';
+    bindings.setBinding(data, 'chat', context, 'Bound');
+
+    let currentTheme = 'Manual';
+    let cancelCount = 0;
+    const pending = [];
+    const controller = bindings.createController({
+        load() { return data; },
+        save() {},
+        getContext() { return context; },
+        getCurrentThemeName() { return currentTheme; },
+        applyTheme(name, callback) { pending.push({ name, callback }); },
+        cancelApply() { cancelCount += 1; },
+    });
+
+    controller.reconcile();
+    currentTheme = 'Bound';
+    controller.reconcile();
+
+    assert.equal(cancelCount, 0);
+    pending[0].callback(true);
+    assert.equal(controller.isAutomatedThemeChange('Bound'), false);
 });
