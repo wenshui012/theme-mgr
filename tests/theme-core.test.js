@@ -8,6 +8,7 @@ require('../src/theme-api.js');
 require('../src/theme-runtime.js');
 require('../src/theme-transactions.js');
 require('../src/theme-transfer.js');
+require('../src/image-tools.js');
 require('../src/theme-pairs.js');
 require('../src/theme-series.js');
 require('../src/theme-bindings.js');
@@ -15,6 +16,7 @@ require('../src/theme-appearance.js');
 
 const modules = global.ThemeMgrModules;
 const schema = modules.themeSchema;
+const imageTools = modules.imageTools;
 const appearance = modules.themeAppearance;
 const pairs = modules.themePairs;
 const series = modules.themeSeries;
@@ -39,6 +41,156 @@ function completeBaseline(overrides) {
     });
     return Object.assign(baseline, overrides || {});
 }
+
+test('preview view normalization clamps v2 focus values and supplies safe defaults', () => {
+    assert.deepEqual(imageTools.normalizePreviewView({
+        version: 2,
+        mode: 'focus',
+        zoom: 8,
+        posX: -12,
+        posY: 140,
+    }), {
+        version: 2,
+        mode: 'focus',
+        zoom: 3,
+        posX: 0,
+        posY: 100,
+    });
+    assert.deepEqual(imageTools.normalizePreviewView(null), {
+        version: 2,
+        mode: 'focus',
+        zoom: 1,
+        posX: 50,
+        posY: 50,
+    });
+});
+
+test('preview view resolves legacy slider values and clamps zoom below one', () => {
+    assert.deepEqual(imageTools.resolvePreviewView({
+        zoom: 0.35,
+        posX: 18,
+        posY: 82,
+    }), {
+        version: 2,
+        mode: 'focus',
+        zoom: 1,
+        posX: 18,
+        posY: 82,
+    });
+});
+
+test('preview view derives focus and zoom from legacy pixel crop geometry', () => {
+    assert.deepEqual(imageTools.resolvePreviewView({
+        x: 600,
+        y: 0,
+        width: 800,
+        height: 600,
+        naturalWidth: 1600,
+        naturalHeight: 1200,
+    }), {
+        version: 2,
+        mode: 'focus',
+        zoom: 2,
+        posX: 75,
+        posY: 0,
+    });
+});
+
+test('preview asset uses the full image instead of a legacy cropped thumbnail', () => {
+    const asset = imageTools.resolvePreviewAsset({
+        imageData: 'full-image.jpg',
+        thumbData: 'legacy-cropped-thumb.jpg',
+        crop: {
+            x: 600,
+            y: 0,
+            width: 800,
+            height: 600,
+            naturalWidth: 1600,
+            naturalHeight: 1200,
+        },
+    });
+
+    assert.equal(asset.src, 'full-image.jpg');
+    assert.deepEqual(asset.view, {
+        version: 2,
+        mode: 'focus',
+        zoom: 2,
+        posX: 75,
+        posY: 0,
+    });
+});
+
+test('preview asset prefers a full-composition thumbnail for a v2 focus view', () => {
+    const view = { version: 2, mode: 'focus', zoom: 1.75, posX: 24, posY: 76 };
+    const asset = imageTools.resolvePreviewAsset({
+        imageData: 'original-image.jpg',
+        thumbData: 'full-composition-thumb.jpg',
+        crop: view,
+    });
+
+    assert.equal(asset.src, 'full-composition-thumb.jpg');
+    assert.deepEqual(asset.view, view);
+});
+
+test('preview asset gives a legacy thumbnail the default view when no full image exists', () => {
+    const asset = imageTools.resolvePreviewAsset({
+        thumbData: 'legacy-only-thumb.jpg',
+        crop: { zoom: 2.5, posX: 5, posY: 95 },
+    });
+
+    assert.equal(asset.src, 'legacy-only-thumb.jpg');
+    assert.deepEqual(asset.view, {
+        version: 2,
+        mode: 'focus',
+        zoom: 1,
+        posX: 50,
+        posY: 50,
+    });
+});
+
+test('missing preview merge leaves an existing local image and its empty companion fields untouched', () => {
+    const target = {
+        author: 'Local Author',
+        imageData: 'local-full-image.jpg',
+        thumbData: null,
+        crop: null,
+    };
+    const before = clone(target);
+    const incoming = {
+        imageData: 'incoming-full-image.jpg',
+        thumbData: 'incoming-full-composition-thumb.jpg',
+        crop: { version: 2, mode: 'focus', zoom: 1.8, posX: 30, posY: 70 },
+    };
+
+    imageTools.mergeMissingPreview(target, incoming);
+
+    assert.deepEqual(target, before);
+});
+
+test('missing preview merge copies the complete incoming preview atomically into an empty local target', () => {
+    const target = {
+        author: 'Local Author',
+        imageData: null,
+        thumbData: null,
+        crop: null,
+    };
+    const incoming = {
+        imageData: 'incoming-full-image.jpg',
+        thumbData: 'incoming-full-composition-thumb.jpg',
+        crop: { version: 2, mode: 'focus', zoom: 2.2, posX: 20, posY: 80 },
+    };
+
+    imageTools.mergeMissingPreview(target, incoming);
+
+    assert.deepEqual(target, {
+        author: 'Local Author',
+        imageData: 'incoming-full-image.jpg',
+        thumbData: 'incoming-full-composition-thumb.jpg',
+        crop: { version: 2, mode: 'focus', zoom: 2.2, posX: 20, posY: 80 },
+    });
+    incoming.crop.posX = 99;
+    assert.equal(target.crop.posX, 20);
+});
 
 function makeRuntimeForTransfer(inventory, resolveOverride) {
     const cache = {};

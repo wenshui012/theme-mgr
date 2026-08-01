@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v3.5.7",
-  "version": "3.5.7",
+  "display_name": "美化管理 v4.0.0",
+  "version": "4.0.0",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v3.5: 后端存储图片与标注、截图裁剪、分类导出、主网格/背景缩放改名、主题改名删除同步酒馆"
+  "description": "v4.0: 角色与聊天绑定、日夜美化、系列收纳、响应式预览与批量管理升级"
 }

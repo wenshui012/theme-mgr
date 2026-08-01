@@ -1,4 +1,4 @@
-// ST美化管理主界面与控制器 v3.5
+// ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
 
@@ -22,7 +22,7 @@
     var IMG_QUALITY = 0.8;
     var FAB_ID = 'tm-fab-main';
 
-    var TM_VERSION = options.version || '3.5.7';
+    var TM_VERSION = options.version || '4.0.0';
     var storageApi = null;
     var imageToolsApi = null;
     var styleApi = null;
@@ -1374,9 +1374,7 @@
             if (!existing.author && imp.author) existing.author = imp.author;
             if (!existing.description && imp.description) existing.description = imp.description;
             if (!existing.backgroundName && imp.backgroundName) existing.backgroundName = imp.backgroundName;
-            if (!existing.imageData && imp.imageData) existing.imageData = imp.imageData;
-            if (!existing.thumbData && imp.thumbData) existing.thumbData = imp.thumbData;
-            if (!existing.crop && imp.crop) existing.crop = imp.crop;
+            imageToolsApi.mergeMissingPreview(existing, imp);
         });
         save(dd);
     }
@@ -1697,12 +1695,8 @@
         imageToolsApi.compressImage(dataUrl, cb, { maxWidth: MAX_IMG_WIDTH, quality: IMG_QUALITY });
     }
 
-    function getDefaultCrop(imgW, imgH) {
-        return imageToolsApi.getDefaultCrop(imgW, imgH);
-    }
-
-    function makeThumbFromCrop(dataUrl, crop, cb) {
-        imageToolsApi.makeThumbFromCrop(dataUrl, crop, cb, { quality: IMG_QUALITY });
+    function makeResponsiveThumb(dataUrl, cb) {
+        imageToolsApi.makeResponsiveThumb(dataUrl, cb, { maxDimension: 800, quality: IMG_QUALITY });
     }
 
     function openImageCropSheet(dataUrl, initialCrop, onDone) {
@@ -1710,23 +1704,18 @@
         img.onload = function () {
             var naturalW = img.width;
             var naturalH = img.height;
-            var baseCrop = getDefaultCrop(naturalW, naturalH);
-            var state = Object.assign({}, baseCrop, initialCrop || {});
-            if (!state.zoom) state.zoom = 1;
-            if (state.zoom < 0.35) state.zoom = 0.35;
-            if (state.zoom > 3) state.zoom = 3;
-            if (state.posX === undefined) state.posX = 50;
-            if (state.posY === undefined) state.posY = 50;
+            var state = imageToolsApi.resolvePreviewView(initialCrop);
 
             var sheet = createSheet([
-                '<div class="tm-sheet-title"><i class="fa-solid fa-crop-simple"></i>选择网格预览区域</div>',
+                '<div class="tm-sheet-title"><i class="fa-solid fa-up-down-left-right"></i>调整网格显示区域</div>',
+                '<div class="tm-hint tm-crop-hint">这里只设置画面重点；网格形状变化时会自然增减边缘内容，不会裁掉原图。</div>',
                 '<div class="tm-crop-stage"><canvas id="tm-crop-canvas" width="800" height="600"></canvas></div>',
                 '<div class="tm-crop-controls">',
-                '<label>缩放 <input type="range" id="tm-crop-zoom" min="0.35" max="3" step="0.01" value="' + esc(state.zoom) + '" /></label>',
+                '<label>缩放 <input type="range" id="tm-crop-zoom" min="1" max="3" step="0.01" value="' + esc(state.zoom) + '" /></label>',
                 '<label>横向 <input type="range" id="tm-crop-x" min="0" max="100" step="1" value="' + esc(state.posX) + '" /></label>',
                 '<label>纵向 <input type="range" id="tm-crop-y" min="0" max="100" step="1" value="' + esc(state.posY) + '" /></label>',
                 '</div>',
-                '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-crop-cancel">取消</button><button class="tm-btn tm-btn-outline" id="tm-crop-reset">居中</button><button class="tm-btn tm-btn-safe" id="tm-crop-ok">使用此区域</button></div>',
+                '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-crop-cancel">取消</button><button class="tm-btn tm-btn-outline" id="tm-crop-reset">居中</button><button class="tm-btn tm-btn-safe" id="tm-crop-ok">使用此显示区域</button></div>',
             ].join(''));
 
             var canvas = sheet.querySelector('#tm-crop-canvas');
@@ -1735,44 +1724,27 @@
             var xInp = sheet.querySelector('#tm-crop-x');
             var yInp = sheet.querySelector('#tm-crop-y');
 
-            function calcCrop() {
-                var zoom = Math.max(0.35, Math.min(3, parseFloat(zoomInp.value) || 1));
-                var base = getDefaultCrop(naturalW, naturalH);
-                var cropW = Math.max(1, Math.round(base.width / zoom));
-                var cropH = Math.max(1, Math.round(base.height / zoom));
-                var posX = Math.max(0, Math.min(100, parseFloat(xInp.value) || 0));
-                var posY = Math.max(0, Math.min(100, parseFloat(yInp.value) || 0));
-                var maxX = naturalW - cropW;
-                var maxY = naturalH - cropH;
-                var x = maxX >= 0 ? Math.round(maxX * posX / 100) : -Math.round((-maxX) * posX / 100);
-                var y = maxY >= 0 ? Math.round(maxY * posY / 100) : -Math.round((-maxY) * posY / 100);
-                return {
-                    x: x,
-                    y: y,
-                    width: cropW,
-                    height: cropH,
-                    naturalWidth: naturalW,
-                    naturalHeight: naturalH,
-                    zoom: zoom,
-                    posX: posX,
-                    posY: posY,
-                };
+            function calcView() {
+                return imageToolsApi.normalizePreviewView({
+                    zoom: zoomInp.value,
+                    posX: xInp.value,
+                    posY: yInp.value,
+                });
             }
 
-            function drawCropToCanvas(c) {
-                var sx = Math.max(0, c.x);
-                var sy = Math.max(0, c.y);
-                var ex = Math.min(naturalW, c.x + c.width);
-                var ey = Math.min(naturalH, c.y + c.height);
-                var sw = Math.max(1, ex - sx);
-                var sh = Math.max(1, ey - sy);
+            function drawViewToCanvas(view) {
+                var baseScale = Math.max(canvas.width / naturalW, canvas.height / naturalH);
+                var scale = baseScale * view.zoom;
+                var drawW = naturalW * scale;
+                var drawH = naturalH * scale;
+                var drawX = (canvas.width - drawW) * view.posX / 100;
+                var drawY = (canvas.height - drawH) * view.posY / 100;
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, drawX, drawY, drawW, drawH);
             }
 
             function renderCrop() {
-                var c = calcCrop();
-                drawCropToCanvas(c);
+                drawViewToCanvas(calcView());
             }
 
             zoomInp.addEventListener('input', renderCrop);
@@ -1786,17 +1758,19 @@
             });
             sheet.querySelector('#tm-crop-cancel').addEventListener('click', function () { closeSheet(sheet); });
             sheet.querySelector('#tm-crop-ok').addEventListener('click', function () {
-                var crop = calcCrop();
-                var thumb = canvas.toDataURL('image/jpeg', IMG_QUALITY);
-                closeSheet(sheet);
-                if (onDone) onDone({ imageData: dataUrl, thumbData: thumb, crop: crop });
+                var button = sheet.querySelector('#tm-crop-ok');
+                var view = calcView();
+                button.disabled = true;
+                button.textContent = '处理中...';
+                makeResponsiveThumb(dataUrl, function (thumb) {
+                    closeSheet(sheet);
+                    if (onDone) onDone({ imageData: dataUrl, thumbData: thumb || dataUrl, crop: view });
+                });
             });
             renderCrop();
         };
         img.onerror = function () {
-            makeThumbFromCrop(dataUrl, null, function (thumb) {
-                if (onDone) onDone({ imageData: dataUrl, thumbData: thumb, crop: null });
-            });
+            toast('无法读取这张图片，请重新选择', true);
         };
         img.src = dataUrl;
     }
@@ -3364,9 +3338,16 @@
         var freqBadge = (d.showFreq !== false && (meta.useCount || 0) > 5 && !batchMode)
             ? '<div class="tm-badge-freq">' + meta.useCount + '次</div>'
             : '';
-        var previewImage = variantMeta.thumbData || variantMeta.imageData;
+        var previewAsset = imageToolsApi.resolvePreviewAsset(variantMeta);
+        var previewImage = previewAsset.src;
+        var previewView = previewAsset.view;
+        var previewStyle = '--tm-image-focus-x:' + esc(previewView.posX) + '%;' +
+            '--tm-image-focus-y:' + esc(previewView.posY) + '%;' +
+            '--tm-image-zoom:' + esc(previewView.zoom) + ';';
         var imgContent = previewImage
-            ? '<img src="' + esc(previewImage) + '" alt="' + esc(item.name) + '" loading="lazy" decoding="async" />'
+            ? '<div class="tm-card-preview-slot" style="' + previewStyle + '">' +
+                '<img src="' + esc(previewImage) + '" alt="' + esc(item.name) + '" loading="lazy" decoding="async" />' +
+                '</div>'
             : '<div class="tm-card-noimg"><i class="fa-solid fa-palette"></i><span>' + esc(item.name.slice(0, 6)) + '</span></div>';
         var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-key="' + esc(item.key) + '" title="操作"><i class="fa-solid fa-ellipsis"></i></button>';
         var tagText = (meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || '');
@@ -4710,7 +4691,7 @@
         var editImgData = activeDraft.imageData;
         var editThumbData = activeDraft.thumbData;
         var editCrop = activeDraft.crop;
-        var editPreviewData = editThumbData || editImgData;
+        var editPreviewData = editImgData || editThumbData;
         var editTags = (meta.tags || []).slice();
         var editBackgroundName = activeDraft.backgroundName;
         var itemTarget = getItemTarget(item);
@@ -4744,10 +4725,9 @@
             '<div class="tm-field"><label>标签</label><div class="tm-tags-wrap" id="tm-tags-wrap"></div>' +
             '<div class="tm-tag-add-row"><input type="text" id="tm-tag-inp" placeholder="输入标签后回车" /><button class="tm-btn tm-btn-outline" id="tm-tag-add" style="font-size:.8em;padding:6px 10px">添加</button></div></div>',
             '<div class="tm-field"><label>预览截图</label>' +
-            '<div class="tm-imgarea" id="tm-dimgarea">' + (editPreviewData ? '<img src="' + editPreviewData + '" />' : '<div class="tm-imgph"><i class="fa-regular fa-image"></i><span>点击或拖拽上传截图</span></div>') + '</div>' +
+            '<div class="tm-imgarea" id="tm-dimgarea">' + (editPreviewData ? '<img src="' + esc(editPreviewData) + '" />' : '<div class="tm-imgph"><i class="fa-regular fa-image"></i><span>点击或拖拽上传截图</span></div>') + '</div>' +
             '<input type="file" id="tm-dfile" accept="image/*" style="display:none" />' +
-            '<div class="tm-img-actions"><button class="tm-btn tm-btn-outline" id="tm-dpick" style="font-size:.8em"><i class="fa-solid fa-image"></i> 选择图片</button>' +
-            (editPreviewData ? '<button class="tm-btn tm-btn-danger" id="tm-dclr" style="font-size:.8em">删除图片</button>' : '') + '</div></div>',
+            '<div class="tm-img-actions"></div></div>',
             '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-dcancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-dsave">保存</button></div>',
         ].join(''));
 
@@ -4786,17 +4766,20 @@
         // 图片
         var fileInp = sheet.querySelector('#tm-dfile');
         var imgArea = sheet.querySelector('#tm-dimgarea');
+        var imgActions = sheet.querySelector('.tm-img-actions');
+        function renderImageActions() {
+            var hasImage = Boolean(editImgData || editThumbData);
+            imgActions.innerHTML = '<button class="tm-btn tm-btn-outline" id="tm-dpick" style="font-size:.8em"><i class="fa-solid fa-image"></i> 选择图片</button>' +
+                (hasImage ? '<button class="tm-btn tm-btn-outline" id="tm-dadjust" style="font-size:.8em"><i class="fa-solid fa-up-down-left-right"></i> 调整显示区域</button>' +
+                    '<button class="tm-btn tm-btn-danger" id="tm-dclr" style="font-size:.8em">删除图片</button>' : '');
+        }
         function setImg(data, thumb, crop) {
-            editImgData = data;
-            editThumbData = thumb || data;
+            editImgData = data || null;
+            editThumbData = thumb || null;
             editCrop = crop || null;
-            var preview = editThumbData || editImgData;
-            imgArea.innerHTML = preview ? '<img src="' + preview + '" />' : '<div class="tm-imgph"><i class="fa-regular fa-image"></i><span>点击或拖拽上传截图</span></div>';
-            var clrOld = sheet.querySelector('#tm-dclr'); var acts = sheet.querySelector('.tm-img-actions');
-            if (preview && !clrOld && acts) {
-                var b2 = document.createElement('button'); b2.className = 'tm-btn tm-btn-danger'; b2.id = 'tm-dclr'; b2.style.fontSize = '.8em'; b2.textContent = '删除图片';
-                b2.addEventListener('click', function () { setImg(null, null, null); }); acts.appendChild(b2);
-            } else if (!preview && clrOld) clrOld.parentNode.removeChild(clrOld);
+            var preview = editImgData || editThumbData;
+            imgArea.innerHTML = preview ? '<img src="' + esc(preview) + '" />' : '<div class="tm-imgph"><i class="fa-regular fa-image"></i><span>点击或拖拽上传截图</span></div>';
+            renderImageActions();
         }
         function captureVariantDraft() {
             var draft = variantDrafts[selectedVariant];
@@ -4851,20 +4834,36 @@
             var r = new FileReader();
             r.onload = function (e) {
                 compressImage(e.target.result, function (c) {
-                    openImageCropSheet(c, editCrop, function (res) {
+                    openImageCropSheet(c, null, function (res) {
                         setImg(res.imageData, res.thumbData, res.crop);
                     });
                 });
             };
             r.readAsDataURL(f);
         }
-        sheet.querySelector('#tm-dpick').addEventListener('click', function () { fileInp.click(); });
+        function adjustCurrentImage() {
+            var source = editImgData || editThumbData;
+            if (!source) return;
+            openImageCropSheet(source, editCrop, function (res) {
+                setImg(res.imageData, res.thumbData, res.crop);
+            });
+        }
+        renderImageActions();
+        imgActions.addEventListener('click', function (e) {
+            var button = e.target && e.target.closest ? e.target.closest('button') : null;
+            if (!button || !imgActions.contains(button)) return;
+            if (button.id === 'tm-dpick') fileInp.click();
+            else if (button.id === 'tm-dadjust') adjustCurrentImage();
+            else if (button.id === 'tm-dclr') setImg(null, null, null);
+        });
         imgArea.addEventListener('click', function () { fileInp.click(); });
-        fileInp.addEventListener('change', function () { if (fileInp.files[0]) handleFile(fileInp.files[0]); });
+        fileInp.addEventListener('change', function () {
+            if (fileInp.files[0]) handleFile(fileInp.files[0]);
+            fileInp.value = '';
+        });
         imgArea.addEventListener('dragover', function (e) { e.preventDefault(); imgArea.classList.add('drag'); });
         imgArea.addEventListener('dragleave', function () { imgArea.classList.remove('drag'); });
         imgArea.addEventListener('drop', function (e) { e.preventDefault(); imgArea.classList.remove('drag'); if (e.dataTransfer && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
-        var clr = sheet.querySelector('#tm-dclr'); if (clr) clr.addEventListener('click', function () { setImg(null, null, null); });
 
         sheet.querySelector('#tm-dnewcat').addEventListener('click', function () {
             var name = prompt('新分类名称：'); if (!name || !name.trim()) return; name = name.trim();
@@ -4891,27 +4890,17 @@
             captureVariantDraft();
 
             function uploadDraft(draft, callback) {
-                function uploadReady() {
-                    uploadImage(draft.imageData, function (_err, imgUrl) {
-                        uploadImage(draft.thumbData, function (_err2, thumbUrl) {
-                            callback({
-                                themeName: draft.themeName,
-                                imageData: imgUrl || null,
-                                thumbData: thumbUrl || imgUrl || null,
-                                crop: draft.crop || null,
-                                backgroundName: draft.backgroundName || '',
-                            });
+                uploadImage(draft.imageData, function (_err, imgUrl) {
+                    uploadImage(draft.thumbData, function (_err2, thumbUrl) {
+                        callback({
+                            themeName: draft.themeName,
+                            imageData: imgUrl || draft.imageData || null,
+                            thumbData: draft.thumbData ? (thumbUrl || draft.thumbData) : null,
+                            crop: draft.crop || null,
+                            backgroundName: draft.backgroundName || '',
                         });
                     });
-                }
-                if (draft.imageData && !draft.thumbData) {
-                    makeThumbFromCrop(draft.imageData, draft.crop, function (thumb) {
-                        draft.thumbData = thumb;
-                        uploadReady();
-                    });
-                } else {
-                    uploadReady();
-                }
+                });
             }
 
             var draftKeys = pair ? ['day', 'night'] : ['day'];
@@ -4992,9 +4981,7 @@
             } else {
                 var existing = getMeta(dd, k);
                 if (!Array.isArray(existing.tags)) existing.tags = [];
-                if (!existing.imageData && imp.imageData) existing.imageData = imp.imageData;
-                if (!existing.thumbData && imp.thumbData) existing.thumbData = imp.thumbData;
-                if (!existing.crop && imp.crop) existing.crop = imp.crop;
+                imageToolsApi.mergeMissingPreview(existing, imp);
                 if (!existing.category && imp.category) existing.category = imp.category;
                 if (!existing.backgroundName && imp.backgroundName) existing.backgroundName = imp.backgroundName;
                 if (imp.tags) imp.tags.forEach(function (t) { if (existing.tags.indexOf(t) === -1) existing.tags.push(t); });
