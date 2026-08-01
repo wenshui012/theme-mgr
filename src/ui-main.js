@@ -4305,7 +4305,6 @@
         var imgThemes = stThemeList.filter(function (n) { var m = d.themeMeta[n]; return m && (m.imageData || m.thumbData); });
         var variantMeta = d.themeMeta[themeName] || {};
         var itemLabel = item.name;
-        var seriesGroup = getSeriesForItem(d, item);
 
         var sheet = createSheet([
             '<div class="tm-ctx-theme-name"><i class="fa-solid fa-palette" style="margin-right:6px;opacity:.5;"></i>' + esc(itemLabel) + '</div>',
@@ -4317,7 +4316,6 @@
             '<div class="tm-ctx-item" id="tm-ctx-star"><i class="fa-solid fa-star"></i>' + (meta.starred ? '取消收藏' : '加入收藏') + '</div>',
             '<div class="tm-ctx-item" id="tm-ctx-edit"><i class="fa-solid fa-pen"></i>编辑信息</div>',
             '<div class="tm-ctx-item" id="tm-ctx-bind"><i class="fa-solid fa-link"></i>角色 / 聊天绑定</div>',
-            seriesGroup ? '<div class="tm-ctx-item" id="tm-ctx-series-remove"><i class="fa-solid fa-arrow-right-from-bracket"></i>移出系列「' + esc(seriesGroup.name) + '」</div>' : '',
             '<div class="tm-ctx-item" id="tm-ctx-rename"><i class="fa-solid fa-i-cursor"></i>' + (item.kind === 'pair' ? '修改组合名称' : '重命名美化') + '</div>',
             item.kind === 'pair'
                 ? '<div class="tm-ctx-item danger" id="tm-ctx-delete"><i class="fa-solid fa-circle-half-stroke"></i>解除或删除日夜组合</div>'
@@ -4371,19 +4369,6 @@
         sheet.querySelector('#tm-ctx-bind').addEventListener('click', function () {
             closeSheet(sheet);
             openBindingSheet(item.key);
-        });
-
-        var removeSeriesEl = sheet.querySelector('#tm-ctx-series-remove');
-        if (removeSeriesEl) removeSeriesEl.addEventListener('click', function () {
-            if (seriesGroup.members.length <= 2 && !confirm('移出后系列将自动解散，所有真实美化仍会保留。是否继续？')) return;
-            var dd = load();
-            var result = seriesApi.removeMember(dd, seriesGroup.id, getItemTarget(item));
-            if (!result.ok) { toast('系列关系已变化，请刷新后重试', true); return; }
-            save(dd);
-            closeSheet(sheet);
-            if (result.dissolved && expandedSeriesId === seriesGroup.id) expandedSeriesId = '';
-            renderGrid();
-            toast(result.dissolved ? '系列已自动解散，美化均已保留' : '已移出系列');
         });
 
         sheet.querySelector('#tm-ctx-rename').addEventListener('click', function () {
