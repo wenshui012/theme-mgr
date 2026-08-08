@@ -665,6 +665,7 @@
         if (has('chat_width')) { cssVar('--sheldWidth', theme.chat_width + 'vw'); setControlValue('#chat_width_slider', theme.chat_width); setControlValue('#chat_width_slider_counter', theme.chat_width); }
 
         if (has('custom_css')) {
+            var customCssInput = document.getElementById('customCSS');
             setControlValue('#customCSS', theme.custom_css);
             var style = document.getElementById('custom-style');
             if (!style) {
@@ -674,6 +675,11 @@
                 document.head.appendChild(style);
             }
             style.innerHTML = theme.custom_css;
+            // The fallback path does not run ST's private applyTheme(). Notify
+            // native/third-party editors after both the source and style agree.
+            if (customCssInput && typeof customCssInput.dispatchEvent === 'function') {
+                customCssInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
         }
 
         if (has('fast_ui_mode')) {
@@ -729,7 +735,10 @@
     function applyUsableNativeThemeFallback(theme, cb) {
         if (!isUsableThemeObject(theme, theme && theme.name)) { if (cb) cb(false); return; }
         setThemeControlValue(theme.name);
-        Promise.all([import('/scripts/power-user.js'), import('/script.js')])
+        Promise.all([
+            import('/scripts/power-user.js'),
+            import('/script.js').catch(function () { return null; }),
+        ])
             .then(function (mods) {
                 var powerUserModule = mods[0];
                 var scriptModule = mods[1];
@@ -1543,8 +1552,15 @@
                 var successful = results.filter(function (res) { return res.ok; });
                 var failed = results.filter(function (res) { return !res.ok; });
 
+                if (Array.isArray(outcome.themes)) {
+                    themeRuntime.replaceInventory(outcome.themes);
+                    stThemeList = outcome.themes.filter(function (theme) {
+                        return theme && typeof theme.name === 'string' && theme.name.trim();
+                    }).map(function (theme) { return theme.name; });
+                    stThemeListReliable = true;
+                }
+
                 successful.forEach(function (res) {
-                    themeRuntime.remember(res.theme);
                     syncThemeOption(res.theme.name);
                 });
                 var okNames = successful.map(function (res) { return res.theme.name; });
@@ -1575,20 +1591,18 @@
                 }
                 if (failed.length > 0) console.warn('[美化管理] 批量导入失败项（已恢复覆盖前主题）:', failed);
 
-                fetchThemeList(function () {
-                    renderCatbar(); renderGrid(); renderBottomStatus();
-                    if (failed.length > 0) {
-                        toast('导入完成：成功 ' + successful.length + ' 个；失败并已保护旧主题：' + failed.map(function (res) {
-                            return res.theme.name;
-                        }).join('、') + seriesImportText, true);
-                    } else if (successful.length === 1) {
-                        toast('✅ 已导入并验证美化：' + successful[0].theme.name + seriesImportText);
-                    } else {
-                        toast('✅ 已导入并验证美化：' + successful.length + ' 个' +
-                            (pairImport.imported ? '，恢复 ' + pairImport.imported + ' 组日夜美化' : '') +
-                            seriesImportText);
-                    }
-                });
+                renderCatbar(); renderGrid(); renderBottomStatus();
+                if (failed.length > 0) {
+                    toast('导入完成：成功 ' + successful.length + ' 个；失败并已保护旧主题：' + failed.map(function (res) {
+                        return res.theme.name;
+                    }).join('、') + seriesImportText, true);
+                } else if (successful.length === 1) {
+                    toast('✅ 已导入并验证美化：' + successful[0].theme.name + seriesImportText);
+                } else {
+                    toast('✅ 已导入并验证美化：' + successful.length + ' 个' +
+                        (pairImport.imported ? '，恢复 ' + pairImport.imported + ' 组日夜美化' : '') +
+                        seriesImportText);
+                }
             })
             .catch(function (err) {
                 console.warn('[美化管理] 导入美化失败:', err);
@@ -1612,6 +1626,17 @@
         )
             .then(function (result) {
                 scheduleManagerAppearanceSync();
+                if (!result.visualVerification || !result.visualVerification.ok) {
+                    console.warn('[ThemeManager] bound background skipped', {
+                        requestedTheme: themeName,
+                        currentTheme: getCurrentThemeName(),
+                        requestId: result.requestId,
+                        visualVerification: false,
+                        mismatches: result.visualVerification ? result.visualVerification.mismatches : ['unavailable'],
+                    });
+                    if (cb) cb(true, 'visual-failed');
+                    return;
+                }
                 finishApplyTheme(themeName, cb, true, result.requestId);
             })
             .catch(function (err) {
@@ -3829,6 +3854,7 @@
                         } else if (reason !== 'superseded') {
                             if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
                             else if (reason === 'load-failed') toast('主题加载失败，已保留当前主题', true);
+                            else if (reason === 'state-verify-failed') toast('主题状态未能确认切换成功，未切换绑定背景', true);
                             else if (reason === 'verify-failed') toast('主题状态或视觉验证失败，未切换绑定背景', true);
                             else toast('切换失败，请重试', true);
                         }
@@ -4340,6 +4366,7 @@
                 else if (reason !== 'superseded') {
                     if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
                     else if (reason === 'load-failed') toast('主题加载失败，已保留当前主题', true);
+                    else if (reason === 'state-verify-failed') toast('主题状态未能确认切换成功，未切换绑定背景', true);
                     else if (reason === 'verify-failed') toast('主题状态或视觉验证失败，未切换绑定背景', true);
                     else toast('切换失败', true);
                 }

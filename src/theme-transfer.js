@@ -173,8 +173,11 @@
                     verifyReason: 'theme-manager-import-batch-verify',
                     rollbackVerifyReason: 'theme-manager-import-batch-rollback-verify',
                 }).then(function (savedBatch) {
+                    if (typeof runtime.replaceInventory === 'function') {
+                        runtime.replaceInventory(savedBatch.themes || []);
+                    }
                     var results = savedBatch.results.map(function (saved, index) {
-                        runtime.remember(saved.theme);
+                        if (typeof runtime.replaceInventory !== 'function') runtime.remember(saved.theme);
                         runtime.hydrate(saved.theme);
                         return {
                             ok: true,

@@ -8,6 +8,13 @@
         var fullThemeCache = {};
         var applyRequestId = 0;
         var nativeEvictionSequence = 0;
+        var loadPowerUserModule = typeof opts.loadPowerUserModule === 'function'
+            ? opts.loadPowerUserModule
+            : function () { return import('/scripts/power-user.js'); };
+        var stateVerifyTimeoutMs = Number(opts.stateVerifyTimeoutMs) >= 0 ? Number(opts.stateVerifyTimeoutMs) : 600;
+        var stateVerifyIntervalMs = Number(opts.stateVerifyIntervalMs) >= 0 ? Number(opts.stateVerifyIntervalMs) : 25;
+        var visualMaxAttempts = Number(opts.visualMaxAttempts) > 0 ? Number(opts.visualMaxAttempts) : 4;
+        var visualRetryDelayMs = Number(opts.visualRetryDelayMs) >= 0 ? Number(opts.visualRetryDelayMs) : 50;
 
         function makeError(code, message) {
             var error = new Error(message || code);
@@ -103,6 +110,11 @@
                 if (!remember(theme)) forget(theme.name);
             });
             return themes || [];
+        }
+
+        function replaceInventory(themes) {
+            clearFullCache();
+            return captureInventory(themes || []);
         }
 
         function getInventory(options) {
@@ -209,12 +221,13 @@
             return String(control.value || '').trim();
         }
 
-        function verifyAppliedTheme(themeName, expectedTheme) {
-            return import('/scripts/power-user.js').then(function (mod) {
+        function verifyThemeState(themeName, expectedTheme) {
+            return loadPowerUserModule().then(function (mod) {
                 var powerUser = mod && mod.power_user;
                 var mismatches = [];
                 if (!powerUser) mismatches.push('power_user');
-                if (getThemeControlName() !== themeName) mismatches.push('#themes');
+                var controlTheme = getThemeControlName();
+                if (controlTheme !== themeName) mismatches.push('#themes');
                 if (powerUser && powerUser.theme !== themeName) mismatches.push('theme');
 
                 if (powerUser) {
@@ -224,7 +237,18 @@
                     });
                 }
 
-                var cssVariables = {
+                return {
+                    ok: mismatches.length === 0,
+                    mismatches: mismatches,
+                    currentTheme: powerUser && powerUser.theme ? String(powerUser.theme) : controlTheme,
+                    controlTheme: controlTheme,
+                };
+            });
+        }
+
+        function verifyThemeVisuals(expectedTheme) {
+            var mismatches = [];
+            var cssVariables = {
                     main_text_color: '--SmartThemeBodyColor',
                     italics_text_color: '--SmartThemeEmColor',
                     underline_text_color: '--SmartThemeUnderlineColor',
@@ -235,63 +259,172 @@
                     bot_mes_blur_tint_color: '--SmartThemeBotMesBlurTintColor',
                     shadow_color: '--SmartThemeShadowColor',
                     border_color: '--SmartThemeBorderColor',
-                };
-                Object.keys(cssVariables).forEach(function (key) {
-                    if (!Object.prototype.hasOwnProperty.call(expectedTheme, key)) return;
-                    var actual = global.document.documentElement.style.getPropertyValue(cssVariables[key]).trim();
-                    if (actual !== String(expectedTheme[key]).trim()) mismatches.push('visual:' + key);
-                });
+            };
+            Object.keys(cssVariables).forEach(function (key) {
+                if (!Object.prototype.hasOwnProperty.call(expectedTheme, key)) return;
+                var actual = global.document.documentElement.style.getPropertyValue(cssVariables[key]).trim();
+                if (actual !== String(expectedTheme[key]).trim()) mismatches.push(key);
+            });
 
-                if (Object.prototype.hasOwnProperty.call(expectedTheme, 'custom_css')) {
-                    var expectedCss = String(expectedTheme.custom_css == null ? '' : expectedTheme.custom_css);
-                    var expectedDomCss = expectedCss.replace(/\r\n?/g, '\n');
-                    var input = global.document.getElementById('customCSS');
-                    var style = global.document.getElementById('custom-style');
-                    if (!input || String(input.value || '').replace(/\r\n?/g, '\n') !== expectedDomCss) mismatches.push('visual:customCSS');
-                    if (!style || String(style.textContent || '').replace(/\r\n?/g, '\n') !== expectedDomCss) mismatches.push('visual:custom-style');
-                    var toolkitState = global.__baiBaiToolkitExtensionInstalled;
-                    var editorState = toolkitState && toolkitState.__baiBaiToolkitCustomCssCodeMirrorEditor;
-                    if (editorState && editorState.enabled && editorState.view &&
-                        String(editorState.view.state.doc).replace(/\r\n?/g, '\n') !== expectedDomCss) {
-                        mismatches.push('visual:custom-css-editor');
-                    }
+            if (Object.prototype.hasOwnProperty.call(expectedTheme, 'custom_css')) {
+                var expectedCss = String(expectedTheme.custom_css == null ? '' : expectedTheme.custom_css);
+                var expectedDomCss = expectedCss.replace(/\r\n?/g, '\n');
+                var input = global.document.getElementById('customCSS');
+                var style = global.document.getElementById('custom-style');
+                if (!input || String(input.value || '').replace(/\r\n?/g, '\n') !== expectedDomCss) mismatches.push('customCSS');
+                if (!style || String(style.textContent || '').replace(/\r\n?/g, '\n') !== expectedDomCss) mismatches.push('custom-style');
+                var toolkitState = global.__baiBaiToolkitExtensionInstalled;
+                var editorState = toolkitState && toolkitState.__baiBaiToolkitCustomCssCodeMirrorEditor;
+                if (editorState && editorState.enabled && editorState.view &&
+                    String(editorState.view.state.doc).replace(/\r\n?/g, '\n') !== expectedDomCss) {
+                    mismatches.push('custom-css-editor');
                 }
+            }
 
-                return { ok: mismatches.length === 0, mismatches: mismatches };
+            return Promise.resolve({ ok: mismatches.length === 0, mismatches: mismatches });
+        }
+
+        function verifyAppliedTheme(themeName, expectedTheme) {
+            return verifyThemeState(themeName, expectedTheme).then(function (state) {
+                return verifyThemeVisuals(expectedTheme).then(function (visual) {
+                    return {
+                        ok: state.ok && visual.ok,
+                        mismatches: state.mismatches.concat(visual.mismatches.map(function (key) { return 'visual:' + key; })),
+                        state: state,
+                        visual: visual,
+                    };
+                });
             });
         }
 
-        function waitForThemeApplied(themeName, expectedTheme, requestId, timeoutMs) {
+        function waitForThemeState(themeName, expectedTheme, requestId, timeoutMs) {
             var started = Date.now();
-            var timeout = timeoutMs || 1600;
+            var timeout = timeoutMs === undefined ? stateVerifyTimeoutMs : timeoutMs;
             return new Promise(function (resolve, reject) {
                 function check() {
                     if (!isApplyCurrent(requestId)) {
                         reject(makeError('superseded', '主题切换已被更新请求取代'));
                         return;
                     }
-                    verifyAppliedTheme(themeName, expectedTheme)
+                    verifyThemeState(themeName, expectedTheme)
                         .then(function (result) {
                             if (result.ok) { resolve(result); return; }
                             if (Date.now() - started >= timeout) {
-                                var err = makeError('verify-failed', '主题视觉与状态验证失败');
+                                console.warn('[ThemeManager] current theme state failed', {
+                                    requestedTheme: themeName,
+                                    currentTheme: result.currentTheme,
+                                    requestId: requestId,
+                                    result: false,
+                                    mismatches: result.mismatches,
+                                });
+                                var err = makeError('state-verify-failed', '主题状态验证失败');
                                 err.details = result.mismatches;
+                                err.currentTheme = result.currentTheme;
                                 reject(err);
                                 return;
                             }
-                            setTimeout(check, 25);
+                            setTimeout(check, stateVerifyIntervalMs);
                         })
                         .catch(function (err) {
                             if (Date.now() - started >= timeout) { reject(err); return; }
-                            setTimeout(check, 25);
+                            setTimeout(check, stateVerifyIntervalMs);
                         });
                 }
                 setTimeout(check, 0);
             });
         }
 
+        function waitForVisualFrame() {
+            return new Promise(function (resolve) {
+                var settled = false;
+                var fallbackTimer = setTimeout(finish, 100);
+                function finish() {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(fallbackTimer);
+                    resolve();
+                }
+                if (typeof global.requestAnimationFrame === 'function') global.requestAnimationFrame(finish);
+                else setTimeout(finish, 0);
+            });
+        }
+
+        function waitForVisualSettle() {
+            return waitForVisualFrame().then(waitForVisualFrame);
+        }
+
+        function waitForThemeVisuals(themeName, expectedTheme, requestId) {
+            var attempt = 0;
+            console.info('[ThemeManager] visual verification pending', {
+                requestedTheme: themeName,
+                maxAttempts: visualMaxAttempts,
+            });
+
+            function check() {
+                if (!isApplyCurrent(requestId)) return Promise.reject(makeError('superseded', '主题切换已被更新请求取代'));
+                attempt += 1;
+                var verification;
+                try {
+                    verification = verifyThemeVisuals(expectedTheme);
+                } catch (err) {
+                    verification = Promise.reject(err);
+                }
+                return Promise.resolve(verification).catch(function (err) {
+                    return {
+                        ok: false,
+                        mismatches: ['verification-error'],
+                        error: err && err.message ? err.message : String(err),
+                    };
+                }).then(function (result) {
+                    result.attempt = attempt;
+                    if (result.ok) {
+                        console.info('[ThemeManager] visual verification passed', {
+                            requestedTheme: themeName,
+                            attempt: attempt,
+                            result: true,
+                        });
+                        return result;
+                    }
+                    if (attempt >= visualMaxAttempts) {
+                        console.warn('[ThemeManager] visual verification failed', {
+                            requestedTheme: themeName,
+                            attempt: attempt,
+                            result: false,
+                            mismatches: result.mismatches,
+                        });
+                        return result;
+                    }
+                    console.info('[ThemeManager] visual verification retry', {
+                        requestedTheme: themeName,
+                        attempt: attempt,
+                        nextAttempt: attempt + 1,
+                        mismatches: result.mismatches,
+                    });
+                    return new Promise(function (resolve) {
+                        setTimeout(resolve, visualRetryDelayMs * attempt);
+                    }).then(waitForVisualFrame).then(check);
+                });
+            }
+
+            return waitForVisualSettle().then(check);
+        }
+
+        // Backward-compatible combined waiter for callers outside the main apply flow.
+        function waitForThemeApplied(themeName, expectedTheme, requestId, timeoutMs) {
+            return waitForThemeState(themeName, expectedTheme, requestId, timeoutMs).then(function (state) {
+                return waitForThemeVisuals(themeName, expectedTheme, requestId).then(function (visual) {
+                    if (!visual.ok) {
+                        var err = makeError('verify-failed', '主题视觉验证失败');
+                        err.details = visual.mismatches;
+                        throw err;
+                    }
+                    return { ok: true, state: state, visual: visual, mismatches: [] };
+                });
+            });
+        }
+
         function captureCurrentThemeSnapshot() {
-            return import('/scripts/power-user.js').then(function (mod) {
+            return loadPowerUserModule().then(function (mod) {
                 var powerUser = mod && mod.power_user;
                 var name = powerUser && powerUser.theme ? String(powerUser.theme) : getThemeControlName();
                 if (!name) return null;
@@ -304,28 +437,61 @@
         function applyThemeAndWait(themeName, applyFn, fallbackFn, rollbackFn) {
             var requestId = beginApply();
             var previousTheme = null;
+            console.info('[ThemeManager] apply requested', {
+                requestedTheme: themeName,
+                requestId: requestId,
+            });
+
+            function applyAndConfirm(prepared, fn, path) {
+                return Promise.resolve(fn(prepared, requestId, function () {
+                    return isApplyCurrent(requestId);
+                })).then(function (applyResult) {
+                    if (!isApplyCurrent(requestId)) throw makeError('superseded', '主题切换已被更新请求取代');
+                    console.info('[ThemeManager] ST theme apply completed', {
+                        requestedTheme: themeName,
+                        requestId: requestId,
+                        path: path,
+                    });
+                    return waitForThemeState(themeName, prepared.theme, requestId).then(function (stateVerification) {
+                        console.info('[ThemeManager] current theme state confirmed', {
+                            requestedTheme: themeName,
+                            currentTheme: stateVerification.currentTheme,
+                            requestId: requestId,
+                            result: true,
+                            path: path,
+                        });
+                        return {
+                            requestId: requestId,
+                            theme: prepared.theme,
+                            stateVerification: stateVerification,
+                            applyResult: applyResult,
+                            fallbackUsed: path === 'fallback',
+                        };
+                    });
+                });
+            }
+
             var workflow = captureCurrentThemeSnapshot().then(function (snapshot) {
                 previousTheme = snapshot;
                 return prepareUsableThemeForApply(themeName);
             }).then(function (prepared) {
                 if (!isApplyCurrent(requestId)) throw makeError('superseded', '主题切换已被更新请求取代');
-                return Promise.resolve(applyFn(prepared, requestId, function () {
-                    return isApplyCurrent(requestId);
-                })).then(function (applyResult) {
-                    if (!isApplyCurrent(requestId)) throw makeError('superseded', '主题切换已被更新请求取代');
-                    return waitForThemeApplied(themeName, prepared.theme, requestId)
-                        .then(function (verification) {
-                            return { requestId: requestId, theme: prepared.theme, verification: verification, applyResult: applyResult, fallbackUsed: false };
-                        });
-                }).catch(function (firstError) {
+                return applyAndConfirm(prepared, applyFn, 'native').catch(function (firstError) {
                     if (!isApplyCurrent(requestId) || firstError.code === 'superseded') throw firstError;
                     if (typeof fallbackFn !== 'function') throw firstError;
-                    return Promise.resolve(fallbackFn(prepared, requestId, function () {
-                        return isApplyCurrent(requestId);
-                    })).then(function () {
-                        return waitForThemeApplied(themeName, prepared.theme, requestId).then(function (verification) {
-                            return { requestId: requestId, theme: prepared.theme, verification: verification, fallbackUsed: true, nativeError: firstError };
-                        });
+                    return applyAndConfirm(prepared, fallbackFn, 'fallback').then(function (result) {
+                        result.nativeError = firstError;
+                        return result;
+                    });
+                }).then(function (result) {
+                    return waitForThemeVisuals(themeName, prepared.theme, requestId).then(function (visualVerification) {
+                        result.visualVerification = visualVerification;
+                        result.verification = {
+                            ok: result.stateVerification.ok && visualVerification.ok,
+                            state: result.stateVerification,
+                            visual: visualVerification,
+                        };
+                        return result;
                     });
                 });
             });
@@ -338,7 +504,7 @@
                 return Promise.resolve(rollbackFn(rollbackPrepared, requestId, function () {
                     return isApplyCurrent(requestId);
                 })).then(function () {
-                    return waitForThemeApplied(previousTheme.name, previousTheme, requestId);
+                    return waitForThemeState(previousTheme.name, previousTheme, requestId);
                 }).then(function () {
                     originalError.rollbackRestored = true;
                     throw originalError;
@@ -359,6 +525,7 @@
             forget: forget,
             clearFullCache: clearFullCache,
             getCached: getCached,
+            replaceInventory: replaceInventory,
             getInventory: getInventory,
             findTheme: findTheme,
             resolveUsableTheme: resolveUsableTheme,
@@ -366,7 +533,11 @@
             prepareUsableThemeForApply: prepareUsableThemeForApply,
             beginApply: beginApply,
             isApplyCurrent: isApplyCurrent,
+            verifyThemeState: verifyThemeState,
+            verifyThemeVisuals: verifyThemeVisuals,
             verifyAppliedTheme: verifyAppliedTheme,
+            waitForThemeState: waitForThemeState,
+            waitForThemeVisuals: waitForThemeVisuals,
             waitForThemeApplied: waitForThemeApplied,
             captureCurrentThemeSnapshot: captureCurrentThemeSnapshot,
             applyThemeAndWait: applyThemeAndWait,

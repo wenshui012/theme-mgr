@@ -208,6 +208,12 @@ function makeRuntimeForTransfer(inventory, resolveOverride) {
             return Promise.resolve(clone(candidate));
         },
         remember(theme) { cache[theme.name] = clone(theme); },
+        replaceInventory(themes) {
+            Object.keys(cache).forEach((name) => { delete cache[name]; });
+            (themes || []).forEach((theme) => {
+                if (schema.isUsableTheme(theme, theme && theme.name)) cache[theme.name] = clone(theme);
+            });
+        },
         hydrate() { return true; },
         cache,
     };
@@ -439,6 +445,339 @@ test('runtime evicts a detached batch inventory object from SillyTavern native t
     assert.match(detachedInventoryTheme.name, /^__theme_mgr_deleted__/);
 });
 
+test('runtime replaces stale cached themes with the authoritative post-import inventory', () => {
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([]), getRawSettingsInventory: () => Promise.resolve([]) },
+    });
+    runtime.remember({ name: 'Old cached theme', custom_css: 'old' });
+
+    const inventory = [
+        { name: '新主题 ✨', custom_css: 'new' },
+        { name: 'Existing', main_text_color: '#123456' },
+    ];
+    runtime.replaceInventory(inventory);
+
+    assert.equal(runtime.getCached('Old cached theme'), null);
+    assert.deepEqual(runtime.getCached('新主题 ✨'), inventory[0]);
+    assert.deepEqual(runtime.getCached('Existing'), inventory[1]);
+});
+
+test('newly imported theme falls back from stale native state and keeps the applied theme when only visual verification fails', async (t) => {
+    const previousDocument = global.document;
+    const previousToolkit = global.__baiBaiToolkitExtensionInstalled;
+    const previousHydrate = global.baibaokuHydrateTheme;
+    const previousRaf = global.requestAnimationFrame;
+    t.after(() => {
+        global.document = previousDocument;
+        global.__baiBaiToolkitExtensionInstalled = previousToolkit;
+        global.baibaokuHydrateTheme = previousHydrate;
+        global.requestAnimationFrame = previousRaf;
+    });
+
+    const cssValues = { '--SmartThemeBodyColor': '#old' };
+    const controls = {
+        themes: {
+            tagName: 'SELECT',
+            selectedIndex: 0,
+            options: [{ value: 'Old' }, { value: '刚导入 ✨' }],
+        },
+        customCSS: { value: 'old css' },
+        'custom-style': { textContent: 'old css' },
+    };
+    global.document = {
+        documentElement: { style: { getPropertyValue: (name) => cssValues[name] || '' } },
+        getElementById: (id) => controls[id] || null,
+    };
+    global.requestAnimationFrame = (callback) => { callback(); return 1; };
+    global.baibaokuHydrateTheme = undefined;
+    global.__baiBaiToolkitExtensionInstalled = {
+        __baiBaiToolkitCustomCssCodeMirrorEditor: {
+            enabled: true,
+            view: { state: { doc: 'old css' } },
+        },
+    };
+
+    const powerUser = { theme: 'Old', main_text_color: '#old', custom_css: 'old css' };
+    const expected = { name: '刚导入 ✨', main_text_color: '#new', custom_css: 'new css' };
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([]), getRawSettingsInventory: () => Promise.resolve([]) },
+        loadPowerUserModule: () => Promise.resolve({ power_user: powerUser }),
+        stateVerifyTimeoutMs: 0,
+        stateVerifyIntervalMs: 0,
+        visualMaxAttempts: 2,
+        visualRetryDelayMs: 0,
+    });
+    runtime.remember(expected);
+    let rollbackCount = 0;
+
+    const result = await runtime.applyThemeAndWait(
+        expected.name,
+        () => {
+            // Mirrors ST's stale private themes[] path: the selected name changes,
+            // but applyTheme cannot find the just-saved theme object.
+            controls.themes.selectedIndex = 1;
+            powerUser.theme = expected.name;
+        },
+        () => {
+            powerUser.theme = expected.name;
+            powerUser.main_text_color = expected.main_text_color;
+            powerUser.custom_css = expected.custom_css;
+            cssValues['--SmartThemeBodyColor'] = expected.main_text_color;
+            controls.customCSS.value = expected.custom_css;
+            controls['custom-style'].textContent = expected.custom_css;
+        },
+        () => { rollbackCount += 1; },
+    );
+
+    assert.equal(result.fallbackUsed, true);
+    assert.equal(result.stateVerification.ok, true);
+    assert.equal(result.visualVerification.ok, false);
+    assert.deepEqual(result.visualVerification.mismatches, ['custom-css-editor']);
+    assert.equal(powerUser.theme, expected.name);
+    assert.equal(powerUser.custom_css, expected.custom_css);
+    assert.equal(rollbackCount, 0);
+});
+
+test('visual verification waits for frames and retries a slow CSS update', async (t) => {
+    const previousDocument = global.document;
+    const previousRaf = global.requestAnimationFrame;
+    const previousToolkit = global.__baiBaiToolkitExtensionInstalled;
+    t.after(() => {
+        global.document = previousDocument;
+        global.requestAnimationFrame = previousRaf;
+        global.__baiBaiToolkitExtensionInstalled = previousToolkit;
+    });
+
+    const cssValues = { '--SmartThemeBodyColor': '#old' };
+    const themeControl = { tagName: 'SELECT', selectedIndex: 0, options: [{ value: 'Slow' }] };
+    global.document = {
+        documentElement: { style: { getPropertyValue: (name) => cssValues[name] || '' } },
+        getElementById: (id) => id === 'themes' ? themeControl : null,
+    };
+    global.__baiBaiToolkitExtensionInstalled = undefined;
+    let frameCount = 0;
+    global.requestAnimationFrame = (callback) => {
+        frameCount += 1;
+        if (frameCount === 3) cssValues['--SmartThemeBodyColor'] = '#new';
+        callback();
+        return frameCount;
+    };
+
+    const powerUser = { theme: 'Slow', main_text_color: '#new' };
+    const expected = { name: 'Slow', main_text_color: '#new' };
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([]), getRawSettingsInventory: () => Promise.resolve([]) },
+        loadPowerUserModule: () => Promise.resolve({ power_user: powerUser }),
+        visualMaxAttempts: 3,
+        visualRetryDelayMs: 0,
+    });
+    runtime.remember(expected);
+
+    const result = await runtime.applyThemeAndWait('Slow', () => {}, null, null);
+
+    assert.equal(result.stateVerification.ok, true);
+    assert.equal(result.visualVerification.ok, true);
+    assert.equal(result.visualVerification.attempt, 2);
+    assert.equal(frameCount, 3);
+});
+
+test('A B C imports switch immediately and can alternate with an old native theme without reopening', async (t) => {
+    const previousDocument = global.document;
+    const previousRaf = global.requestAnimationFrame;
+    const previousToolkit = global.__baiBaiToolkitExtensionInstalled;
+    const previousHydrate = global.baibaokuHydrateTheme;
+    t.after(() => {
+        global.document = previousDocument;
+        global.requestAnimationFrame = previousRaf;
+        global.__baiBaiToolkitExtensionInstalled = previousToolkit;
+        global.baibaokuHydrateTheme = previousHydrate;
+    });
+
+    const themes = [
+        { name: 'Old', main_text_color: '#old' },
+        { name: 'A', main_text_color: '#a' },
+        { name: 'B', main_text_color: '#b' },
+        { name: 'C', main_text_color: '#c' },
+    ];
+    const options = themes.map((theme) => ({ value: theme.name }));
+    const themeControl = { tagName: 'SELECT', selectedIndex: 0, options };
+    const cssValues = { '--SmartThemeBodyColor': '#old' };
+    const powerUser = { theme: 'Old', main_text_color: '#old' };
+    global.document = {
+        documentElement: { style: { getPropertyValue: (name) => cssValues[name] || '' } },
+        getElementById: (id) => id === 'themes' ? themeControl : null,
+    };
+    global.requestAnimationFrame = (callback) => { callback(); return 1; };
+    global.__baiBaiToolkitExtensionInstalled = undefined;
+    global.baibaokuHydrateTheme = undefined;
+
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve(themes), getRawSettingsInventory: () => Promise.resolve(themes) },
+        loadPowerUserModule: () => Promise.resolve({ power_user: powerUser }),
+        stateVerifyTimeoutMs: 0,
+        stateVerifyIntervalMs: 0,
+        visualMaxAttempts: 1,
+        visualRetryDelayMs: 0,
+    });
+    runtime.replaceInventory(themes);
+
+    async function apply(name) {
+        const expected = runtime.getCached(name);
+        return runtime.applyThemeAndWait(
+            name,
+            () => {
+                themeControl.selectedIndex = options.findIndex((option) => option.value === name);
+                powerUser.theme = name;
+                if (name === 'Old') {
+                    powerUser.main_text_color = expected.main_text_color;
+                    cssValues['--SmartThemeBodyColor'] = expected.main_text_color;
+                }
+            },
+            () => {
+                powerUser.theme = name;
+                powerUser.main_text_color = expected.main_text_color;
+                cssValues['--SmartThemeBodyColor'] = expected.main_text_color;
+            },
+            () => { throw new Error('no rollback expected'); },
+        );
+    }
+
+    const results = [];
+    for (const name of ['A', 'B', 'C', 'Old', 'A']) results.push(await apply(name));
+
+    assert.deepEqual(results.map((result) => result.fallbackUsed), [true, true, true, false, true]);
+    assert.equal(results.every((result) => result.stateVerification.ok && result.visualVerification.ok), true);
+    assert.equal(powerUser.theme, 'A');
+    assert.equal(cssValues['--SmartThemeBodyColor'], '#a');
+});
+
+test('native hydration path remains equivalent when a compatible theme bridge is available', async (t) => {
+    const previousDocument = global.document;
+    const previousRaf = global.requestAnimationFrame;
+    const previousHydrate = global.baibaokuHydrateTheme;
+    t.after(() => {
+        global.document = previousDocument;
+        global.requestAnimationFrame = previousRaf;
+        global.baibaokuHydrateTheme = previousHydrate;
+    });
+
+    const expected = { name: 'Hydrated', main_text_color: '#hydrated' };
+    const cssValues = { '--SmartThemeBodyColor': '#old' };
+    const themeControl = { tagName: 'SELECT', selectedIndex: 0, options: [{ value: 'Hydrated' }] };
+    const powerUser = { theme: 'Old', main_text_color: '#old' };
+    let hydratedTheme = null;
+    global.document = {
+        documentElement: { style: { getPropertyValue: (name) => cssValues[name] || '' } },
+        getElementById: (id) => id === 'themes' ? themeControl : null,
+    };
+    global.requestAnimationFrame = (callback) => { callback(); return 1; };
+    global.baibaokuHydrateTheme = (theme) => { hydratedTheme = clone(theme); };
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([expected]), getRawSettingsInventory: () => Promise.resolve([expected]) },
+        loadPowerUserModule: () => Promise.resolve({ power_user: powerUser }),
+        visualMaxAttempts: 1,
+    });
+    runtime.remember(expected);
+
+    const result = await runtime.applyThemeAndWait('Hydrated', (prepared) => {
+        assert.equal(prepared.hydrated, true);
+        powerUser.theme = prepared.theme.name;
+        powerUser.main_text_color = prepared.theme.main_text_color;
+        cssValues['--SmartThemeBodyColor'] = prepared.theme.main_text_color;
+    }, () => { throw new Error('fallback not expected'); }, null);
+
+    assert.deepEqual(hydratedTheme, expected);
+    assert.equal(result.fallbackUsed, false);
+    assert.equal(result.visualVerification.ok, true);
+});
+
+test('genuine state failure still rolls back and remains a failed theme switch', async (t) => {
+    const previousDocument = global.document;
+    const previousRaf = global.requestAnimationFrame;
+    t.after(() => {
+        global.document = previousDocument;
+        global.requestAnimationFrame = previousRaf;
+    });
+
+    const themeControl = {
+        tagName: 'SELECT',
+        selectedIndex: 0,
+        options: [{ value: 'Old' }, { value: 'Broken' }],
+    };
+    global.document = {
+        documentElement: { style: { getPropertyValue: () => '#old' } },
+        getElementById: (id) => id === 'themes' ? themeControl : null,
+    };
+    global.requestAnimationFrame = (callback) => { callback(); return 1; };
+    const powerUser = { theme: 'Old', main_text_color: '#old' };
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([]), getRawSettingsInventory: () => Promise.resolve([]) },
+        loadPowerUserModule: () => Promise.resolve({ power_user: powerUser }),
+        stateVerifyTimeoutMs: 0,
+        stateVerifyIntervalMs: 0,
+    });
+    runtime.remember({ name: 'Broken', main_text_color: '#broken' });
+    let rollbackCount = 0;
+
+    await assert.rejects(
+        runtime.applyThemeAndWait(
+            'Broken',
+            () => {},
+            () => {},
+            (prepared) => {
+                rollbackCount += 1;
+                powerUser.theme = prepared.theme.name;
+                powerUser.main_text_color = prepared.theme.main_text_color;
+                themeControl.selectedIndex = 0;
+            },
+        ),
+        (error) => error.code === 'state-verify-failed' && error.rollbackRestored === true,
+    );
+    assert.equal(rollbackCount, 1);
+    assert.equal(powerUser.theme, 'Old');
+});
+
+test('visual verifier errors are contained and never roll back a confirmed theme state', async (t) => {
+    const previousDocument = global.document;
+    const previousRaf = global.requestAnimationFrame;
+    t.after(() => {
+        global.document = previousDocument;
+        global.requestAnimationFrame = previousRaf;
+    });
+
+    const expected = { name: 'Applied', main_text_color: '#new' };
+    const powerUser = { theme: 'Applied', main_text_color: '#new' };
+    global.document = {
+        documentElement: { style: { getPropertyValue() { throw new Error('detached visual root'); } } },
+        getElementById: (id) => id === 'themes'
+            ? { tagName: 'SELECT', selectedIndex: 0, options: [{ value: 'Applied' }] }
+            : null,
+    };
+    global.requestAnimationFrame = (callback) => { callback(); return 1; };
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([]), getRawSettingsInventory: () => Promise.resolve([]) },
+        loadPowerUserModule: () => Promise.resolve({ power_user: powerUser }),
+        visualMaxAttempts: 1,
+    });
+    runtime.remember(expected);
+    let rollbackCount = 0;
+
+    const result = await runtime.applyThemeAndWait('Applied', () => {}, null, () => { rollbackCount += 1; });
+
+    assert.equal(result.stateVerification.ok, true);
+    assert.equal(result.visualVerification.ok, false);
+    assert.deepEqual(result.visualVerification.mismatches, ['verification-error']);
+    assert.equal(rollbackCount, 0);
+    assert.equal(powerUser.theme, 'Applied');
+});
+
 test('theme API never submits markers or name-only objects but permits legacy partials', async (t) => {
     const previousFetch = global.fetch;
     const requests = [];
@@ -543,6 +882,8 @@ test('batch import captures one fixed baseline before saving every partial theme
     let baselineCalls = 0;
     const savedThemes = [];
     const runtime = makeRuntimeForTransfer([]);
+    runtime.remember({ name: 'Stale before import', custom_css: 'stale' });
+    const existing = completeTheme('Existing inventory theme');
     const transfer = modules.createThemeTransfer({
         schema,
         runtime,
@@ -552,7 +893,7 @@ test('batch import captures one fixed baseline before saving every partial theme
                 baseline.quote_text_color = '#mutated-during-import';
                 return Promise.resolve({
                     results: themes.map((theme) => ({ theme: clone(theme), overwritten: false })),
-                    themes: themes.map(clone),
+                    themes: [clone(existing)].concat(themes.map(clone)),
                 });
             },
         },
@@ -568,6 +909,10 @@ test('batch import captures one fixed baseline before saving every partial theme
     assert.equal(result.results.every((item) => item.ok), true);
     assert.equal(savedThemes.length, 2);
     assert.equal(savedThemes[0].quote_text_color, '#fixed');
+    assert.equal(runtime.cache['Stale before import'], undefined);
+    assert.deepEqual(runtime.cache['Existing inventory theme'], existing);
+    assert.deepEqual(runtime.cache['Partial One'], result.results[0].theme);
+    assert.deepEqual(runtime.cache['Partial Two'], result.results[1].theme);
     assert.equal(savedThemes[1].quote_text_color, '#fixed');
     assert.equal(savedThemes[1].custom_css, '');
 });
