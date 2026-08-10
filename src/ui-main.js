@@ -48,6 +48,9 @@
     // 缓存主题列表
     var stThemeList = [];
     var stThemeListReliable = false;
+    var themeListRevision = 0;
+    var metadataRevision = 0;
+    var libraryViewCache = null;
     var verifiedThemeSelectSyncBound = false;
     var managerAppearanceObserver = null;
     var managerAppearanceTimer = null;
@@ -162,7 +165,7 @@
                 },
                 onApplied: function () {
                     lastBindingWarningKey = '';
-                    renderGrid();
+                    updateActiveCardState(getCurrentThemeName());
                     renderBottomStatus();
                     updateBtn();
                 },
@@ -220,7 +223,14 @@
 
     // ── 数据与图片存储（由 src/storage.js 提供实现）────────────
     function load() { return storageApi.load(); }
-    function save(d) { storageApi.save(d); }
+    function invalidateLibraryView() {
+        metadataRevision += 1;
+        libraryViewCache = null;
+    }
+    function save(d) {
+        invalidateLibraryView();
+        storageApi.save(d);
+    }
     function saveToDB(d, cb) { storageApi.saveToDB(d, cb); }
     function loadFromLS() { return storageApi.loadFromLS(); }
     function initStorage(cb) { storageApi.initStorage(cb); }
@@ -365,7 +375,7 @@
         colorSchemeWatcher.start();
     }
 
-    function getLogicalItems(d) {
+    function buildLogicalItemsRaw(d) {
         return pairsApi
             ? pairsApi.buildLogicalItems(d, stThemeList)
             : stThemeList.map(function (name) {
@@ -373,26 +383,111 @@
             });
     }
 
+    function setThemeList(list, reliable) {
+        stThemeList = Array.isArray(list) ? list : [];
+        stThemeListReliable = reliable === true;
+        themeListRevision += 1;
+        libraryViewCache = null;
+    }
+
+    function buildLibraryView(d) {
+        d = d || load();
+        if (libraryViewCache && libraryViewCache.data === d &&
+            libraryViewCache.themeListRevision === themeListRevision &&
+            libraryViewCache.metadataRevision === metadataRevision) {
+            return libraryViewCache;
+        }
+
+        var items = buildLogicalItemsRaw(d);
+        var itemByKey = Object.create(null);
+        var itemByRef = Object.create(null);
+        var itemByThemeName = Object.create(null);
+        var metaByKey = Object.create(null);
+        var searchTextByKey = Object.create(null);
+        var themeNameSet = new Set(stThemeList);
+        var pairByThemeName = Object.create(null);
+        var pairById = Object.create(null);
+
+        items.forEach(function (item) {
+            var meta = item.kind === 'pair' ? (item.meta || {}) : getMeta(d, item.themeName);
+            item.meta = meta;
+            itemByKey[item.key] = item;
+            itemByRef[item.key] = item;
+            metaByKey[item.key] = meta;
+            if (item.kind === 'pair') {
+                pairById[item.pairId] = item;
+                itemByRef[item.pairId] = item;
+            } else {
+                itemByRef[item.themeName] = item;
+            }
+            (item.themeNames || []).forEach(function (themeName) {
+                if (!themeName) return;
+                itemByThemeName[themeName] = item;
+                itemByRef[themeName] = item;
+                if (item.kind === 'pair') pairByThemeName[themeName] = item;
+            });
+            var searchParts = [item.name].concat(item.themeNames || []);
+            if (meta.author) searchParts.push(meta.author);
+            if (Array.isArray(meta.tags)) searchParts = searchParts.concat(meta.tags);
+            if (meta.description) searchParts.push(meta.description);
+            searchTextByKey[item.key] = searchParts.map(function (value) {
+                return String(value || '').toLowerCase();
+            }).join('\n');
+        });
+
+        var seriesGroups = Object.create(null);
+        var seriesMembership = Object.create(null);
+        if (seriesApi) {
+            seriesApi.listSeries(d).forEach(function (group) {
+                seriesGroups[group.id] = group;
+                (group.members || []).forEach(function (member) {
+                    var key = seriesApi.targetKey(member);
+                    if (key) seriesMembership[key] = group.id;
+                });
+            });
+        }
+
+        libraryViewCache = {
+            data: d,
+            themeListRevision: themeListRevision,
+            metadataRevision: metadataRevision,
+            items: items,
+            itemByKey: itemByKey,
+            itemByRef: itemByRef,
+            itemByThemeName: itemByThemeName,
+            metaByKey: metaByKey,
+            searchTextByKey: searchTextByKey,
+            themeNameSet: themeNameSet,
+            pairByThemeName: pairByThemeName,
+            pairById: pairById,
+            seriesGroups: seriesGroups,
+            seriesMembership: seriesMembership,
+            sortedByMode: Object.create(null),
+        };
+        return libraryViewCache;
+    }
+
+    function getLogicalItems(d) {
+        return buildLibraryView(d).items;
+    }
+
     function getLogicalItem(ref, d) {
         d = d || load();
-        return pairsApi
-            ? pairsApi.getLogicalItem(d, stThemeList, ref)
-            : getLogicalItems(d).find(function (item) { return item.key === ref || item.themeName === ref; }) || null;
+        return buildLibraryView(d).itemByRef[String(ref || '').trim()] || null;
     }
 
     function getItemMeta(d, item) {
         if (!item) return {};
-        if (item.kind === 'pair') {
-            var pair = pairsApi.getPair(d, item.pairId);
-            return pair ? pair.meta : {};
-        }
-        return getMeta(d, item.themeName);
+        var view = buildLibraryView(d);
+        return view.metaByKey[item.key] || item.meta || {};
     }
 
     function getItemDisplayTheme(d, item, variant) {
         if (!item) return '';
         if (item.kind !== 'pair') return item.themeName;
-        return pairsApi.getVariantTheme(d, item.pairId, variant || getPreferredPairVariant(item.pairId));
+        return (variant || getPreferredPairVariant(item.pairId)) === 'night'
+            ? item.nightTheme
+            : item.dayTheme;
     }
 
     function getCurrentLogicalItem(d) {
@@ -412,16 +507,21 @@
 
     function expandItemThemeNames(items) {
         var names = [];
+        var seen = new Set();
         (items || []).forEach(function (item) {
             (item.themeNames || []).forEach(function (name) {
-                if (name && names.indexOf(name) === -1) names.push(name);
+                if (name && !seen.has(name)) { seen.add(name); names.push(name); }
             });
         });
         return names;
     }
 
     function getSeriesForItem(d, item) {
-        return seriesApi && item ? seriesApi.findSeriesByTarget(d, getItemTarget(item)) : null;
+        if (!seriesApi || !item) return null;
+        var view = buildLibraryView(d);
+        var key = item.kind === 'pair' ? ('pair:' + item.pairId) : ('theme:' + item.themeName);
+        var seriesId = view.seriesMembership[key];
+        return seriesId ? (view.seriesGroups[seriesId] || null) : null;
     }
 
     function displayCategoryMatches(category, cat) {
@@ -439,16 +539,11 @@
         });
     }
 
-    function itemMatchesSearch(d, item, query) {
+    function itemMatchesSearch(d, item, query, view) {
         if (!query) return true;
         var q = String(query).toLowerCase();
-        if (item.name.toLowerCase().indexOf(q) !== -1) return true;
-        if (item.themeNames.some(function (name) { return name.toLowerCase().indexOf(q) !== -1; })) return true;
-        var meta = getItemMeta(d, item);
-        if (!meta) return false;
-        if (meta.author && meta.author.toLowerCase().indexOf(q) !== -1) return true;
-        if (meta.tags && meta.tags.some(function (tag) { return String(tag).toLowerCase().indexOf(q) !== -1; })) return true;
-        return !!(meta.description && meta.description.toLowerCase().indexOf(q) !== -1);
+        view = view || buildLibraryView(d);
+        return (view.searchTextByKey[item.key] || '').indexOf(q) !== -1;
     }
 
     function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
@@ -460,8 +555,7 @@
         function done(list, method, reliable) {
             if (found) return;
             found = true;
-            stThemeList = list;
-            stThemeListReliable = reliable === true;
+            setThemeList(list, reliable);
             console.log('[美化管理] 主题列表获取成功:', method, list.length + '个');
             if (cb) cb(list);
         }
@@ -529,8 +623,7 @@
                 .finally(function () {
                     apiDone++;
                     if (apiDone >= apiPaths.length && !found) {
-                        stThemeList = [];
-                        stThemeListReliable = false;
+                        setThemeList([], false);
                         if (cb) cb([]);
                     }
                 });
@@ -792,7 +885,7 @@
                 if (ok) {
                     applyBoundBackground(name, function () {
                         scheduleManagerAppearanceSync();
-                        renderGrid(); renderBottomStatus();
+                        updateActiveCardState(name); renderBottomStatus();
                     });
                 }
             });
@@ -992,12 +1085,11 @@
             })
             .then(function (themes) {
                 if (themes) {
-                    stThemeList = themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; });
-                    stThemeListReliable = true;
+                    setThemeList(themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; }), true);
                 } else {
-                    stThemeList = stThemeList.filter(function (name) { return name !== oldName && name !== newName; });
-                    stThemeList.push(newName);
-                    stThemeListReliable = false;
+                    var renamedList = stThemeList.filter(function (name) { return name !== oldName && name !== newName; });
+                    renamedList.push(newName);
+                    setThemeList(renamedList, false);
                 }
                 removeThemeOption(oldName);
                 syncThemeOption(newName);
@@ -1023,8 +1115,7 @@
                 themeRuntime.evictNativeTheme(themeName, result.nativeThemeRef);
                 removeThemeMetaName(themeName);
                 removeThemeOption(themeName);
-                stThemeList = result.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; });
-                stThemeListReliable = true;
+                setThemeList(result.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; }), true);
                 var nextTheme = stThemeList[0] || '';
                 if (wasCurrent && nextTheme) {
                     applyTheme(nextTheme, function () {
@@ -1060,10 +1151,9 @@
                 });
                 if (metaChanged) save(dd);
 
-                stThemeList = result.themes
+                setThemeList(result.themes
                     .filter(function (theme) { return theme && theme.name; })
-                    .map(function (theme) { return theme.name; });
-                stThemeListReliable = true;
+                    .map(function (theme) { return theme.name; }), true);
                 renderCatbar();
                 renderGrid();
                 renderBottomStatus();
@@ -1554,10 +1644,9 @@
 
                 if (Array.isArray(outcome.themes)) {
                     themeRuntime.replaceInventory(outcome.themes);
-                    stThemeList = outcome.themes.filter(function (theme) {
+                    setThemeList(outcome.themes.filter(function (theme) {
                         return theme && typeof theme.name === 'string' && theme.name.trim();
-                    }).map(function (theme) { return theme.name; });
-                    stThemeListReliable = true;
+                    }).map(function (theme) { return theme.name; }), true);
                 }
 
                 successful.forEach(function (res) {
@@ -1828,10 +1917,12 @@
     // ── UI 状态 ───────────────────────────────────────────────
     var curCat = '__all__';
     var batchMode = false;
-    var batchSelected = [];
+    var batchSelected = new Set();
     var batchDeleting = false;
     var searchQuery = '';
     var searchOpen = false;
+    var searchComposing = false;
+    var searchDebounceTimer = null;
     var sortOpen = false;
     var gridSizeSaveTimer = null;
     var expandedSeriesId = '';
@@ -1840,8 +1931,22 @@
     var seriesResizeTimer = null;
     var seriesGridResizeObserver = null;
     var lastSeriesColumnCount = 0;
+    var gridRenderGeneration = 0;
+    var gridRenderFrame = null;
+    var gridRenderState = null;
+    var renderedCardsByKey = Object.create(null);
+    var renderedActiveItemKey = '';
+    var GRID_RENDER_BATCH_SIZE = 48;
+    var GRID_RENDER_FOLLOWUP_BATCH_SIZE = 96;
+    var SEARCH_DEBOUNCE_MS = 100;
 
-    function sortItems(list, mode, d) {
+    function getBatchSelectedKeys() {
+        return Array.from(batchSelected);
+    }
+
+    function sortItems(list, mode, d, view) {
+        view = view || buildLibraryView(d);
+        if (list === view.items && view.sortedByMode[mode]) return view.sortedByMode[mode];
         var sorted = list.slice();
         switch (mode) {
             case 'name': sorted.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); }); break;
@@ -1852,6 +1957,7 @@
                 return sb - sa || a.name.localeCompare(b.name, 'zh');
             }); break;
         }
+        if (list === view.items) view.sortedByMode[mode] = sorted;
         return sorted;
     }
 
@@ -3116,7 +3222,9 @@
         clearTemporaryPairOverride();
         if (bindingController && !schemeChanged) bindingController.reconcile();
         injectStyles();
-        batchMode = false; batchSelected = []; batchDeleting = false; searchQuery = ''; searchOpen = false; sortOpen = false;
+        cancelSearchDebounce();
+        searchComposing = false;
+        batchMode = false; batchSelected.clear(); batchDeleting = false; searchQuery = ''; searchOpen = false; sortOpen = false;
         expandedSeriesId = ''; seriesScrollPositions = {}; lastSeriesColumnCount = 0;
 
         var ov = document.createElement('div');
@@ -3205,6 +3313,7 @@
             syncManagerAppearance();
         });
         ov.querySelector('#tm-refresh').addEventListener('click', function () {
+            cancelPendingGridRender();
             ov.querySelector('#tm-grid-area').innerHTML = '<div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在刷新…</span></div>';
             fetchThemeList(function () { renderGrid(); renderBottomStatus(); });
         });
@@ -3214,12 +3323,39 @@
             searchOpen = !searchOpen;
             ov.querySelector('#tm-search-bar').classList.toggle('open', searchOpen);
             if (searchOpen) ov.querySelector('#tm-search-inp').focus();
-            else { searchQuery = ''; ov.querySelector('#tm-search-inp').value = ''; renderGrid(); }
+            else { cancelSearchDebounce(); searchQuery = ''; ov.querySelector('#tm-search-inp').value = ''; renderGrid(); }
         });
         var sinp = ov.querySelector('#tm-search-inp');
-        sinp.addEventListener('input', function () { searchQuery = sinp.value.trim(); renderGrid(); });
-        ov.querySelector('#tm-search-clear').addEventListener('click', function () { searchQuery = ''; sinp.value = ''; renderGrid(); sinp.focus(); });
-        sinp.addEventListener('keydown', function (e) { if (e.key === 'Escape') { searchOpen = false; searchQuery = ''; ov.querySelector('#tm-search-bar').classList.remove('open'); renderGrid(); } });
+        function scheduleSearchFromInput() {
+            cancelSearchDebounce();
+            cancelPendingGridRender();
+            searchQuery = sinp.value.trim();
+            searchDebounceTimer = setTimeout(function () {
+                searchDebounceTimer = null;
+                if (!searchComposing && document.querySelector('.tm-overlay')) renderGrid();
+            }, SEARCH_DEBOUNCE_MS);
+        }
+        sinp.addEventListener('compositionstart', function () {
+            searchComposing = true;
+            cancelSearchDebounce();
+            cancelPendingGridRender();
+        });
+        sinp.addEventListener('compositionend', function () {
+            searchComposing = false;
+            scheduleSearchFromInput();
+        });
+        sinp.addEventListener('input', function () {
+            if (!searchComposing) scheduleSearchFromInput();
+        });
+        ov.querySelector('#tm-search-clear').addEventListener('click', function () {
+            cancelSearchDebounce(); searchQuery = ''; sinp.value = ''; renderGrid(); sinp.focus();
+        });
+        sinp.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                cancelSearchDebounce(); searchComposing = false; searchOpen = false; searchQuery = '';
+                sinp.value = ''; ov.querySelector('#tm-search-bar').classList.remove('open'); renderGrid();
+            }
+        });
 
         // 排序
         ov.querySelector('#tm-sort-toggle').addEventListener('click', function () {
@@ -3244,7 +3380,7 @@
         // 底栏
         ov.querySelector('#tm-batch-toggle').addEventListener('click', function () {
             if (batchDeleting) return;
-            batchMode = !batchMode; batchSelected = [];
+            batchMode = !batchMode; batchSelected.clear();
             ov.querySelector('#tm-batch-toggle').classList.toggle('on', batchMode);
             renderGrid();
         });
@@ -3270,6 +3406,11 @@
     }
 
     function closePopup() {
+        cancelSearchDebounce();
+        searchComposing = false;
+        cancelPendingGridRender();
+        renderedCardsByKey = Object.create(null);
+        renderedActiveItemKey = '';
         disconnectManagerAppearanceObserver();
         if (seriesGridResizeObserver) seriesGridResizeObserver.disconnect();
         seriesGridResizeObserver = null;
@@ -3349,12 +3490,13 @@
     }
 
     // ── 网格 ─────────────────────────────────────────────────
-    function buildGridCardHtml(item, d, curTheme) {
-        var meta = getItemMeta(d, item);
+    function buildGridCardHtml(item, d, curTheme, view) {
+        view = view || buildLibraryView(d);
+        var meta = view.metaByKey[item.key] || getItemMeta(d, item);
         var displayTheme = getItemDisplayTheme(d, item);
         var variantMeta = d.themeMeta[displayTheme] || {};
         var isActive = isItemActive(item, curTheme);
-        var selected = batchSelected.indexOf(item.key) !== -1;
+        var selected = batchSelected.has(item.key);
         var checkBox = batchMode
             ? '<div class="tm-card-check' + (selected ? ' checked' : '') + '" data-key="' + esc(item.key) + '"><i class="fa-solid fa-check"></i></div>'
             : '';
@@ -3384,15 +3526,15 @@
             '</div></div>';
     }
 
-    function buildSeriesLayoutUnits(d, sortedItems, cat, query) {
-        var groups = {};
-        var membership = seriesApi ? seriesApi.getMembershipMap(d) : {};
-        if (seriesApi) seriesApi.listSeries(d).forEach(function (group) { groups[group.id] = group; });
+    function buildSeriesLayoutUnits(d, sortedItems, cat, query, view) {
+        view = view || buildLibraryView(d);
+        var groups = view.seriesGroups;
+        var membership = view.seriesMembership;
         var unitBySeries = {};
         var rawUnits = [];
 
         sortedItems.forEach(function (item) {
-            var targetKey = seriesApi ? seriesApi.targetKey(getItemTarget(item)) : '';
+            var targetKey = item.kind === 'pair' ? 'pair:' + item.pairId : 'theme:' + item.themeName;
             var seriesId = targetKey ? membership[targetKey] : '';
             var group = seriesId ? groups[seriesId] : null;
             if (!group) {
@@ -3410,12 +3552,12 @@
 
         var filtered = rawUnits.filter(function (unit) {
             if (unit.type === 'item') {
-                if (!displayCategoryMatches(getItemMeta(d, unit.item).category, cat)) return false;
+                if (!displayCategoryMatches((view.metaByKey[unit.item.key] || {}).category, cat)) return false;
                 return itemMatchesSearch(d, unit.item, query);
             }
             if (!displayCategoryMatches(unit.group.category, cat)) return false;
             if (!query) return true;
-            var q = String(query).toLowerCase();
+            var q = String(query).toLocaleLowerCase();
             return unit.group.name.toLowerCase().indexOf(q) !== -1 || unit.items.some(function (item) {
                 return itemMatchesSearch(d, item, query);
             });
@@ -3449,7 +3591,7 @@
         return output;
     }
 
-    function buildSeriesBlockHtml(unit, d, curTheme) {
+    function buildSeriesBlockHtml(unit, d, curTheme, view) {
         var group = unit.group;
         var expanded = expandedSeriesId === group.id;
         var controlId = 'tm-series-members-' + group.id;
@@ -3460,7 +3602,7 @@
             '<button type="button" class="tm-series-toggle" data-series-id="' + esc(group.id) + '" aria-expanded="' + (expanded ? 'true' : 'false') + '" aria-controls="' + esc(controlId) + '" title="' + (expanded ? '收起系列' : '展开全系列') + '">' +
             '<i class="fa-solid fa-chevron-down"></i></button></div>' +
             '<div class="tm-series-track" id="' + esc(controlId) + '">' +
-            unit.items.map(function (item) { return buildGridCardHtml(item, d, curTheme); }).join('') +
+            unit.items.map(function (item) { return buildGridCardHtml(item, d, curTheme, view); }).join('') +
             '</div></section>';
     }
 
@@ -3477,6 +3619,8 @@
     function bindSeriesRailEvents(area) {
         if (!area) return;
         area.querySelectorAll('.tm-series-block').forEach(function (block) {
+            if (block._tmSeriesRailEventsBound) return;
+            block._tmSeriesRailEventsBound = true;
             var seriesId = block.dataset.seriesId;
             var track = block.querySelector('.tm-series-track');
             var savedLeft = Number(seriesScrollPositions[seriesId]) || 0;
@@ -3571,28 +3715,225 @@
 
     function syncBatchActionState(d) {
         var count = document.getElementById('tm-batch-count');
-        if (count) count.textContent = batchSelected.length;
+        if (count) count.textContent = batchSelected.size;
         var pairButton = document.getElementById('tm-batch-day-night');
         if (pairButton) {
-            pairButton.disabled = batchDeleting || batchSelected.length !== 2 || !batchSelected.every(function (key) {
+            pairButton.disabled = batchDeleting || batchSelected.size !== 2 || !getBatchSelectedKeys().every(function (key) {
                 var item = getLogicalItem(key, d || load());
                 return item && item.kind === 'theme';
             });
         }
         var seriesButton = document.getElementById('tm-batch-series');
-        if (seriesButton) seriesButton.disabled = batchDeleting || batchSelected.length === 0;
+        if (seriesButton) seriesButton.disabled = batchDeleting || batchSelected.size === 0;
+    }
+
+    function cancelSearchDebounce() {
+        if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = null;
+    }
+
+    function cancelPendingGridRender() {
+        gridRenderGeneration += 1;
+        if (gridRenderFrame !== null) {
+            if (typeof global.cancelAnimationFrame === 'function') global.cancelAnimationFrame(gridRenderFrame);
+            else clearTimeout(gridRenderFrame);
+        }
+        gridRenderFrame = null;
+        gridRenderState = null;
+    }
+
+    function scheduleGridRenderChunk(state) {
+        if (!state || state.generation !== gridRenderGeneration) return;
+        var callback = function () {
+            gridRenderFrame = null;
+            appendGridRenderChunk(state);
+        };
+        gridRenderFrame = typeof global.requestAnimationFrame === 'function'
+            ? global.requestAnimationFrame(callback)
+            : setTimeout(callback, 0);
+    }
+
+    function gridUnitCardCount(unit) {
+        return unit && unit.type === 'series' ? unit.items.length : 1;
+    }
+
+    function buildGridUnitHtml(unit, state) {
+        return unit.type === 'series'
+            ? buildSeriesBlockHtml(unit, state.data, state.currentTheme, state.view)
+            : buildGridCardHtml(unit.item, state.data, state.currentTheme, state.view);
+    }
+
+    function registerRenderedCards(cards) {
+        (cards || []).forEach(function (card) {
+            if (card && card.dataset.key) renderedCardsByKey[card.dataset.key] = card;
+        });
+    }
+
+    function finishGridRender(state) {
+        if (!state || state.generation !== gridRenderGeneration) return;
+        state.area.dataset.tmRenderComplete = 'true';
+        state.area.dataset.tmRenderedCards = String(state.renderedCards);
+        gridRenderState = null;
+        gridRenderFrame = null;
+        try {
+            state.area.dispatchEvent(new CustomEvent('tm:grid-render-complete', {
+                detail: { generation: state.generation, totalCards: state.renderedCards },
+            }));
+        } catch (e) {}
+    }
+
+    function appendGridRenderChunk(state) {
+        if (!state || state.generation !== gridRenderGeneration ||
+            document.getElementById('tm-grid-area') !== state.area || !state.area.isConnected) return;
+        var html = '';
+        var cardsInChunk = 0;
+        var batchLimit = state.firstBatchDone ? GRID_RENDER_FOLLOWUP_BATCH_SIZE : GRID_RENDER_BATCH_SIZE;
+        while (state.unitIndex < state.units.length && (cardsInChunk < batchLimit || cardsInChunk === 0)) {
+            var unit = state.units[state.unitIndex++];
+            html += buildGridUnitHtml(unit, state);
+            cardsInChunk += gridUnitCardCount(unit);
+        }
+        if (state.generation !== gridRenderGeneration) return;
+        var template = document.createElement('template');
+        template.innerHTML = html;
+        var cards = Array.from(template.content.querySelectorAll('.tm-card'));
+        state.grid.appendChild(template.content);
+        if (state.generation !== gridRenderGeneration || document.getElementById('tm-grid-area') !== state.area) return;
+        registerRenderedCards(cards);
+        state.renderedCards += cards.length;
+        state.area.dataset.tmRenderedCards = String(state.renderedCards);
+        if (!state.firstBatchDone) {
+            state.firstBatchDone = true;
+            state.area.dataset.tmFirstBatchReady = 'true';
+            try {
+                state.area.dispatchEvent(new CustomEvent('tm:grid-first-batch', {
+                    detail: { generation: state.generation, renderedCards: state.renderedCards },
+                }));
+            } catch (e) {}
+        }
+        bindSeriesRailEvents(state.area);
+        if (state.unitIndex < state.units.length) scheduleGridRenderChunk(state);
+        else finishGridRender(state);
+    }
+
+    function updateActiveCardState(themeName) {
+        var d = load();
+        var view = buildLibraryView(d);
+        var item = view.itemByThemeName[themeName] || null;
+        if (gridRenderState) gridRenderState.currentTheme = themeName;
+        function setCardActive(key, active) {
+            var card = renderedCardsByKey[key];
+            if (!card || !card.isConnected) return;
+            card.classList.toggle('on', active);
+            var badge = card.querySelector('.tm-badge-on');
+            if (active && !batchMode && !badge) {
+                badge = document.createElement('div');
+                badge.className = 'tm-badge-on';
+                badge.innerHTML = '<i class="fa-solid fa-check"></i>';
+                var image = card.querySelector('.tm-card-img');
+                if (image) image.appendChild(badge);
+            } else if (!active && badge) badge.remove();
+        }
+        var nextKey = item ? item.key : '';
+        if (renderedActiveItemKey && renderedActiveItemKey !== nextKey) setCardActive(renderedActiveItemKey, false);
+        if (nextKey) setCardActive(nextKey, true);
+        renderedActiveItemKey = item ? item.key : '';
+    }
+
+    function replaceRenderedCard(itemKey) {
+        var oldCard = renderedCardsByKey[itemKey];
+        if (!oldCard || !oldCard.isConnected) return false;
+        var d = load();
+        var view = buildLibraryView(d);
+        var item = view.itemByKey[itemKey];
+        if (!item) return false;
+        var template = document.createElement('template');
+        template.innerHTML = buildGridCardHtml(item, d, getCurrentThemeName(), view);
+        var card = template.content.querySelector('.tm-card');
+        if (!card) return false;
+        oldCard.replaceWith(card);
+        renderedCardsByKey[itemKey] = card;
+        return true;
+    }
+
+    function refreshSingleItemCard(itemKey, effects) {
+        effects = effects || {};
+        var d = load();
+        var mode = d.sortMode || 'name';
+        var requiresLayout = effects.forceFull || effects.layout || effects.category || effects.name ||
+            (effects.searchable && !!searchQuery) ||
+            (effects.starred && mode === 'starred') ||
+            (effects.recent && mode === 'recent') ||
+            (effects.freq && mode === 'freq');
+        if (requiresLayout || !replaceRenderedCard(itemKey)) renderGrid();
+        else updateActiveCardState(getCurrentThemeName());
+    }
+
+    function bindGridDelegatedEvents(area) {
+        if (!area || area._tmGridDelegatedBound) return;
+        area.addEventListener('click', function (event) {
+            var menu = event.target.closest('.tm-card-menu');
+            if (menu && area.contains(menu)) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (!batchMode) openContextMenu(menu.dataset.key);
+                return;
+            }
+            var card = event.target.closest('.tm-card');
+            if (!card || !area.contains(card)) return;
+            var key = card.dataset.key;
+            if (batchMode) {
+                if (batchDeleting) return;
+                if (batchSelected.has(key)) batchSelected.delete(key); else batchSelected.add(key);
+                var selected = batchSelected.has(key);
+                var check = card.querySelector('.tm-card-check');
+                if (check) check.classList.toggle('checked', selected);
+                card.classList.toggle('batch-sel', selected);
+                syncBatchActionState(load());
+                return;
+            }
+            var d = load();
+            var item = getLogicalItem(key, d);
+            if (!item) return;
+            if (item.kind === 'pair') clearTemporaryPairOverride();
+            var themeName = getItemDisplayTheme(d, item);
+            applyManualTheme(themeName, function (ok, reason) {
+                if (ok) {
+                    var dd = load();
+                    var refreshedItem = getLogicalItem(item.key, dd);
+                    var meta = refreshedItem ? getItemMeta(dd, refreshedItem) : {};
+                    meta.useCount = (meta.useCount || 0) + 1;
+                    meta.lastUsed = Date.now();
+                    save(dd);
+                    toast('✅ 已应用：' + item.name);
+                    refreshSingleItemCard(item.key, { recent: true, freq: true });
+                    renderBottomStatus();
+                    updateBtn();
+                } else if (reason !== 'superseded') {
+                    if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
+                    else if (reason === 'load-failed') toast('主题加载失败，已保留当前主题', true);
+                    else if (reason === 'state-verify-failed') toast('主题状态未能确认切换成功，未切换绑定背景', true);
+                    else if (reason === 'verify-failed') toast('主题状态或视觉验证失败，未切换绑定背景', true);
+                    else toast('切换失败，请重试', true);
+                }
+            });
+        });
+        area._tmGridDelegatedBound = true;
     }
 
     function renderGrid() {
         var area = document.getElementById('tm-grid-area'); if (!area) return;
+        cancelPendingGridRender();
+        var generation = gridRenderGeneration;
         var batchArea = document.getElementById('tm-batch-area');
         var d = load();
+        var view = buildLibraryView(d);
         var curTheme = getCurrentThemeName();
         captureSeriesScrollPositions(area);
         applyGridCardSize(d.gridCardSize);
 
-        var sortedItems = sortItems(getLogicalItems(d), d.sortMode || 'name', d);
-        var layout = buildSeriesLayoutUnits(d, sortedItems, curCat, searchQuery);
+        var sortedItems = sortItems(view.items, d.sortMode || 'name', d, view);
+        var layout = buildSeriesLayoutUnits(d, sortedItems, curCat, searchQuery, view);
         var metrics = getGridLayoutMetrics(area, d.gridCardSize);
         var units = alignSeriesUnitsForGrid(layout.units, metrics.columns);
         var list = layout.displayedItems;
@@ -3601,13 +3942,13 @@
         if (batchArea) {
             if (batchMode) {
                 var disabledAttr = batchDeleting ? ' disabled' : '';
-                var pairReady = batchSelected.length === 2 && batchSelected.every(function (key) {
+                var pairReady = batchSelected.size === 2 && getBatchSelectedKeys().every(function (key) {
                     var selectedItem = getLogicalItem(key, d);
                     return selectedItem && selectedItem.kind === 'theme';
                 });
                 batchArea.style.display = '';
                 batchArea.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">' +
-                (batchDeleting ? '正在删除 <b>' + batchSelected.length + '</b> 个…' : '已选 <b id="tm-batch-count">' + batchSelected.length + '</b> 个') +
+                (batchDeleting ? '正在删除 <b>' + batchSelected.size + '</b> 个…' : '已选 <b id="tm-batch-count">' + batchSelected.size + '</b> 个') +
                 '</span>' +
                 '<div class="tm-batch-divider"></div>' +
                 '<div class="tm-batch-acts">' +
@@ -3620,7 +3961,7 @@
                 (batchDeleting || !pairReady ? ' disabled' : '') +
                 '><i class="fa-solid fa-circle-half-stroke"></i> 日夜</button>' +
                 '<button class="tm-batch-btn tm-batch-series" id="tm-batch-series"' +
-                (batchDeleting || batchSelected.length === 0 ? ' disabled' : '') +
+                (batchDeleting || batchSelected.size === 0 ? ' disabled' : '') +
                 '><i class="fa-solid fa-layer-group"></i> 系列</button>' +
                 '<button class="tm-batch-btn danger" id="tm-batch-delete"' + disabledAttr + '><i class="fa-solid fa-trash"></i> 删除</button>' +
                 '</div></div>';
@@ -3630,24 +3971,39 @@
             }
         }
 
-        var html = '';
-        html += '<div class="tm-grid">';
-
         if (list.length === 0) {
-            html += '</div><div class="tm-empty"><i class="fa-solid fa-palette"></i><span>' +
+            area.innerHTML = '<div class="tm-grid"></div><div class="tm-empty"><i class="fa-solid fa-palette"></i><span>' +
                 (searchQuery ? '没有匹配「' + esc(searchQuery) + '」的主题' : (curCat !== '__all__' ? '该分类暂无主题' : '没有找到主题，请点击底栏刷新按钮')) +
                 '</span></div>';
+            renderedCardsByKey = Object.create(null);
+            renderedActiveItemKey = '';
+            area.dataset.tmRenderGeneration = String(generation);
+            area.dataset.tmFirstBatchReady = 'true';
+            area.dataset.tmRenderComplete = 'true';
+            area.dataset.tmRenderedCards = '0';
         } else {
-            units.forEach(function (unit) {
-                html += unit.type === 'series'
-                    ? buildSeriesBlockHtml(unit, d, curTheme)
-                    : buildGridCardHtml(unit.item, d, curTheme);
-            });
-            html += '</div>';
+            area.innerHTML = '<div class="tm-grid"></div>';
+            renderedCardsByKey = Object.create(null);
+            renderedActiveItemKey = (view.itemByThemeName[curTheme] || {}).key || '';
+            area.dataset.tmRenderGeneration = String(generation);
+            area.dataset.tmFirstBatchReady = 'false';
+            area.dataset.tmRenderComplete = 'false';
+            area.dataset.tmRenderedCards = '0';
+            gridRenderState = {
+                generation: generation,
+                area: area,
+                grid: area.querySelector('.tm-grid'),
+                data: d,
+                view: view,
+                units: units,
+                unitIndex: 0,
+                renderedCards: 0,
+                currentTheme: curTheme,
+                firstBatchDone: false,
+            };
+            appendGridRenderChunk(gridRenderState);
         }
-
-        area.innerHTML = html;
-        bindSeriesRailEvents(area);
+        bindGridDelegatedEvents(area);
 
         // 事件绑定
         if (batchMode) {
@@ -3655,33 +4011,34 @@
             var selall = batchRoot.querySelector('#tm-batch-selall');
             var selnone = batchRoot.querySelector('#tm-batch-none');
             if (selall) selall.addEventListener('click', function () {
-                batchSelected = list.map(function (item) { return item.key; });
+                batchSelected = new Set(list.map(function (item) { return item.key; }));
                 renderGrid();
             });
-            if (selnone) selnone.addEventListener('click', function () { batchSelected = []; renderGrid(); });
+            if (selnone) selnone.addEventListener('click', function () { batchSelected.clear(); renderGrid(); });
 
             var bcatBtn = batchRoot.querySelector('#tm-batch-cat');
             if (bcatBtn) bcatBtn.addEventListener('click', function () {
-                if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
+                if (batchSelected.size === 0) { toast('请先选择主题', true); return; }
                 var dd = load(); var cats = dd.categories || [];
                 if (cats.length === 0) { toast('还没有分类，请先在设置中添加', true); return; }
                 var msg = '选择分类（输入序号）：\n' + cats.map(function (n, i) { return (i + 1) + '. ' + n; }).join('\n');
                 var choice = prompt(msg); if (choice === null) return;
                 var ci = parseInt(choice) - 1;
                 if (ci < 0 || ci >= cats.length) { toast('无效选择', true); return; }
-                var selectedItems = batchSelected.map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
-                var selectedKeys = {};
-                selectedItems.forEach(function (item) { selectedKeys[item.key] = true; });
+                var selectedItems = getBatchSelectedKeys().map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
+                var selectedKeys = new Set();
+                selectedItems.forEach(function (item) { selectedKeys.add(item.key); });
                 var selectedGroups = {};
                 selectedItems.forEach(function (item) {
                     var group = getSeriesForItem(dd, item);
                     if (group) selectedGroups[group.id] = group;
                 });
-                var incompleteGroup = Object.keys(selectedGroups).find(function (seriesId) {
-                    return getLogicalItems(dd).some(function (item) {
-                        var owner = getSeriesForItem(dd, item);
-                        return owner && owner.id === seriesId && !selectedKeys[item.key];
-                    });
+                var incompleteGroup = '';
+                getLogicalItems(dd).some(function (item) {
+                    var owner = getSeriesForItem(dd, item);
+                    if (!owner || !selectedGroups[owner.id] || selectedKeys.has(item.key)) return false;
+                    incompleteGroup = owner.id;
+                    return true;
                 });
                 if (incompleteGroup) {
                     toast('系列需要整组调整分类：请选中该系列全部成员，或点击系列标题修改展示分类', true);
@@ -3695,14 +4052,14 @@
                 });
                 save(dd);
                 toast('✅ 已将所选美化' + (Object.keys(selectedGroups).length ? '及系列' : '') + '移到「' + cats[ci] + '」');
-                batchSelected = [];
+                batchSelected.clear();
                 renderCatbar();
                 renderGrid();
             });
 
             var bstarBtn = batchRoot.querySelector('#tm-batch-star');
             if (bstarBtn) bstarBtn.addEventListener('click', function () {
-                if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
+                if (batchSelected.size === 0) { toast('请先选择主题', true); return; }
                 var dd = load();
                 batchSelected.forEach(function (key) {
                     var item = getLogicalItem(key, dd);
@@ -3711,12 +4068,12 @@
                         m.starred = !m.starred;
                     }
                 });
-                save(dd); toast('⭐ 已切换收藏'); batchSelected = []; renderGrid();
+                save(dd); toast('⭐ 已切换收藏'); batchSelected.clear(); renderGrid();
             });
 
             var btagBtn = batchRoot.querySelector('#tm-batch-tag');
             if (btagBtn) btagBtn.addEventListener('click', function () {
-                if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
+                if (batchSelected.size === 0) { toast('请先选择主题', true); return; }
                 var tag = prompt('为所选主题添加标签：'); if (!tag || !tag.trim()) return; tag = tag.trim();
                 var dd = load();
                 batchSelected.forEach(function (key) {
@@ -3726,17 +4083,17 @@
                     if (!Array.isArray(m.tags)) m.tags = [];
                     if (m.tags.indexOf(tag) === -1) m.tags.push(tag);
                 });
-                save(dd); toast('🏷️ 已添加标签：' + tag); batchSelected = []; renderGrid();
+                save(dd); toast('🏷️ 已添加标签：' + tag); batchSelected.clear(); renderGrid();
             });
 
             var dayNightBtn = batchRoot.querySelector('#tm-batch-day-night');
             if (dayNightBtn) dayNightBtn.addEventListener('click', function () {
-                if (batchSelected.length !== 2) {
+                if (batchSelected.size !== 2) {
                     toast('请选择两个尚未组合的美化', true);
                     return;
                 }
                 var dd = load();
-                var selectedItems = batchSelected.map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
+                var selectedItems = getBatchSelectedKeys().map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
                 if (selectedItems.length !== 2 || selectedItems.some(function (item) { return item.kind !== 'theme'; })) {
                     toast('已组成日夜美化的卡片不能再次组合', true);
                     return;
@@ -3747,7 +4104,7 @@
             var seriesBtn = batchRoot.querySelector('#tm-batch-series');
             if (seriesBtn) seriesBtn.addEventListener('click', function () {
                 var dd = load();
-                var selectedItems = batchSelected.map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
+                var selectedItems = getBatchSelectedKeys().map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
                 if (selectedItems.length === 0) { toast('请先选择美化', true); return; }
                 openSeriesBatchSheet(selectedItems);
             });
@@ -3755,14 +4112,15 @@
             var bdeleteBtn = batchRoot.querySelector('#tm-batch-delete');
             if (bdeleteBtn) bdeleteBtn.addEventListener('click', function () {
                 if (batchDeleting) return;
-                if (batchSelected.length === 0) { toast('请先选择主题', true); return; }
+                if (batchSelected.size === 0) { toast('请先选择主题', true); return; }
 
-                var selectedItems = batchSelected.map(function (key) { return getLogicalItem(key, d); }).filter(Boolean);
+                var selectedItems = getBatchSelectedKeys().map(function (key) { return getLogicalItem(key, d); }).filter(Boolean);
                 var names = expandItemThemeNames(selectedItems);
+                var deletingNameSet = new Set(names);
                 var currentTheme = getCurrentThemeName();
-                var deletingCurrent = names.indexOf(currentTheme) !== -1;
+                var deletingCurrent = deletingNameSet.has(currentTheme);
                 var fallbackTheme = deletingCurrent
-                    ? stThemeList.find(function (name) { return names.indexOf(name) === -1; })
+                    ? stThemeList.find(function (name) { return !deletingNameSet.has(name); })
                     : '';
                 if (deletingCurrent && !fallbackTheme) {
                     toast('当前美化也在所选范围内，请至少保留一个可切换的美化', true);
@@ -3788,10 +4146,10 @@
                             return;
                         }
 
-                        batchSelected = outcome.failed.map(function (failedItem) {
+                        batchSelected = new Set(outcome.failed.map(function (failedItem) {
                             var logical = getLogicalItem(failedItem.name, load());
                             return logical ? logical.key : '';
-                        }).filter(function (key, idx, all) { return key && all.indexOf(key) === idx; });
+                        }).filter(function (key) { return !!key; }));
                         renderGrid();
                         if (outcome.failed.length > 0) {
                             toast('已删除 ' + outcome.removed.length + ' 个；未删除 ' + outcome.failed.length + ' 个：' +
@@ -3821,53 +4179,6 @@
                 });
             });
 
-            area.querySelectorAll('.tm-card').forEach(function (card) {
-                card.addEventListener('click', function () {
-                    if (batchDeleting) return;
-                    var key = card.dataset.key;
-                    var idx = batchSelected.indexOf(key);
-                    if (idx !== -1) batchSelected.splice(idx, 1); else batchSelected.push(key);
-                    var chk = card.querySelector('.tm-card-check');
-                    if (chk) chk.classList.toggle('checked', batchSelected.indexOf(key) !== -1);
-                    card.classList.toggle('batch-sel', batchSelected.indexOf(key) !== -1);
-                    syncBatchActionState(load());
-                });
-            });
-        } else {
-            area.querySelectorAll('.tm-card').forEach(function (card) {
-                card.addEventListener('click', function (e) {
-                    if (e.target.closest('.tm-card-menu')) return;
-                    var item = getLogicalItem(card.dataset.key, load());
-                    if (!item) return;
-                    if (item.kind === 'pair') clearTemporaryPairOverride();
-                    var themeName = getItemDisplayTheme(load(), item);
-                    applyManualTheme(themeName, function (ok, reason) {
-                        if (ok) {
-                            var dd = load();
-                            var refreshedItem = getLogicalItem(item.key, dd);
-                            var m = refreshedItem ? getItemMeta(dd, refreshedItem) : {};
-                            m.useCount = (m.useCount || 0) + 1;
-                            m.lastUsed = Date.now();
-                            save(dd);
-                            toast('✅ 已应用：' + item.name);
-                            renderGrid(); renderBottomStatus(); updateBtn();
-                        } else if (reason !== 'superseded') {
-                            if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
-                            else if (reason === 'load-failed') toast('主题加载失败，已保留当前主题', true);
-                            else if (reason === 'state-verify-failed') toast('主题状态未能确认切换成功，未切换绑定背景', true);
-                            else if (reason === 'verify-failed') toast('主题状态或视觉验证失败，未切换绑定背景', true);
-                            else toast('切换失败，请重试', true);
-                        }
-                    });
-                });
-            });
-
-            area.querySelectorAll('.tm-card-menu').forEach(function (btn) {
-                btn.addEventListener('click', function (e) {
-                    e.stopPropagation();
-                    openContextMenu(btn.dataset.key);
-                });
-            });
         }
     }
 
@@ -3914,13 +4225,15 @@
         if (!seriesApi) { toast('系列模块尚未就绪', true); return; }
         var d = load();
         var targets = [];
+        var targetKeys = new Set();
         var ownerIds = [];
+        var ownerIdSet = new Set();
         items.forEach(function (item) {
             var target = getItemTarget(item);
             var key = seriesApi.targetKey(target);
-            if (key && !targets.some(function (existing) { return seriesApi.targetKey(existing) === key; })) targets.push(target);
-            var owner = seriesApi.findSeriesByTarget(d, target);
-            if (owner && ownerIds.indexOf(owner.id) === -1) ownerIds.push(owner.id);
+            if (key && !targetKeys.has(key)) { targetKeys.add(key); targets.push(target); }
+            var owner = getSeriesForItem(d, item);
+            if (owner && !ownerIdSet.has(owner.id)) { ownerIdSet.add(owner.id); ownerIds.push(owner.id); }
         });
         if (ownerIds.length > 1) {
             toast('所选美化分属不同系列，请先移出后再重新组合', true);
@@ -3928,13 +4241,15 @@
         }
         if (ownerIds.length === 1) {
             var ownerGroup = seriesApi.getSeries(d, ownerIds[0]);
-            var additions = targets.filter(function (target) { return !seriesApi.findSeriesByTarget(d, target); });
+            var membership = buildLibraryView(d).seriesMembership;
+            var additions = targets.filter(function (target) { return !membership[seriesApi.targetKey(target)]; });
+            var additionKeys = new Set(additions.map(function (target) { return seriesApi.targetKey(target); }));
             if (additions.length === 0) {
                 openSeriesManageSheet(ownerGroup.id);
                 return;
             }
             var additionItems = items.filter(function (item) {
-                return additions.some(function (target) { return seriesApi.targetsEqual(target, getItemTarget(item)); });
+                return additionKeys.has(seriesApi.targetKey(getItemTarget(item)));
             });
             var addSheet = createSheet([
                 '<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>加入现有系列</div>',
@@ -3948,7 +4263,7 @@
                 var result = seriesApi.addMembers(dd, ownerGroup.id, additions);
                 if (!result.ok) { toast('系列关系已变化，请刷新后重试', true); return; }
                 save(dd);
-                batchSelected = [];
+                batchSelected.clear();
                 closeSheet(addSheet);
                 renderGrid();
                 toast('✅ 已加入「' + ownerGroup.name + '」');
@@ -4018,7 +4333,7 @@
             }
             if (category && dd.categories.indexOf(category) === -1) dd.categories.push(category);
             save(dd);
-            batchSelected = [];
+            batchSelected.clear();
             closeSheet(sheet);
             renderCatbar();
             renderGrid();
@@ -4027,9 +4342,10 @@
     }
 
     function getSeriesMemberView(d, target) {
-        var item = getLogicalItems(d).find(function (candidate) {
-            return seriesApi.targetsEqual(getItemTarget(candidate), target);
-        });
+        var view = buildLibraryView(d);
+        var item = target.kind === 'day-night'
+            ? view.pairById[target.pairId]
+            : view.itemByThemeName[target.themeName];
         if (item) return { name: item.name, kind: item.kind, available: true };
         return {
             name: target.kind === 'day-night' ? ('日夜组合 ' + target.pairId) : target.themeName,
@@ -4205,7 +4521,7 @@
                 );
             }
             save(currentData);
-            batchSelected = [];
+            batchSelected.clear();
             closeSheet(sheet);
             renderCatbar();
             renderGrid();
@@ -4361,7 +4677,9 @@
                     m.useCount = (m.useCount || 0) + 1;
                     m.lastUsed = Date.now();
                     save(dd);
-                    toast('✅ 已应用：' + itemLabel); renderGrid(); renderBottomStatus(); updateBtn();
+                    toast('✅ 已应用：' + itemLabel);
+                    refreshSingleItemCard(item.key, { recent: true, freq: true });
+                    renderBottomStatus(); updateBtn();
                 }
                 else if (reason !== 'superseded') {
                     if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
@@ -4385,7 +4703,8 @@
             var refreshed = getLogicalItem(item.key, dd);
             var m = refreshed ? getItemMeta(dd, refreshed) : {};
             m.starred = !m.starred;
-            save(dd); toast(m.starred ? '⭐ 已收藏' : '已取消收藏'); renderGrid();
+            save(dd); toast(m.starred ? '⭐ 已收藏' : '已取消收藏');
+            refreshSingleItemCard(item.key, { starred: true });
         });
 
         sheet.querySelector('#tm-ctx-edit').addEventListener('click', function () {
@@ -4672,6 +4991,8 @@
         if (!item) return;
         var pair = item.kind === 'pair' ? pairsApi.getPair(d, item.pairId) : null;
         var meta = getItemMeta(d, item);
+        var originalEditName = item.name;
+        var originalEditCategory = meta.category || '';
         var selectedVariant = pair
             ? (pair.nightTheme === getCurrentThemeName() ? 'night' : (pair.dayTheme === getCurrentThemeName() ? 'day' : getPreferredPairVariant(pair.id)))
             : 'day';
@@ -4959,15 +5280,21 @@
                 }
                 save(dd);
                 closeSheet(sheet);
+                var editEffects = {
+                    name: refreshedItem.name !== originalEditName || (refreshedItem.kind === 'pair' && pairName !== originalEditName),
+                    category: shared.category !== originalEditCategory,
+                    searchable: true,
+                    layout: refreshedItem.kind === 'pair' && pairName !== originalEditName,
+                };
                 var currentTheme = getCurrentThemeName();
                 if (refreshedItem.themeNames.indexOf(currentTheme) !== -1) {
                     applyBoundBackground(currentTheme, function () {
                         toast('✨ 已保存');
-                        renderCatbar(); renderGrid(); renderBottomStatus();
+                        renderCatbar(); refreshSingleItemCard(item.key, editEffects); renderBottomStatus();
                     });
                 } else {
                     toast('✨ 已保存');
-                    renderCatbar(); renderGrid();
+                    renderCatbar(); refreshSingleItemCard(item.key, editEffects);
                 }
             }
         });
