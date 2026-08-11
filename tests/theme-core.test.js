@@ -705,10 +705,12 @@ test('native custom CSS edits invalidate only that theme and reload its newest s
     const previousDocument = global.document;
     const previousHydrate = global.baibaokuHydrateTheme;
     const previousBridge = global.__baibaokuEarlyBridge;
+    const previousFetch = global.fetch;
     t.after(() => {
         global.document = previousDocument;
         global.baibaokuHydrateTheme = previousHydrate;
         global.__baibaokuEarlyBridge = previousBridge;
+        global.fetch = previousFetch;
     });
 
     const handlers = {};
@@ -764,7 +766,7 @@ test('native custom CSS edits invalidate only that theme and reload its newest s
     assert.equal(runtime.getCached('B').custom_css, 'B css');
 });
 
-test('live CSS mismatch cannot be overwritten even when the native edit event was missed and refresh is stale', async (t) => {
+test('live CSS mismatch remains transient when the native edit event was missed and refresh is stale', async (t) => {
     const previousDocument = global.document;
     const previousHydrate = global.baibaokuHydrateTheme;
     t.after(() => {
@@ -798,6 +800,195 @@ test('live CSS mismatch cannot be overwritten even when the native edit event wa
     assert.equal(prepared.theme.custom_css, 'saved new css');
     assert.equal(hydrated.custom_css, 'saved new css');
     assert.equal(inventoryReads, 1);
+    assert.equal(runtime.getCached('A'), null);
+});
+
+function createNativeCssSaveSyncHarness(t, options) {
+    options = options || {};
+    const previousDocument = global.document;
+    const previousHydrate = global.baibaokuHydrateTheme;
+    const previousBridge = global.__baibaokuEarlyBridge;
+    const previousFetch = global.fetch;
+    const handlers = {};
+    const names = ['A', 'B', 'C'];
+    const themeControl = {
+        tagName: 'SELECT',
+        selectedIndex: 0,
+        options: names.map((name) => ({ value: name, textContent: name })),
+    };
+    const customCss = { id: 'customCSS', value: 'old css' };
+    const customStyle = { textContent: 'old css' };
+    const serverThemes = {
+        A: completeTheme('A', { custom_css: 'old css' }),
+        B: completeTheme('B', { custom_css: 'B css' }),
+        C: completeTheme('C', { custom_css: 'C css' }),
+    };
+    let inventoryReads = 0;
+    let bridgeClearCount = 0;
+    const hydrated = [];
+    const fetchCalls = [];
+
+    global.document = {
+        addEventListener(type, handler) { handlers[type] = handler; },
+        getElementById(id) {
+            if (id === 'themes') return themeControl;
+            if (id === 'customCSS') return customCss;
+            if (id === 'custom-style') return customStyle;
+            return null;
+        },
+    };
+    global.__baibaokuEarlyBridge = {
+        clearSettingsGetCache() { bridgeClearCount += 1; },
+    };
+    global.baibaokuHydrateTheme = (theme) => { hydrated.push(clone(theme)); };
+    global.fetch = (url, init) => {
+        fetchCalls.push({ url: String(url), init: clone(init || {}) });
+        return Promise.resolve({ ok: options.saveOk !== false, status: options.saveOk === false ? 500 : 200 });
+    };
+
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: {
+            getSettingsInventory() {
+                inventoryReads += 1;
+                return Promise.resolve(Object.values(serverThemes).map(clone));
+            },
+            getRawSettingsInventory() {
+                inventoryReads += 1;
+                return Promise.resolve(Object.values(serverThemes).map(clone));
+            },
+        },
+    });
+    Object.values(serverThemes).forEach((theme) => runtime.remember(clone(theme)));
+    assert.equal(runtime.bindNativeEditTracking(), true);
+
+    function setCurrent(name) {
+        themeControl.selectedIndex = names.indexOf(name);
+    }
+
+    function setLiveCss(css) {
+        customCss.value = css;
+        customStyle.textContent = css;
+    }
+
+    function editDraft(css, event) {
+        setLiveCss(css);
+        handlers.input(Object.assign({ target: customCss }, event || {}));
+    }
+
+    function saveTheme(theme) {
+        return global.fetch('/api/themes/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(theme),
+        });
+    }
+
+    t.after(() => {
+        global.document = previousDocument;
+        global.baibaokuHydrateTheme = previousHydrate;
+        global.__baibaokuEarlyBridge = previousBridge;
+        global.fetch = previousFetch;
+    });
+
+    return {
+        runtime,
+        handlers,
+        serverThemes,
+        fetchCalls,
+        hydrated,
+        customCss,
+        customStyle,
+        setCurrent,
+        setLiveCss,
+        editDraft,
+        saveTheme,
+        inventoryReads: () => inventoryReads,
+        bridgeClearCount: () => bridgeClearCount,
+    };
+}
+
+test('confirmed native CSS save replaces an old cache across A to B to A', async (t) => {
+    const harness = createNativeCssSaveSyncHarness(t);
+    const saved = completeTheme('A', { custom_css: 'saved new css', main_text_color: 'saved color' });
+    harness.setLiveCss(saved.custom_css);
+
+    await harness.saveTheme(saved);
+    harness.setCurrent('B');
+    const prepared = await harness.runtime.prepareUsableThemeForApply('A');
+
+    assert.equal(prepared.theme.custom_css, 'saved new css');
+    assert.notEqual(prepared.theme.main_text_color, 'saved color');
+    assert.equal(harness.runtime.getConfirmedSavedPatch('A').custom_css, 'saved new css');
+});
+
+test('unsaved native CSS draft is not promoted when leaving and returning to A', async (t) => {
+    const harness = createNativeCssSaveSyncHarness(t);
+    harness.editDraft('unsaved draft css');
+    assert.equal(harness.runtime.getCached('A'), null);
+
+    harness.setCurrent('B');
+    const prepared = await harness.runtime.prepareUsableThemeForApply('A');
+
+    assert.equal(prepared.theme.custom_css, 'old css');
+    assert.equal(harness.runtime.getConfirmedSavedPatch('A'), null);
+});
+
+test('two confirmed native CSS saves keep the latest saved revision', async (t) => {
+    const harness = createNativeCssSaveSyncHarness(t);
+    harness.setLiveCss('new css 1');
+    await harness.saveTheme(completeTheme('A', { custom_css: 'new css 1' }));
+    const firstRevision = harness.runtime.getConfirmedSavedPatch('A').revision;
+    harness.setLiveCss('new css 2');
+    await harness.saveTheme(completeTheme('A', { custom_css: 'new css 2' }));
+
+    harness.setCurrent('B');
+    const prepared = await harness.runtime.prepareUsableThemeForApply('A');
+
+    assert.equal(prepared.theme.custom_css, 'new css 2');
+    assert.ok(harness.runtime.getConfirmedSavedPatch('A').revision > firstRevision);
+});
+
+test('confirmed native CSS patch protects an immediate switch while inventory is delayed', async (t) => {
+    const harness = createNativeCssSaveSyncHarness(t);
+    harness.editDraft('saved while inventory is old');
+    await harness.saveTheme(completeTheme('A', { custom_css: 'saved while inventory is old' }));
+
+    harness.setCurrent('B');
+    const prepared = await harness.runtime.prepareUsableThemeForApply('A');
+    assert.equal(prepared.theme.custom_css, 'saved while inventory is old');
+    assert.equal(harness.runtime.getConfirmedSavedPatch('A').custom_css, 'saved while inventory is old');
+
+    harness.serverThemes.A = completeTheme('A', { custom_css: 'saved while inventory is old' });
+    harness.runtime.replaceInventory(Object.values(harness.serverThemes).map(clone));
+    assert.equal(harness.runtime.getConfirmedSavedPatch('A'), null);
+});
+
+test('ThemeMgr apply source does not create a confirmed native CSS save', async (t) => {
+    const harness = createNativeCssSaveSyncHarness(t);
+    harness.setCurrent('B');
+    harness.setLiveCss('ThemeMgr apply css');
+    harness.handlers.input({ target: harness.customCss, __themeManagerApply: true });
+
+    const prepared = await harness.runtime.prepareUsableThemeForApply('A');
+
+    assert.equal(prepared.theme.custom_css, 'old css');
+    assert.equal(harness.runtime.getConfirmedSavedPatch('A'), null);
+    assert.equal(harness.fetchCalls.filter((call) => call.url === '/api/themes/save').length, 0);
+});
+
+test('confirmed native CSS save survives A to B to C to A', async (t) => {
+    const harness = createNativeCssSaveSyncHarness(t);
+    harness.setLiveCss('latest saved css');
+    await harness.saveTheme(completeTheme('A', { custom_css: 'latest saved css' }));
+
+    harness.setCurrent('B');
+    await harness.runtime.prepareUsableThemeForApply('B');
+    harness.setCurrent('C');
+    await harness.runtime.prepareUsableThemeForApply('C');
+    const prepared = await harness.runtime.prepareUsableThemeForApply('A');
+
+    assert.equal(prepared.theme.custom_css, 'latest saved css');
 });
 
 test('newly imported theme falls back from stale native state and keeps the applied theme when only visual verification fails', async (t) => {

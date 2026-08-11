@@ -7,9 +7,13 @@
         var api = opts.api;
         var fullThemeCache = {};
         var staleThemeCache = {};
+        var confirmedSavedPatches = {};
+        var confirmedSavedRevision = 0;
+        var nativeThemeSaveRequestSequence = 0;
         var applyRequestId = 0;
         var activeApplyCount = 0;
         var nativeEditTrackingBound = false;
+        var nativeThemeSaveTrackingBound = false;
         var nativeEvictionSequence = 0;
         var loadPowerUserModule = typeof opts.loadPowerUserModule === 'function'
             ? opts.loadPowerUserModule
@@ -117,14 +121,16 @@
 
         function remember(theme) {
             if (!schema.isUsableTheme(theme, theme && theme.name)) return false;
-            fullThemeCache[theme.name] = schema.cloneValue(theme);
-            delete staleThemeCache[theme.name];
+            var reconciledTheme = reconcileConfirmedSavedPatch(theme.name, theme);
+            fullThemeCache[reconciledTheme.name] = schema.cloneValue(reconciledTheme);
+            delete staleThemeCache[reconciledTheme.name];
             return true;
         }
 
         function forget(themeName) {
             delete fullThemeCache[themeName];
             delete staleThemeCache[themeName];
+            delete confirmedSavedPatches[themeName];
         }
 
         function getCached(themeName) {
@@ -171,7 +177,7 @@
             if (schema.isUsableTheme(candidate, themeName)) {
                 var usableCandidate = schema.cloneValue(candidate);
                 remember(usableCandidate);
-                return Promise.resolve(usableCandidate);
+                return Promise.resolve(getCached(themeName) || usableCandidate);
             }
 
             var bridge = getBridge();
@@ -187,7 +193,7 @@
                     }
                     var usable = schema.cloneValue(loaded);
                     remember(usable);
-                    return usable;
+                    return getCached(themeName) || usable;
                 })
                 .catch(function (err) {
                     if (err && err.code === 'incomplete') throw err;
@@ -198,6 +204,116 @@
 
         function normalizeCss(value) {
             return String(value == null ? '' : value).replace(/\r\n?/g, '\n');
+        }
+
+        function reconcileConfirmedSavedPatch(themeName, theme) {
+            var patch = confirmedSavedPatches[themeName];
+            if (!patch || !theme || !Object.prototype.hasOwnProperty.call(theme, 'custom_css')) return theme;
+            if (normalizeCss(theme.custom_css) === normalizeCss(patch.custom_css)) {
+                delete confirmedSavedPatches[themeName];
+                return theme;
+            }
+            var protectedTheme = schema.cloneValue(theme);
+            protectedTheme.custom_css = patch.custom_css;
+            return protectedTheme;
+        }
+
+        function confirmSavedTheme(theme, requestSequence) {
+            if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return false;
+            var themeName = String(theme.name || '').trim();
+            if (!themeName || !Object.prototype.hasOwnProperty.call(theme, 'custom_css')) return false;
+            var sequence = Number(requestSequence) || 0;
+            var previousPatch = confirmedSavedPatches[themeName];
+            if (sequence && previousPatch && previousPatch.requestSequence > sequence) return false;
+
+            confirmedSavedRevision += 1;
+            confirmedSavedPatches[themeName] = {
+                custom_css: String(theme.custom_css == null ? '' : theme.custom_css),
+                revision: confirmedSavedRevision,
+                requestSequence: sequence,
+                confirmedAt: Date.now(),
+            };
+
+            var cached = fullThemeCache[themeName];
+            if (schema.isUsableTheme(cached, themeName)) {
+                var updated = schema.cloneValue(cached);
+                updated.custom_css = confirmedSavedPatches[themeName].custom_css;
+                fullThemeCache[themeName] = updated;
+                delete staleThemeCache[themeName];
+            } else {
+                delete fullThemeCache[themeName];
+                staleThemeCache[themeName] = {
+                    reason: 'theme-manager-confirmed-native-save',
+                    invalidatedAt: Date.now(),
+                };
+            }
+            clearBridgeSettingsCache('theme-manager-confirmed-native-save');
+            return true;
+        }
+
+        function getConfirmedSavedPatch(themeName) {
+            var patch = confirmedSavedPatches[String(themeName || '').trim()];
+            return patch ? schema.cloneValue(patch) : null;
+        }
+
+        function getFetchUrl(input) {
+            if (typeof input === 'string') return input;
+            if (input && typeof input.url === 'string') return input.url;
+            if (input && typeof input.href === 'string') return input.href;
+            return '';
+        }
+
+        function getFetchMethod(input, init) {
+            return String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+        }
+
+        function readConfirmedThemeSaveRequest(input, init) {
+            if (getFetchMethod(input, init) !== 'POST') return null;
+            var rawUrl = getFetchUrl(input);
+            if (!rawUrl) return null;
+            var parsedUrl;
+            try {
+                var baseUrl = global.location && global.location.href ? global.location.href : 'http://theme-manager.local/';
+                parsedUrl = new URL(rawUrl, baseUrl);
+                if (global.location && global.location.origin && parsedUrl.origin !== global.location.origin) return null;
+            } catch (e) {
+                return null;
+            }
+            if (parsedUrl.pathname !== '/api/themes/save') return null;
+            var body = init && init.body;
+            if (typeof body !== 'string') return null;
+            try {
+                var theme = JSON.parse(body);
+                if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return null;
+                if (!String(theme.name || '').trim() || !Object.prototype.hasOwnProperty.call(theme, 'custom_css')) return null;
+                return theme;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function bindNativeThemeSaveTracking() {
+            if (nativeThemeSaveTrackingBound) return true;
+            if (typeof global.fetch !== 'function') return false;
+            var previousFetch = global.fetch;
+            global.fetch = function themeManagerConfirmedThemeSaveFetch(input, init) {
+                var savedTheme = readConfirmedThemeSaveRequest(input, init);
+                var requestSequence = savedTheme ? ++nativeThemeSaveRequestSequence : 0;
+                var responsePromise = previousFetch.apply(this, arguments);
+                if (!savedTheme) return responsePromise;
+                return Promise.resolve(responsePromise).then(function (response) {
+                    if (response && response.ok) {
+                        try {
+                            confirmSavedTheme(savedTheme, requestSequence);
+                        } catch (err) {
+                            console.warn('[美化管理] 同步原生主题保存结果失败:', err);
+                        }
+                    }
+                    return response;
+                });
+            };
+            nativeThemeSaveTrackingBound = true;
+            return true;
         }
 
         function readLiveCustomCss() {
@@ -239,7 +355,16 @@
                 return resolveCandidate(themeName, findTheme(themes, themeName));
             }).then(function (theme) {
                 var protectedTheme = preserveNewerLiveCustomCss(themeName, theme);
-                if (protectedTheme !== theme) remember(protectedTheme);
+                if (protectedTheme !== theme) {
+                    // A live editor value is only a transient draft until /api/themes/save
+                    // confirms it. Keep the cache stale so leaving and returning to this
+                    // theme resolves the last saved definition instead of persisting a draft.
+                    delete fullThemeCache[themeName];
+                    staleThemeCache[themeName] = {
+                        reason: 'theme-manager-live-custom-css-draft',
+                        invalidatedAt: Date.now(),
+                    };
+                }
                 return protectedTheme;
             });
         }
@@ -298,9 +423,10 @@
         }
 
         function bindNativeEditTracking() {
+            var saveTrackingBound = bindNativeThemeSaveTracking();
             if (nativeEditTrackingBound) return true;
             var documentRef = global.document;
-            if (!documentRef || typeof documentRef.addEventListener !== 'function') return false;
+            if (!documentRef || typeof documentRef.addEventListener !== 'function') return saveTrackingBound;
             nativeEditTrackingBound = true;
             function handleCustomCssEdit(event) {
                 var target = event && event.target;
@@ -630,6 +756,8 @@
             getBridge: getBridge,
             invalidate: invalidate,
             invalidateTheme: invalidateTheme,
+            confirmSavedTheme: confirmSavedTheme,
+            getConfirmedSavedPatch: getConfirmedSavedPatch,
             hydrate: hydrate,
             replaceNativeTheme: replaceNativeTheme,
             evictNativeTheme: evictNativeTheme,
@@ -647,6 +775,7 @@
             isApplyCurrent: isApplyCurrent,
             isApplyInProgress: isApplyInProgress,
             bindNativeEditTracking: bindNativeEditTracking,
+            bindNativeThemeSaveTracking: bindNativeThemeSaveTracking,
             verifyThemeState: verifyThemeState,
             verifyThemeVisuals: verifyThemeVisuals,
             verifyAppliedTheme: verifyAppliedTheme,
