@@ -13,6 +13,7 @@ require('../src/theme-pairs.js');
 require('../src/theme-series.js');
 require('../src/theme-bindings.js');
 require('../src/theme-appearance.js');
+require('../src/storage.js');
 
 const modules = global.ThemeMgrModules;
 const schema = modules.themeSchema;
@@ -41,6 +42,193 @@ function completeBaseline(overrides) {
     });
     return Object.assign(baseline, overrides || {});
 }
+
+function deferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return { promise, resolve, reject };
+}
+
+async function waitFor(predicate, message) {
+    const deadline = Date.now() + 1000;
+    while (!predicate()) {
+        if (Date.now() >= deadline) throw new Error(message || 'condition was not reached');
+        await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+}
+
+function createStorageTestHarness(options) {
+    const config = options || {};
+    const shared = config.shared || { data: null, sync: null };
+    const puts = [];
+    let getCount = 0;
+    const putFactory = config.putFactory || (() => {
+        const request = deferred();
+        request.resolve({ ok: true, json: async () => ({ ok: true }) });
+        return request;
+    });
+    const fetch = (url, requestOptions) => {
+        const method = requestOptions && requestOptions.method || 'GET';
+        if (url.endsWith('/status')) {
+            return Promise.resolve({ ok: true, json: async () => ({ ok: config.server !== false }) });
+        }
+        if (url.endsWith('/data') && method === 'GET') {
+            getCount += 1;
+            return Promise.resolve({
+                ok: true,
+                json: async () => ({ ok: true, data: clone(config.serverData === undefined ? { value: 'server' } : config.serverData) }),
+            });
+        }
+        if (url.endsWith('/data') && method === 'PUT') {
+            const pending = putFactory(puts.length, JSON.parse(requestOptions.body));
+            puts.push({ body: JSON.parse(requestOptions.body), pending });
+            return pending.promise;
+        }
+        throw new Error(`unexpected fetch: ${method} ${url}`);
+    };
+    const storage = modules.createStorage({
+        DB_NAME: 'test',
+        DB_VERSION: 1,
+        STORE_NAME: 'test',
+        DATA_KEY: 'data',
+        SERVER_BASE: '/server',
+        SERVER_IMAGE_PREFIX: '/server/images/',
+        IMAGE_FIELD_KEYS: {},
+        ensureDefaults(value) { return Object.assign({ value: 'default' }, value || {}); },
+        getPostHeaders() { return Promise.resolve({ 'Content-Type': 'application/json' }); },
+        fetch,
+        localStore: {
+            read() {
+                return { data: clone(shared.data), sync: clone(shared.sync), hasData: !!shared.data };
+            },
+            write(data, sync) {
+                shared.data = clone(data);
+                shared.sync = clone(sync);
+            },
+        },
+        serverDebounceMs: config.serverDebounceMs === undefined ? 0 : config.serverDebounceMs,
+        serverRetryDelays: config.serverRetryDelays || [0, 0, 0],
+    });
+    return { storage, shared, puts, getCount: () => getCount };
+}
+
+function initTestStorage(storage) {
+    return new Promise((resolve) => storage.initStorage(resolve));
+}
+
+test('stale PUT acknowledgement cannot overwrite a newer local mutation', async () => {
+    const requests = [];
+    const harness = createStorageTestHarness({
+        serverData: { value: 'initial' },
+        putFactory() {
+            const request = deferred();
+            requests.push(request);
+            return request;
+        },
+    });
+    await initTestStorage(harness.storage);
+
+    await harness.storage.save({ value: 'A' });
+    await waitFor(() => harness.puts.length === 1, 'PUT A did not start');
+    await harness.storage.save({ value: 'B' });
+    requests[0].resolve({ ok: true, json: async () => ({ ok: true, data: { value: 'A' } }) });
+    await waitFor(() => harness.puts.length === 2, 'latest PUT did not follow stale ACK');
+
+    assert.equal(harness.storage.load().value, 'B');
+    assert.deepEqual(harness.puts.map((item) => item.body.value), ['A', 'B']);
+    requests[1].resolve({ ok: true, json: async () => ({ ok: true, data: { value: 'B' } }) });
+    assert.equal(await harness.storage.flush(), true);
+});
+
+test('single-flight storage coalesces intermediate revisions and sends only the newest snapshot', async () => {
+    const requests = [];
+    const harness = createStorageTestHarness({
+        serverData: { value: 'initial' },
+        putFactory() {
+            const request = deferred();
+            requests.push(request);
+            return request;
+        },
+    });
+    await initTestStorage(harness.storage);
+
+    await harness.storage.save({ value: 'A' });
+    await waitFor(() => harness.puts.length === 1);
+    await harness.storage.save({ value: 'B' });
+    await harness.storage.save({ value: 'C' });
+    requests[0].resolve({ ok: true, json: async () => ({ ok: true, data: { value: 'A' } }) });
+    await waitFor(() => harness.puts.length === 2);
+
+    assert.deepEqual(harness.puts.map((item) => item.body.value), ['A', 'C']);
+    assert.equal(harness.storage.load().value, 'C');
+    requests[1].resolve({ ok: true, json: async () => ({ ok: true }) });
+    assert.equal(await harness.storage.flush(), true);
+});
+
+test('failed PUT keeps pending state and retries the newest revision', async () => {
+    const requests = [];
+    const harness = createStorageTestHarness({
+        serverData: { value: 'initial' },
+        serverRetryDelays: [20, 20],
+        putFactory() {
+            const request = deferred();
+            requests.push(request);
+            return request;
+        },
+    });
+    await initTestStorage(harness.storage);
+
+    await harness.storage.save({ value: 'A' });
+    await waitFor(() => harness.puts.length === 1);
+    requests[0].reject(new Error('temporary failure'));
+    await waitFor(() => harness.storage.getSyncState().pendingServerSync === true);
+    await harness.storage.save({ value: 'B' });
+    await waitFor(() => harness.puts.length === 2, 'retry did not start');
+
+    assert.equal(harness.puts[1].body.value, 'B');
+    assert.equal(harness.storage.load().value, 'B');
+    requests[1].resolve({ ok: true, json: async () => ({ ok: true }) });
+    assert.equal(await harness.storage.flush(), true);
+    assert.equal(harness.storage.getSyncState().pendingServerSync, false);
+});
+
+test('pending local snapshot survives recreation and takes precedence over stale server data', async () => {
+    const shared = { data: null, sync: null };
+    const firstRequest = deferred();
+    const first = createStorageTestHarness({
+        shared,
+        serverData: { value: 'server-old' },
+        putFactory() { return firstRequest; },
+    });
+    await initTestStorage(first.storage);
+    await first.storage.save({ value: 'local-new' });
+    await waitFor(() => first.puts.length === 1);
+    assert.equal(shared.data.value, 'local-new');
+    assert.equal(shared.sync.pendingServerSync, true);
+
+    const secondRequests = [];
+    const second = createStorageTestHarness({
+        shared,
+        serverData: { value: 'server-stale' },
+        putFactory() {
+            const request = deferred();
+            secondRequests.push(request);
+            return request;
+        },
+    });
+    await initTestStorage(second.storage);
+    await waitFor(() => second.puts.length === 1);
+
+    assert.equal(second.getCount(), 0);
+    assert.equal(second.storage.load().value, 'local-new');
+    assert.equal(second.puts[0].body.value, 'local-new');
+    secondRequests[0].resolve({ ok: true, json: async () => ({ ok: true }) });
+    assert.equal(await second.storage.flush(), true);
+});
 
 test('preview view normalization clamps v2 focus values and supplies safe defaults', () => {
     assert.deepEqual(imageTools.normalizePreviewView({

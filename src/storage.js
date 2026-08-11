@@ -12,6 +12,13 @@
         var ensureDefaults = opts.ensureDefaults;
         var getPostHeaders = opts.getPostHeaders;
         var LS_KEY = opts.LS_KEY || 'theme_mgr_v2';
+        var SYNC_KEY = String(DATA_KEY) + ':sync-state';
+        var LS_SYNC_KEY = LS_KEY + ':sync-state';
+        var fetchFn = typeof opts.fetch === 'function' ? opts.fetch : global.fetch.bind(global);
+        var setTimeoutFn = typeof opts.setTimeout === 'function' ? opts.setTimeout : global.setTimeout.bind(global);
+        var clearTimeoutFn = typeof opts.clearTimeout === 'function' ? opts.clearTimeout : global.clearTimeout.bind(global);
+        var nowFn = typeof opts.now === 'function' ? opts.now : Date.now;
+        var localStore = opts.localStore || null;
 
         var dbInstance = null;
         var dataCache = null;
@@ -19,7 +26,49 @@
         var serverDirty = false;
         var serverPutInFlight = false;
         var serverDebounceTimer = null;
-        var SERVER_DEBOUNCE_MS = 800;
+        var serverRetryTimer = null;
+        var serverRetryAttempt = 0;
+        var SERVER_DEBOUNCE_MS = Number(opts.serverDebounceMs) >= 0 ? Number(opts.serverDebounceMs) : 800;
+        var SERVER_RETRY_DELAYS = Array.isArray(opts.serverRetryDelays) && opts.serverRetryDelays.length > 0
+            ? opts.serverRetryDelays.slice()
+            : [1000, 2000, 4000, 8000, 16000];
+        var storageReady = false;
+        var storageInitStarted = false;
+        var initCallbacks = [];
+        var readyResolve;
+        var readyPromise = new Promise(function (resolve) { readyResolve = resolve; });
+        var localWriteTail = Promise.resolve(true);
+        var lastLocalWrite = Promise.resolve(true);
+        var flushWaiters = [];
+        var syncState = createSyncState();
+
+        function createSyncState() {
+            return {
+                version: 1,
+                localRevision: 0,
+                lastAckRevision: 0,
+                pendingServerSync: false,
+                localUpdatedAt: 0,
+            };
+        }
+
+        function cloneValue(value) {
+            if (value === undefined) return undefined;
+            try { return JSON.parse(JSON.stringify(value)); } catch (e) { return value; }
+        }
+
+        function normalizeSyncState(value) {
+            var state = value && typeof value === 'object' ? value : {};
+            var localRevision = Math.max(0, Math.floor(Number(state.localRevision) || 0));
+            var lastAckRevision = Math.max(0, Math.floor(Number(state.lastAckRevision) || 0));
+            return {
+                version: 1,
+                localRevision: Math.max(localRevision, lastAckRevision),
+                lastAckRevision: lastAckRevision,
+                pendingServerSync: state.pendingServerSync === true,
+                localUpdatedAt: Math.max(0, Number(state.localUpdatedAt) || 0),
+            };
+        }
 
         function openDB(cb) {
             if (dbInstance) { cb(dbInstance); return; }
@@ -36,53 +85,142 @@
             try { var r = localStorage.getItem(LS_KEY); return r ? JSON.parse(r) : null; } catch (e) { return null; }
         }
 
-        function loadFromDB(cb) {
-            if (dataCache) { cb(dataCache); return; }
-            openDB(function (db) {
-                if (!db) { dataCache = ensureDefaults(loadFromLS()); cb(dataCache); return; }
-                var tx = db.transaction(STORE_NAME, 'readonly');
-                var req = tx.objectStore(STORE_NAME).get(DATA_KEY);
-                req.onsuccess = function () { dataCache = ensureDefaults(req.result || loadFromLS()); cb(dataCache); };
-                req.onerror = function () { dataCache = ensureDefaults(loadFromLS()); cb(dataCache); };
+        function loadSyncFromLS() {
+            try { var r = localStorage.getItem(LS_SYNC_KEY); return r ? JSON.parse(r) : null; } catch (e) { return null; }
+        }
+
+        function readLocalState() {
+            if (localStore && typeof localStore.read === 'function') {
+                return Promise.resolve(localStore.read()).then(function (result) {
+                    result = result || {};
+                    var fallback = result.data || loadFromLS();
+                    return {
+                        data: fallback,
+                        sync: normalizeSyncState(result.sync || loadSyncFromLS()),
+                        hasData: result.hasData === true || !!fallback,
+                    };
+                });
+            }
+            return new Promise(function (resolve) {
+                openDB(function (db) {
+                    if (!db) {
+                        var fallback = loadFromLS();
+                        resolve({ data: fallback, sync: normalizeSyncState(loadSyncFromLS()), hasData: !!fallback });
+                        return;
+                    }
+                    var tx = db.transaction(STORE_NAME, 'readonly');
+                    var store = tx.objectStore(STORE_NAME);
+                    var dataReq = store.get(DATA_KEY);
+                    var syncReq = store.get(SYNC_KEY);
+                    var dataResult;
+                    var syncResult;
+                    dataReq.onsuccess = function () { dataResult = dataReq.result; };
+                    syncReq.onsuccess = function () { syncResult = syncReq.result; };
+                    tx.oncomplete = function () {
+                        var fallback = dataResult || loadFromLS();
+                        resolve({
+                            data: fallback,
+                            sync: normalizeSyncState(syncResult || loadSyncFromLS()),
+                            hasData: dataResult !== undefined && dataResult !== null || !!fallback,
+                        });
+                    };
+                    tx.onerror = function () {
+                        var fallback = loadFromLS();
+                        resolve({ data: fallback, sync: normalizeSyncState(loadSyncFromLS()), hasData: !!fallback });
+                    };
+                });
             });
         }
 
+        function persistLocalState(data, state) {
+            var dataSnapshot = cloneValue(data);
+            var syncSnapshot = cloneValue(normalizeSyncState(state));
+            if (localStore && typeof localStore.write === 'function') {
+                return Promise.resolve(localStore.write(dataSnapshot, syncSnapshot)).then(function () { return true; });
+            }
+            return new Promise(function (resolve, reject) {
+                openDB(function (db) {
+                    if (!db) {
+                        try {
+                            localStorage.setItem(LS_KEY, JSON.stringify(dataSnapshot));
+                            localStorage.setItem(LS_SYNC_KEY, JSON.stringify(syncSnapshot));
+                            resolve(true);
+                        } catch (err) { reject(err); }
+                        return;
+                    }
+                    var tx = db.transaction(STORE_NAME, 'readwrite');
+                    var store = tx.objectStore(STORE_NAME);
+                    store.put(dataSnapshot, DATA_KEY);
+                    store.put(syncSnapshot, SYNC_KEY);
+                    tx.oncomplete = function () { resolve(true); };
+                    tx.onerror = function () { reject(tx.error || new Error('IndexedDB write failed')); };
+                    tx.onabort = function () { reject(tx.error || new Error('IndexedDB write aborted')); };
+                });
+            });
+        }
+
+        function queueLocalPersist() {
+            var dataSnapshot = cloneValue(dataCache);
+            var syncSnapshot = cloneValue(syncState);
+            var write = localWriteTail.catch(function () { return false; }).then(function () {
+                return persistLocalState(dataSnapshot, syncSnapshot);
+            });
+            localWriteTail = write;
+            lastLocalWrite = write;
+            write.catch(function (err) {
+                console.warn('[美化管理] 本地设置保存失败:', err);
+            });
+            return write;
+        }
+
         function saveToDB(d, cb) {
-            dataCache = d;
-            openDB(function (db) {
-                if (!db) {
-                    try { localStorage.setItem(LS_KEY, JSON.stringify(d)); } catch (e) {}
-                    if (cb) cb();
-                    return;
-                }
-                var tx = db.transaction(STORE_NAME, 'readwrite');
-                tx.objectStore(STORE_NAME).put(d, DATA_KEY);
-                tx.oncomplete = function () { if (cb) cb(); };
-                tx.onerror = function () { if (cb) cb(); };
+            dataCache = ensureDefaults(d);
+            var write = queueLocalPersist();
+            if (cb) write.then(function () { cb(true); }, function () { cb(false); });
+            return write;
+        }
+
+        function loadFromDB(cb) {
+            if (storageReady && dataCache) { cb(dataCache); return; }
+            readLocalState().then(function (local) {
+                syncState = local.sync;
+                dataCache = ensureDefaults(local.data);
+                cb(dataCache);
             });
         }
 
         function load() {
-            if (dataCache) return dataCache;
-            dataCache = ensureDefaults(loadFromLS());
+            if (!storageReady || !dataCache) {
+                throw new Error('Theme Manager storage is not ready');
+            }
             return dataCache;
         }
 
         function save(d) {
             dataCache = ensureDefaults(d);
-            saveToDB(dataCache);
+            syncState.localRevision += 1;
+            syncState.localUpdatedAt = nowFn();
+            syncState.pendingServerSync = true;
+            serverDirty = true;
+            serverRetryAttempt = 0;
+            if (serverRetryTimer) {
+                clearTimeoutFn(serverRetryTimer);
+                serverRetryTimer = null;
+            }
+            var write = queueLocalPersist();
             scheduleServerPut();
+            return write;
         }
 
         function detectServer(cb) {
-            fetch(SERVER_BASE + '/status', { method: 'GET', credentials: 'same-origin' })
+            fetchFn(SERVER_BASE + '/status', { method: 'GET', credentials: 'same-origin' })
                 .then(function (r) { return r && r.ok ? r.json() : null; })
                 .then(function (j) { cb(!!(j && j.ok)); })
                 .catch(function () { cb(false); });
         }
 
         function serverGetData(cb) {
-            fetch(SERVER_BASE + '/data', { method: 'GET', credentials: 'same-origin' })
+            fetchFn(SERVER_BASE + '/data', { method: 'GET', credentials: 'same-origin' })
                 .then(function (r) { return r && r.ok ? r.json() : null; })
                 .then(function (j) { cb(j && j.ok ? (j.data || null) : null); })
                 .catch(function () { cb(null); });
@@ -91,45 +229,117 @@
         function scheduleServerPut() {
             if (!serverMode || !dataCache) return;
             serverDirty = true;
-            if (serverDebounceTimer) clearTimeout(serverDebounceTimer);
-            serverDebounceTimer = setTimeout(function () {
+            if (serverPutInFlight) return;
+            if (serverDebounceTimer) clearTimeoutFn(serverDebounceTimer);
+            serverDebounceTimer = setTimeoutFn(function () {
                 serverDebounceTimer = null;
                 if (!serverDirty) return;
-                serverDirty = false;
                 serverPutDataNow();
             }, SERVER_DEBOUNCE_MS);
+        }
+
+        function scheduleServerRetry() {
+            if (!serverMode || !syncState.pendingServerSync || serverRetryTimer || serverPutInFlight) return;
+            if (serverRetryAttempt >= SERVER_RETRY_DELAYS.length) {
+                flushWaiters.splice(0).forEach(function (waiter) { waiter.resolve(false); });
+                return;
+            }
+            var delay = Math.max(0, Number(SERVER_RETRY_DELAYS[serverRetryAttempt]) || 0);
+            serverRetryAttempt += 1;
+            serverRetryTimer = setTimeoutFn(function () {
+                serverRetryTimer = null;
+                if (!serverDirty || !syncState.pendingServerSync) return;
+                serverPutDataNow();
+            }, delay);
+        }
+
+        function resolveFlushWaiters() {
+            var pending = [];
+            flushWaiters.forEach(function (waiter) {
+                if (syncState.lastAckRevision >= waiter.revision) waiter.resolve(true);
+                else pending.push(waiter);
+            });
+            flushWaiters = pending;
         }
 
         function serverPutDataNow(cb) {
             if (!serverMode || !dataCache) { if (cb) cb(false); return; }
             if (serverPutInFlight) { serverDirty = true; if (cb) cb(false); return; }
+            if (serverDebounceTimer) { clearTimeoutFn(serverDebounceTimer); serverDebounceTimer = null; }
+            if (serverRetryTimer) { clearTimeoutFn(serverRetryTimer); serverRetryTimer = null; }
             serverPutInFlight = true;
+            serverDirty = false;
+            var sentRevision = syncState.localRevision;
+            var payloadSnapshot = cloneValue(dataCache);
+            var succeeded = false;
             getPostHeaders()
                 .then(function (headers) {
-                    return fetch(SERVER_BASE + '/data', {
+                    return fetchFn(SERVER_BASE + '/data', {
                         method: 'PUT',
                         credentials: 'same-origin',
                         headers: headers,
-                        body: JSON.stringify(dataCache),
+                        body: JSON.stringify(payloadSnapshot),
                     });
                 })
                 .then(function (r) { return r && r.ok ? r.json() : null; })
                 .then(function (j) {
-                    if (j && j.ok && j.data) {
-                        dataCache = ensureDefaults(j.data);
-                        saveToDB(dataCache);
+                    succeeded = !!(j && j.ok);
+                    if (!succeeded) throw new Error('server settings PUT rejected');
+                    syncState.lastAckRevision = Math.max(syncState.lastAckRevision, sentRevision);
+                    if (syncState.localRevision === sentRevision) {
+                        syncState.pendingServerSync = false;
+                    } else {
+                        serverDirty = true;
                     }
-                    if (cb) cb(!!(j && j.ok));
+                    queueLocalPersist();
+                    resolveFlushWaiters();
                 })
-                .catch(function () { if (cb) cb(false); })
+                .catch(function (err) {
+                    serverDirty = true;
+                    syncState.pendingServerSync = true;
+                    queueLocalPersist();
+                    console.warn('[美化管理] 后端设置同步失败，将保留本地数据并重试:', err);
+                })
                 .then(function () {
                     serverPutInFlight = false;
-                    if (serverDirty) {
-                        serverDirty = false;
-                        serverPutDataNow();
+                    if (cb) cb(succeeded);
+                    if (succeeded) serverRetryAttempt = 0;
+                    if (serverDirty && syncState.pendingServerSync) {
+                        if (succeeded) {
+                            // A newer local revision arrived while this request was in flight.
+                            // Send only the newest snapshot next; never replay intermediate states.
+                            serverPutDataNow();
+                        } else {
+                            scheduleServerRetry();
+                        }
                     }
                 });
         }
+
+        function flush() {
+            return whenReady().then(function () {
+                return lastLocalWrite.catch(function () { return false; });
+            }).then(function (localOk) {
+                if (!localOk) return false;
+                if (!serverMode || !syncState.pendingServerSync) return true;
+                var targetRevision = syncState.localRevision;
+                return new Promise(function (resolve) {
+                    flushWaiters.push({ revision: targetRevision, resolve: resolve });
+                    serverDirty = true;
+                    serverRetryAttempt = 0;
+                    if (serverDebounceTimer) { clearTimeoutFn(serverDebounceTimer); serverDebounceTimer = null; }
+                    if (serverRetryTimer) { clearTimeoutFn(serverRetryTimer); serverRetryTimer = null; }
+                    if (!serverPutInFlight) serverPutDataNow();
+                });
+            });
+        }
+
+        function cancelPendingSync() {
+            if (serverDebounceTimer) { clearTimeoutFn(serverDebounceTimer); serverDebounceTimer = null; }
+            if (serverRetryTimer) { clearTimeoutFn(serverRetryTimer); serverRetryTimer = null; }
+        }
+
+        function whenReady() { return readyPromise; }
 
         function isDataImage(value) {
             return typeof value === 'string' && value.indexOf('data:image/') === 0;
@@ -143,7 +353,7 @@
             if (!serverMode || !isDataImage(dataUrl)) { cb(null, dataUrl); return; }
             getPostHeaders()
                 .then(function (headers) {
-                    return fetch(SERVER_BASE + '/images', {
+                    return fetchFn(SERVER_BASE + '/images', {
                         method: 'POST',
                         credentials: 'same-origin',
                         headers: headers,
@@ -170,7 +380,7 @@
             if (serverUrls.length === 0) { cb(result); return; }
             getPostHeaders()
                 .then(function (headers) {
-                    return fetch(SERVER_BASE + '/images/batch-fetch', {
+                    return fetchFn(SERVER_BASE + '/images/batch-fetch', {
                         method: 'POST',
                         credentials: 'same-origin',
                         headers: headers,
@@ -214,10 +424,8 @@
             var idx = 0;
             function next() {
                 if (idx >= refs.length) {
-                    dataCache = ensureDefaults(d);
-                    saveToDB(dataCache);
-                    serverPutDataNow(function () { if (cb) cb(true); });
                     try { console.log('[美化管理] 已迁移图片到后端:', refs.length); } catch (e) {}
+                    if (cb) cb(true);
                     return;
                 }
                 var ref = refs[idx++];
@@ -229,26 +437,88 @@
             next();
         }
 
+        function markPendingMutation() {
+            syncState.localRevision += 1;
+            syncState.localUpdatedAt = nowFn();
+            syncState.pendingServerSync = true;
+            serverDirty = true;
+        }
+
+        function drainInitCallbacks() {
+            var callbacks = initCallbacks.splice(0);
+            callbacks.forEach(function (callback) {
+                try { callback(dataCache); } catch (err) { setTimeoutFn(function () { throw err; }, 0); }
+            });
+        }
+
+        function finishStorageInit() {
+            if (storageReady) return;
+            storageReady = true;
+            readyResolve(dataCache);
+            drainInitCallbacks();
+            if (serverMode && syncState.pendingServerSync) {
+                serverDirty = true;
+                serverPutDataNow();
+            }
+        }
+
+        function persistThenFinish() {
+            queueLocalPersist().catch(function () { return false; }).then(finishStorageInit);
+        }
+
+        function finishWithImageMigration() {
+            migrateImagesToServer(dataCache, function (changed) {
+                if (changed) markPendingMutation();
+                persistThenFinish();
+            });
+        }
+
         function initStorage(cb) {
-            detectServer(function (ok) {
-                serverMode = !!ok;
-                if (!serverMode) { loadFromDB(cb); return; }
-                serverGetData(function (serverData) {
-                    if (serverData && typeof serverData === 'object') {
-                        dataCache = ensureDefaults(serverData);
-                        saveToDB(dataCache, function () {
-                            migrateImagesToServer(dataCache, function () { cb(dataCache); });
-                        });
+            if (typeof cb === 'function') initCallbacks.push(cb);
+            if (storageReady) { drainInitCallbacks(); return readyPromise; }
+            if (storageInitStarted) return readyPromise;
+            storageInitStarted = true;
+
+            readLocalState().then(function (local) {
+                syncState = normalizeSyncState(local.sync);
+                dataCache = ensureDefaults(local.data);
+                detectServer(function (ok) {
+                    serverMode = !!ok;
+                    if (!serverMode) {
+                        persistThenFinish();
                         return;
                     }
-                    loadFromDB(function (localData) {
-                        dataCache = ensureDefaults(localData);
-                        migrateImagesToServer(dataCache, function () {
-                            serverPutDataNow(function () { cb(dataCache); });
-                        });
+
+                    // An unacknowledged local revision is the newest durable truth.
+                    // Never replace it with an older GET response after restart.
+                    if (local.hasData && syncState.pendingServerSync) {
+                        serverDirty = true;
+                        finishWithImageMigration();
+                        return;
+                    }
+
+                    serverGetData(function (serverData) {
+                        if (serverData && typeof serverData === 'object') {
+                            dataCache = ensureDefaults(serverData);
+                            syncState.pendingServerSync = false;
+                            syncState.lastAckRevision = syncState.localRevision;
+                            finishWithImageMigration();
+                            return;
+                        }
+
+                        // The server has no settings yet. Seed it from the local
+                        // snapshot (or defaults) and persist the pending marker first.
+                        markPendingMutation();
+                        finishWithImageMigration();
                     });
                 });
+            }).catch(function (err) {
+                console.warn('[美化管理] 存储初始化失败，使用安全默认设置:', err);
+                dataCache = ensureDefaults(null);
+                syncState = createSyncState();
+                persistThenFinish();
             });
+            return readyPromise;
         }
 
         return {
@@ -257,12 +527,16 @@
             saveToDB: saveToDB,
             loadFromLS: loadFromLS,
             initStorage: initStorage,
+            whenReady: whenReady,
+            isReady: function () { return storageReady; },
+            flush: flush,
             uploadImage: uploadImage,
             batchResolveImages: batchResolveImages,
             collectImageFields: collectImageFields,
             isDataImage: isDataImage,
             isServerImage: isServerImage,
             getServerMode: function () { return serverMode; },
+            getSyncState: function () { return cloneValue(syncState); },
         };
     };
 })(window);
