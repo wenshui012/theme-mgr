@@ -6044,6 +6044,9 @@
     function startThemeManager() {
         injectStyles();
         bindVerifiedThemeSelectSync();
+        if (themeRuntime && typeof themeRuntime.bindNativeEditTracking === 'function') {
+            themeRuntime.bindNativeEditTracking();
+        }
         startLauncherInjection();
         var eventsApi = initUiEvents();
         if (eventsApi) eventsApi.startFabInjection();

@@ -6,7 +6,10 @@
         var schema = opts.schema || ns.themeSchema;
         var api = opts.api;
         var fullThemeCache = {};
+        var staleThemeCache = {};
         var applyRequestId = 0;
+        var activeApplyCount = 0;
+        var nativeEditTrackingBound = false;
         var nativeEvictionSequence = 0;
         var loadPowerUserModule = typeof opts.loadPowerUserModule === 'function'
             ? opts.loadPowerUserModule
@@ -35,8 +38,11 @@
             Object.keys(fullThemeCache).forEach(function (name) { delete fullThemeCache[name]; });
         }
 
-        function invalidate(reason) {
-            clearFullCache();
+        function clearStaleCache() {
+            Object.keys(staleThemeCache).forEach(function (name) { delete staleThemeCache[name]; });
+        }
+
+        function clearBridgeSettingsCache(reason) {
             try {
                 var bridge = getBridge();
                 if (bridge && typeof bridge.clearSettingsGetCache === 'function') {
@@ -45,6 +51,25 @@
             } catch (err) {
                 console.warn('[美化管理] 清理柏宝库主题缓存失败:', err);
             }
+        }
+
+        function invalidate(reason) {
+            clearFullCache();
+            clearStaleCache();
+            clearBridgeSettingsCache(reason);
+        }
+
+        function invalidateTheme(themeName, reason) {
+            themeName = String(themeName || '').trim();
+            if (!themeName) return false;
+            delete fullThemeCache[themeName];
+            if (staleThemeCache[themeName]) return true;
+            staleThemeCache[themeName] = {
+                reason: reason || 'theme-manager-native-edit',
+                invalidatedAt: Date.now(),
+            };
+            clearBridgeSettingsCache(reason || 'theme-manager-native-edit');
+            return true;
         }
 
         function hydrate(theme) {
@@ -93,11 +118,13 @@
         function remember(theme) {
             if (!schema.isUsableTheme(theme, theme && theme.name)) return false;
             fullThemeCache[theme.name] = schema.cloneValue(theme);
+            delete staleThemeCache[theme.name];
             return true;
         }
 
         function forget(themeName) {
             delete fullThemeCache[themeName];
+            delete staleThemeCache[themeName];
         }
 
         function getCached(themeName) {
@@ -107,6 +134,7 @@
         function captureInventory(themes) {
             (themes || []).forEach(function (theme) {
                 if (!theme || !theme.name) return;
+                if (staleThemeCache[theme.name]) return;
                 if (!remember(theme)) forget(theme.name);
             });
             return themes || [];
@@ -114,6 +142,7 @@
 
         function replaceInventory(themes) {
             clearFullCache();
+            clearStaleCache();
             return captureInventory(themes || []);
         }
 
@@ -167,10 +196,63 @@
                 });
         }
 
+        function normalizeCss(value) {
+            return String(value == null ? '' : value).replace(/\r\n?/g, '\n');
+        }
+
+        function readLiveCustomCss() {
+            var documentRef = global.document;
+            if (!documentRef || typeof documentRef.getElementById !== 'function') return { available: false, values: [] };
+            var input = documentRef.getElementById('customCSS');
+            var style = documentRef.getElementById('custom-style');
+            var values = [];
+            if (input && 'value' in input) values.push(normalizeCss(input.value));
+            if (style && 'textContent' in style) values.push(normalizeCss(style.textContent));
+            return {
+                available: values.length > 0,
+                value: input && 'value' in input ? normalizeCss(input.value) : values[0],
+                values: values,
+            };
+        }
+
+        function cachedCssDiffersFromLive(themeName, cached) {
+            if (!cached || !Object.prototype.hasOwnProperty.call(cached, 'custom_css')) return false;
+            if (getThemeControlName() !== themeName) return false;
+            var live = readLiveCustomCss();
+            if (!live.available) return false;
+            var cachedCss = normalizeCss(cached.custom_css);
+            return live.values.some(function (value) { return value !== cachedCss; });
+        }
+
+        function preserveNewerLiveCustomCss(themeName, theme) {
+            if (!theme || getThemeControlName() !== themeName) return theme;
+            var live = readLiveCustomCss();
+            if (!live.available || !Object.prototype.hasOwnProperty.call(theme, 'custom_css') ||
+                normalizeCss(theme.custom_css) === live.value) return theme;
+            var protectedTheme = schema.cloneValue(theme);
+            protectedTheme.custom_css = live.value;
+            return protectedTheme;
+        }
+
+        function refreshStaleTheme(themeName) {
+            return getInventory({ bypassBaibaokuCache: true, capture: false }).then(function (themes) {
+                return resolveCandidate(themeName, findTheme(themes, themeName));
+            }).then(function (theme) {
+                var protectedTheme = preserveNewerLiveCustomCss(themeName, theme);
+                if (protectedTheme !== theme) remember(protectedTheme);
+                return protectedTheme;
+            });
+        }
+
         function resolveUsableTheme(themeName, candidate) {
             if (arguments.length > 1) return resolveCandidate(themeName, candidate);
             var cached = getCached(themeName);
+            if (cached && cachedCssDiffersFromLive(themeName, cached)) {
+                invalidateTheme(themeName, 'theme-manager-live-custom-css-mismatch');
+                cached = null;
+            }
             if (cached) return Promise.resolve(cached);
+            if (staleThemeCache[themeName]) return refreshStaleTheme(themeName);
             return getInventory().then(function (themes) {
                 return resolveCandidate(themeName, findTheme(themes, themeName));
             });
@@ -209,6 +291,27 @@
 
         function isApplyCurrent(requestId) {
             return !requestId || requestId === applyRequestId;
+        }
+
+        function isApplyInProgress() {
+            return activeApplyCount > 0;
+        }
+
+        function bindNativeEditTracking() {
+            if (nativeEditTrackingBound) return true;
+            var documentRef = global.document;
+            if (!documentRef || typeof documentRef.addEventListener !== 'function') return false;
+            nativeEditTrackingBound = true;
+            function handleCustomCssEdit(event) {
+                var target = event && event.target;
+                if (!target || target.id !== 'customCSS') return;
+                if (event.__themeManagerApply === true || isApplyInProgress()) return;
+                var themeName = getThemeControlName();
+                if (themeName) invalidateTheme(themeName, 'theme-manager-native-custom-css-edit');
+            }
+            documentRef.addEventListener('input', handleCustomCssEdit, true);
+            documentRef.addEventListener('change', handleCustomCssEdit, true);
+            return true;
         }
 
         function getThemeControlName() {
@@ -437,6 +540,7 @@
         function applyThemeAndWait(themeName, applyFn, fallbackFn, rollbackFn) {
             var requestId = beginApply();
             var previousTheme = null;
+            activeApplyCount += 1;
             console.info('[ThemeManager] apply requested', {
                 requestedTheme: themeName,
                 requestId: requestId,
@@ -495,7 +599,7 @@
                     });
                 });
             });
-            return workflow.catch(function (originalError) {
+            var completedWorkflow = workflow.catch(function (originalError) {
                 if (!isApplyCurrent(requestId) || originalError.code === 'superseded' ||
                     typeof rollbackFn !== 'function' || !previousTheme || previousTheme.name === themeName) {
                     throw originalError;
@@ -513,11 +617,19 @@
                     throw originalError;
                 });
             });
+            return completedWorkflow.then(function (result) {
+                activeApplyCount = Math.max(0, activeApplyCount - 1);
+                return result;
+            }, function (err) {
+                activeApplyCount = Math.max(0, activeApplyCount - 1);
+                throw err;
+            });
         }
 
         return {
             getBridge: getBridge,
             invalidate: invalidate,
+            invalidateTheme: invalidateTheme,
             hydrate: hydrate,
             replaceNativeTheme: replaceNativeTheme,
             evictNativeTheme: evictNativeTheme,
@@ -533,6 +645,8 @@
             prepareUsableThemeForApply: prepareUsableThemeForApply,
             beginApply: beginApply,
             isApplyCurrent: isApplyCurrent,
+            isApplyInProgress: isApplyInProgress,
+            bindNativeEditTracking: bindNativeEditTracking,
             verifyThemeState: verifyThemeState,
             verifyThemeVisuals: verifyThemeVisuals,
             verifyAppliedTheme: verifyAppliedTheme,

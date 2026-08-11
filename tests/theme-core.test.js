@@ -701,6 +701,105 @@ test('runtime replaces stale cached themes with the authoritative post-import in
     assert.deepEqual(runtime.getCached('Existing'), inventory[1]);
 });
 
+test('native custom CSS edits invalidate only that theme and reload its newest saved definition', async (t) => {
+    const previousDocument = global.document;
+    const previousHydrate = global.baibaokuHydrateTheme;
+    const previousBridge = global.__baibaokuEarlyBridge;
+    t.after(() => {
+        global.document = previousDocument;
+        global.baibaokuHydrateTheme = previousHydrate;
+        global.__baibaokuEarlyBridge = previousBridge;
+    });
+
+    const handlers = {};
+    const themeControl = { tagName: 'SELECT', selectedIndex: 0, options: [{ value: 'A' }] };
+    const customCss = { id: 'customCSS', value: 'new css 1' };
+    const customStyle = { textContent: 'new css 1' };
+    global.document = {
+        addEventListener(type, handler) { handlers[type] = handler; },
+        getElementById(id) {
+            if (id === 'themes') return themeControl;
+            if (id === 'customCSS') return customCss;
+            if (id === 'custom-style') return customStyle;
+            return null;
+        },
+    };
+    let serverTheme = completeTheme('A', { custom_css: 'new css 1' });
+    let inventoryReads = 0;
+    let bridgeClearCount = 0;
+    let hydratedTheme = null;
+    global.__baibaokuEarlyBridge = {
+        clearSettingsGetCache() { bridgeClearCount += 1; },
+    };
+    global.baibaokuHydrateTheme = (theme) => { hydratedTheme = clone(theme); };
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: {
+            getSettingsInventory() { inventoryReads += 1; return Promise.resolve([clone(serverTheme)]); },
+            getRawSettingsInventory() { throw new Error('raw fetch is not available'); },
+        },
+    });
+    runtime.remember(completeTheme('A', { custom_css: 'old css' }));
+    runtime.remember(completeTheme('B', { custom_css: 'B css' }));
+    assert.equal(runtime.bindNativeEditTracking(), true);
+
+    handlers.input({ target: customCss });
+    assert.equal(runtime.getCached('A'), null);
+    assert.equal(runtime.getCached('B').custom_css, 'B css');
+    const first = await runtime.prepareUsableThemeForApply('A');
+    assert.equal(first.theme.custom_css, 'new css 1');
+    assert.equal(hydratedTheme.custom_css, 'new css 1');
+    assert.equal(inventoryReads, 1);
+    assert.equal(bridgeClearCount, 1);
+
+    customCss.value = 'new css 2';
+    customStyle.textContent = 'new css 2';
+    serverTheme = completeTheme('A', { custom_css: 'new css 2' });
+    handlers.change({ target: customCss });
+    const second = await runtime.prepareUsableThemeForApply('A');
+    assert.equal(second.theme.custom_css, 'new css 2');
+    assert.equal(hydratedTheme.custom_css, 'new css 2');
+    assert.equal(inventoryReads, 2);
+    assert.equal(bridgeClearCount, 2);
+    assert.equal(runtime.getCached('B').custom_css, 'B css');
+});
+
+test('live CSS mismatch cannot be overwritten even when the native edit event was missed and refresh is stale', async (t) => {
+    const previousDocument = global.document;
+    const previousHydrate = global.baibaokuHydrateTheme;
+    t.after(() => {
+        global.document = previousDocument;
+        global.baibaokuHydrateTheme = previousHydrate;
+    });
+    const staleServerTheme = completeTheme('A', { custom_css: 'server still old css' });
+    const themeControl = { tagName: 'SELECT', selectedIndex: 0, options: [{ value: 'A' }] };
+    global.document = {
+        getElementById(id) {
+            if (id === 'themes') return themeControl;
+            if (id === 'customCSS') return { value: 'saved new css' };
+            if (id === 'custom-style') return { textContent: 'saved new css' };
+            return null;
+        },
+    };
+    let inventoryReads = 0;
+    let hydrated = null;
+    global.baibaokuHydrateTheme = (theme) => { hydrated = clone(theme); };
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: {
+            getSettingsInventory() { inventoryReads += 1; return Promise.resolve([staleServerTheme]); },
+            getRawSettingsInventory() { return Promise.resolve([staleServerTheme]); },
+        },
+    });
+    runtime.remember(completeTheme('A', { custom_css: 'cached old css' }));
+
+    const prepared = await runtime.prepareUsableThemeForApply('A');
+
+    assert.equal(prepared.theme.custom_css, 'saved new css');
+    assert.equal(hydrated.custom_css, 'saved new css');
+    assert.equal(inventoryReads, 1);
+});
+
 test('newly imported theme falls back from stale native state and keeps the applied theme when only visual verification fails', async (t) => {
     const previousDocument = global.document;
     const previousToolkit = global.__baiBaiToolkitExtensionInstalled;
