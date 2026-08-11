@@ -15,6 +15,13 @@
         var toast = opts.toast;
         var getSupportState = opts.getSupportState;
         var requestOpenAfterReady = opts.requestOpenAfterReady;
+        var whenStorageReady = typeof opts.whenStorageReady === 'function'
+            ? opts.whenStorageReady
+            : function () { return Promise.resolve(); };
+        var isStorageReady = typeof opts.isStorageReady === 'function'
+            ? opts.isStorageReady
+            : function () { return true; };
+        var setIntervalFn = typeof opts.setInterval === 'function' ? opts.setInterval : setInterval;
 
         var fabResizeHandler = null;
         var fabOpen = false;
@@ -31,6 +38,7 @@
         }
 
         function injectFab() {
+            if (!isStorageReady()) return false;
             if (document.getElementById(FAB_ID)) return;
             var d = load(); if (d.showBall === false) return;
             var container = document.createElement('div'); container.id = FAB_ID;
@@ -145,13 +153,29 @@
             if (fabResizeHandler) window.removeEventListener('resize', fabResizeHandler);
             fabResizeHandler = posFab; window.addEventListener('resize', fabResizeHandler);
             document.body.appendChild(container);
+            return true;
+        }
+
+        function syncFabVisibility(data) {
+            if (!isStorageReady()) return false;
+            var d = data || load();
+            if (d.showBall === false) {
+                removeFab();
+                return false;
+            }
+            return injectFab();
         }
 
         function startFabInjection() {
             if (fabInjectStarted) return;
             fabInjectStarted = true;
-            setTimeout(injectFab, 1500);
-            setInterval(function () { if (!document.getElementById(FAB_ID)) injectFab(); }, 3000);
+            Promise.resolve().then(whenStorageReady).then(function () {
+                if (!isStorageReady()) return;
+                syncFabVisibility();
+                setIntervalFn(function () { syncFabVisibility(); }, 3000);
+            }).catch(function (err) {
+                try { console.warn('[美化管理] 悬浮球等待存储初始化失败:', err); } catch (e) {}
+            });
         }
 
         function closeFab() { fabOpen = false; }
@@ -231,6 +255,7 @@
         return {
             removeFab: removeFab,
             injectFab: injectFab,
+            syncFabVisibility: syncFabVisibility,
             startFabInjection: startFabInjection,
             closeFab: closeFab,
             updateBtn: updateBtn,

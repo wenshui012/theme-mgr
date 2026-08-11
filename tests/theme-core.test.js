@@ -14,6 +14,7 @@ require('../src/theme-series.js');
 require('../src/theme-bindings.js');
 require('../src/theme-appearance.js');
 require('../src/storage.js');
+require('../src/ui-events.js');
 
 const modules = global.ThemeMgrModules;
 const schema = modules.themeSchema;
@@ -228,6 +229,55 @@ test('pending local snapshot survives recreation and takes precedence over stale
     assert.equal(second.puts[0].body.value, 'local-new');
     secondRequests[0].resolve({ ok: true, json: async () => ({ ok: true }) });
     assert.equal(await second.storage.flush(), true);
+});
+
+test('FAB stays absent while storage readiness is delayed beyond the former 1.5 second injection', async () => {
+    const originalDocument = global.document;
+    const ready = deferred();
+    let storageReady = false;
+    let loadCount = 0;
+    let createdCount = 0;
+    let intervalCount = 0;
+    global.document = {
+        getElementById() { return null; },
+        createElement() { createdCount += 1; return {}; },
+        body: { appendChild() { createdCount += 1; } },
+    };
+
+    try {
+        const events = modules.createUiEvents({
+            fabId: 'test-fab',
+            buttonId: 'test-button',
+            launcherName: 'test',
+            version: 'test',
+            load() { loadCount += 1; return { showBall: false }; },
+            save() {},
+            esc(value) { return value; },
+            getCurrentThemeName() { return ''; },
+            openPopup() {},
+            toast() {},
+            getSupportState() { return { ready: true, failed: false }; },
+            requestOpenAfterReady() {},
+            whenStorageReady() { return ready.promise; },
+            isStorageReady() { return storageReady; },
+            setInterval() { intervalCount += 1; return 1; },
+        });
+
+        events.startFabInjection();
+        await new Promise((resolve) => setTimeout(resolve, 1550));
+        assert.equal(loadCount, 0);
+        assert.equal(createdCount, 0);
+        assert.equal(intervalCount, 0);
+
+        storageReady = true;
+        ready.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        assert.equal(loadCount, 1);
+        assert.equal(createdCount, 0);
+        assert.equal(intervalCount, 1);
+    } finally {
+        global.document = originalDocument;
+    }
 });
 
 test('preview view normalization clamps v2 focus values and supplies safe defaults', () => {

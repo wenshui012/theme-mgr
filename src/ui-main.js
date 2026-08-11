@@ -80,6 +80,8 @@
                 return { ready: supportReady, failed: supportFailed, errorText: supportErrorText };
             },
             requestOpenAfterReady: function () { pendingOpenAfterReady = true; },
+            whenStorageReady: whenStorageReady,
+            isStorageReady: isStorageReady,
         });
         return uiEventsApi;
     }
@@ -171,7 +173,6 @@
                 },
                 onError: handleBindingApplyError,
             });
-            bindColorSchemeListener();
             appearanceApi = modules.themeAppearance;
             uiSheetsApi = modules.createUiSheets({
                 getPopupLayer: getPopupLayer,
@@ -234,6 +235,14 @@
     function saveToDB(d, cb) { storageApi.saveToDB(d, cb); }
     function loadFromLS() { return storageApi.loadFromLS(); }
     function initStorage(cb) { storageApi.initStorage(cb); }
+    function whenStorageReady() {
+        return storageApi && typeof storageApi.whenReady === 'function'
+            ? storageApi.whenReady()
+            : Promise.reject(new Error('Theme Manager storage is unavailable'));
+    }
+    function isStorageReady() {
+        return !!(storageApi && typeof storageApi.isReady === 'function' && storageApi.isReady());
+    }
     function uploadImage(dataUrl, cb) { storageApi.uploadImage(dataUrl, cb); }
     function batchResolveImages(urls, cb) { storageApi.batchResolveImages(urls, cb); }
     function collectImageFields(root, refs) { return storageApi.collectImageFields(root, refs); }
@@ -3216,7 +3225,20 @@
     }
 
     // ── 打开全屏主界面 ────────────────────────────────────────
+    var popupWaitingForStorage = false;
     function openPopup() {
+        if (!isStorageReady()) {
+            if (!storageApi || popupWaitingForStorage) return;
+            popupWaitingForStorage = true;
+            whenStorageReady().then(function () {
+                popupWaitingForStorage = false;
+                openPopup();
+            }).catch(function (err) {
+                popupWaitingForStorage = false;
+                console.warn('[美化管理] 打开管理器前等待存储失败:', err);
+            });
+            return;
+        }
         if (document.querySelector('.tm-overlay')) return;
         var schemeChanged = colorSchemeWatcher ? colorSchemeWatcher.check('manager-open') : false;
         clearTemporaryPairOverride();
@@ -6033,6 +6055,8 @@
                 save(migratedData);
                 saveToDB(migratedData, function () { try { localStorage.removeItem('theme_mgr_v2'); } catch (e) {} });
             }
+            if (eventsApi && typeof eventsApi.syncFabVisibility === 'function') eventsApi.syncFabVisibility(d);
+            bindColorSchemeListener();
             if (bindingController) bindingController.start();
             updateBtn();
         });
