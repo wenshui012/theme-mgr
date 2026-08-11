@@ -417,6 +417,12 @@
         var pendingThemes = {};
         var listeners = [];
         var characterSnapshots = {};
+        var manualRuntimeInitialized = false;
+        var manualIntentTarget = null;
+        var verifiedManualTarget = null;
+        var manualIntentSequence = 0;
+        var pendingManualIntent = null;
+        var manualIntentUnverified = false;
 
         function contextSafe() {
             try { return typeof getContext === 'function' ? (getContext() || {}) : {}; }
@@ -455,6 +461,39 @@
             return normalizeTarget(target) || makeThemeTarget(themeName);
         }
 
+        function ensureManualRuntime(data) {
+            var state = ensureState(data);
+            if (!manualRuntimeInitialized) {
+                verifiedManualTarget = normalizeTarget(state.manualTarget);
+                manualIntentTarget = normalizeTarget(state.manualTarget);
+                manualRuntimeInitialized = true;
+            } else if (!pendingManualIntent && !manualIntentUnverified &&
+                !targetsEqual(verifiedManualTarget, state.manualTarget)) {
+                verifiedManualTarget = normalizeTarget(state.manualTarget);
+                manualIntentTarget = normalizeTarget(state.manualTarget);
+            }
+            return state;
+        }
+
+        function writeManualTarget(state, target) {
+            target = normalizeTarget(target);
+            var changed = !targetsEqual(state.manualTarget, target);
+            state.manualTarget = target;
+            state.manualTheme = target && target.kind === 'theme' ? target.themeName : '';
+            return changed;
+        }
+
+        function commitManualTarget(data, target) {
+            var state = ensureManualRuntime(data);
+            target = normalizeTarget(target);
+            var changed = writeManualTarget(state, target);
+            verifiedManualTarget = normalizeTarget(target);
+            manualIntentTarget = normalizeTarget(target);
+            manualIntentUnverified = false;
+            if (changed) save(data);
+            return changed;
+        }
+
         function themeForResolution(data, resolution) {
             var themeName = '';
             try {
@@ -466,22 +505,77 @@
         }
 
         function resolveCurrent(data, context) {
+            ensureManualRuntime(data);
             var resolution = resolve(data, context);
+            if (!resolution.scope) {
+                resolution.target = normalizeTarget(manualIntentTarget);
+                resolution.record = null;
+            }
             resolution.themeName = themeForResolution(data, resolution);
             return resolution;
+        }
+
+        function beginManualIntent(themeName) {
+            themeName = String(themeName || '').trim();
+            if (!themeName) return null;
+            var data = load();
+            ensureManualRuntime(data);
+            var target = targetForTheme(themeName);
+            if (!target) return null;
+            manualIntentSequence += 1;
+            sequence += 1;
+            manualIntentTarget = normalizeTarget(target);
+            manualIntentUnverified = true;
+            pendingManualIntent = {
+                id: manualIntentSequence,
+                target: normalizeTarget(target),
+                themeName: themeName,
+            };
+            return {
+                id: pendingManualIntent.id,
+                target: normalizeTarget(pendingManualIntent.target),
+                themeName: pendingManualIntent.themeName,
+            };
+        }
+
+        function finishManualIntent(token, ok, reason) {
+            if (!token || !pendingManualIntent || token.id !== manualIntentSequence ||
+                token.id !== pendingManualIntent.id) return false;
+            var completedTarget = normalizeTarget(pendingManualIntent.target);
+            pendingManualIntent = null;
+            if (ok) {
+                commitManualTarget(load(), completedTarget);
+                return true;
+            }
+            if (reason === 'superseded') {
+                // A binding or a newer runtime apply may temporarily win, but the
+                // user's latest manual choice remains the fallback intent.
+                manualIntentUnverified = true;
+                return false;
+            }
+            manualIntentTarget = normalizeTarget(verifiedManualTarget);
+            manualIntentUnverified = false;
+            return false;
         }
 
         function recordManualTheme(themeName) {
             themeName = String(themeName || '').trim();
             if (!themeName || isAutomatedThemeChange(themeName)) return false;
             var data = load();
-            var state = ensureState(data);
+            var state = ensureManualRuntime(data);
             var target = targetForTheme(themeName);
-            if (targetsEqual(state.manualTarget, target)) return false;
-            state.manualTarget = target;
-            state.manualTheme = target && target.kind === 'theme' ? target.themeName : '';
-            save(data);
-            return true;
+            var runtimeChanged = !!pendingManualIntent || !targetsEqual(manualIntentTarget, target);
+            var persistedChanged = !targetsEqual(state.manualTarget, target);
+            if (!runtimeChanged && !persistedChanged) return false;
+            manualIntentSequence += 1;
+            sequence += 1;
+            pendingManualIntent = null;
+            manualIntentTarget = normalizeTarget(target);
+            verifiedManualTarget = normalizeTarget(target);
+            manualIntentUnverified = false;
+            persistedChanged = writeManualTarget(state, target);
+            if (persistedChanged) save(data);
+            return runtimeChanged || persistedChanged;
         }
 
         function cancelPendingIfIdleTarget(targetTheme) {
@@ -498,6 +592,18 @@
             var resolution = resolveCurrent(data, context);
             var targetTheme = resolution.themeName;
             var currentTheme = currentThemeSafe();
+
+            if (!resolution.scope && pendingManualIntent &&
+                targetsEqual(resolution.target, pendingManualIntent.target) &&
+                targetTheme === pendingManualIntent.themeName) {
+                if (callback) callback(true, {
+                    changed: false,
+                    pendingIntent: true,
+                    resolution: resolution,
+                    themeName: targetTheme,
+                });
+                return;
+            }
 
             if (!targetTheme || targetTheme === currentTheme) {
                 cancelPendingIfIdleTarget(targetTheme);
@@ -522,6 +628,10 @@
                     return;
                 }
                 if (ok) {
+                    if (!resolution.scope && manualIntentUnverified &&
+                        targetsEqual(resolution.target, manualIntentTarget)) {
+                        commitManualTarget(data, manualIntentTarget);
+                    }
                     if (typeof onApplied === 'function') onApplied(resolution);
                     if (callback) callback(true, {
                         changed: true,
@@ -579,16 +689,25 @@
 
         function getCurrentState() {
             var data = load();
-            var state = ensureState(data);
+            var state = ensureManualRuntime(data);
             var context = contextSafe();
             var info = getContextInfo(context);
+            var currentManualTarget = normalizeTarget(manualIntentTarget);
             return {
                 context: info,
                 character: !info.isGroup && info.characterKey ? (state.characters[info.characterKey] || null) : null,
                 chat: info.chatKey ? (state.chats[info.chatKey] || null) : null,
                 resolution: resolveCurrent(data, context),
-                manualTheme: state.manualTheme,
-                manualTarget: state.manualTarget,
+                manualTheme: currentManualTarget && currentManualTarget.kind === 'theme'
+                    ? currentManualTarget.themeName
+                    : '',
+                manualTarget: currentManualTarget,
+                verifiedManualTarget: normalizeTarget(verifiedManualTarget),
+                pendingManualIntent: pendingManualIntent ? {
+                    id: pendingManualIntent.id,
+                    themeName: pendingManualIntent.themeName,
+                    target: normalizeTarget(pendingManualIntent.target),
+                } : null,
             };
         }
 
@@ -727,6 +846,7 @@
             refreshCurrentBindingLabels(context);
 
             var data = load();
+            ensureManualRuntime(data);
             var initial = resolveCurrent(data, context);
             var currentTheme = currentThemeSafe();
             var state = ensureState(data);
@@ -735,11 +855,7 @@
                 (!state.manualTarget && currentTheme !== initial.themeName)
             );
             if (shouldCaptureCurrent && !targetsEqual(state.manualTarget, targetForTheme(currentTheme))) {
-                state.manualTarget = targetForTheme(currentTheme);
-                state.manualTheme = state.manualTarget && state.manualTarget.kind === 'theme'
-                    ? state.manualTarget.themeName
-                    : '';
-                save(data);
+                commitManualTarget(data, targetForTheme(currentTheme));
             }
             reconcile();
         }
@@ -764,6 +880,8 @@
             unbindCurrent: unbindCurrent,
             getCurrentState: getCurrentState,
             recordManualTheme: recordManualTheme,
+            beginManualIntent: beginManualIntent,
+            finishManualIntent: finishManualIntent,
             isAutomatedThemeChange: isAutomatedThemeChange,
         };
     }

@@ -1789,6 +1789,20 @@ function makeBindingContext(overrides) {
     };
 }
 
+function createTestEventSource() {
+    const handlers = {};
+    return {
+        handlers,
+        on(name, handler) { (handlers[name] ||= []).push(handler); },
+        removeListener(name, handler) {
+            handlers[name] = (handlers[name] || []).filter((item) => item !== handler);
+        },
+        emit(name, payload) {
+            (handlers[name] || []).slice().forEach((handler) => handler(payload));
+        },
+    };
+}
+
 test('day-night pairs merge two real themes into one logical item with shared editable metadata', () => {
     const data = {
         themeMeta: {
@@ -2657,4 +2671,157 @@ test('duplicate chat events do not cancel the still-desired automatic apply afte
     assert.equal(cancelCount, 0);
     pending[0].callback(true);
     assert.equal(controller.isAutomatedThemeChange('Bound'), false);
+});
+
+test('CHAT_CHANGED during a pending manual B intent never restores persisted manual A or starts duplicate B', () => {
+    const events = createTestEventSource();
+    const context = makeBindingContext();
+    context.eventSource = events;
+    context.eventTypes = { CHAT_CHANGED: 'chat-changed', CHAT_LOADED: 'chat-loaded' };
+    const data = {};
+    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'A' };
+    bindings.ensureState(data).manualTheme = 'A';
+    let currentTheme = 'A';
+    const applied = [];
+    const controller = bindings.createController({
+        load() { return data; },
+        save() {},
+        getContext() { return context; },
+        getCurrentThemeName() { return currentTheme; },
+        applyTheme(name) { applied.push(name); },
+    });
+    controller.start();
+    const token = controller.beginManualIntent('B');
+
+    events.emit('chat-changed');
+
+    assert.deepEqual(applied, []);
+    assert.equal(controller.getCurrentState().manualTheme, 'B');
+    assert.equal(bindings.ensureState(data).manualTheme, 'A');
+    assert.equal(controller.finishManualIntent(token, true), true);
+    assert.equal(bindings.ensureState(data).manualTheme, 'B');
+    controller.stop();
+});
+
+test('late B completion cannot overwrite newer manual C intent and genuine current failure rolls back safely', () => {
+    const data = {};
+    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'A' };
+    bindings.ensureState(data).manualTheme = 'A';
+    const controller = bindings.createController({
+        load() { return data; },
+        save() {},
+        getContext() { return makeBindingContext(); },
+        getCurrentThemeName() { return 'A'; },
+        applyTheme() {},
+    });
+    const tokenB = controller.beginManualIntent('B');
+    const tokenC = controller.beginManualIntent('C');
+
+    assert.equal(controller.finishManualIntent(tokenB, true), false);
+    assert.equal(controller.finishManualIntent(tokenB, false, 'apply-failed'), false);
+    assert.equal(controller.getCurrentState().manualTheme, 'C');
+    assert.equal(bindings.ensureState(data).manualTheme, 'A');
+    assert.equal(controller.finishManualIntent(tokenC, true), true);
+    assert.equal(bindings.ensureState(data).manualTheme, 'C');
+
+    const tokenD = controller.beginManualIntent('D');
+    assert.equal(controller.finishManualIntent(tokenD, false, 'state-verify-failed'), false);
+    assert.equal(controller.getCurrentState().manualTheme, 'C');
+    assert.equal(bindings.ensureState(data).manualTheme, 'C');
+});
+
+test('chat and character bindings keep priority over the latest manual intent', () => {
+    const data = {};
+    const context = makeBindingContext();
+    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'A' };
+    bindings.ensureState(data).manualTheme = 'A';
+    bindings.setBinding(data, 'character', context, 'Character');
+    bindings.setBinding(data, 'chat', context, 'Chat');
+    let currentTheme = 'A';
+    const pending = [];
+    const controller = bindings.createController({
+        load() { return data; },
+        save() {},
+        getContext() { return context; },
+        getCurrentThemeName() { return currentTheme; },
+        applyTheme(name, callback) { pending.push({ name, callback }); },
+    });
+    const manualToken = controller.beginManualIntent('B');
+
+    controller.reconcile();
+    const chatRequest = pending.shift();
+    assert.equal(chatRequest.name, 'Chat');
+    currentTheme = 'Chat';
+    chatRequest.callback(true);
+    controller.finishManualIntent(manualToken, false, 'superseded');
+
+    bindings.clearBinding(data, 'chat', context);
+    controller.reconcile();
+    const characterRequest = pending.shift();
+    assert.equal(characterRequest.name, 'Character');
+    currentTheme = 'Character';
+    characterRequest.callback(true);
+
+    bindings.clearBinding(data, 'character', context);
+    controller.reconcile();
+    const manualRequest = pending.shift();
+    assert.equal(manualRequest.name, 'B');
+    currentTheme = 'B';
+    manualRequest.callback(true);
+    assert.equal(bindings.ensureState(data).manualTheme, 'B');
+});
+
+test('CHAT_CHANGED with no binding does not reapply an already-current manual theme', () => {
+    const events = createTestEventSource();
+    const context = makeBindingContext();
+    context.eventSource = events;
+    context.eventTypes = { CHAT_CHANGED: 'chat-changed', CHAT_LOADED: 'chat-loaded' };
+    const data = {};
+    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'B' };
+    bindings.ensureState(data).manualTheme = 'B';
+    let applyCount = 0;
+    const controller = bindings.createController({
+        load() { return data; },
+        save() {},
+        getContext() { return context; },
+        getCurrentThemeName() { return 'B'; },
+        applyTheme() { applyCount += 1; },
+    });
+    controller.start();
+    events.emit('chat-changed');
+    events.emit('chat-loaded');
+
+    assert.equal(applyCount, 0);
+    controller.stop();
+});
+
+test('day-night reconciliation resolves the latest manual pair intent instead of the old persisted target', () => {
+    const data = { themeMeta: {} };
+    pairs.createPair(data, {
+        id: 'intent-pair',
+        name: 'Intent Pair',
+        dayTheme: 'Day',
+        nightTheme: 'Night',
+    });
+    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'Old' };
+    bindings.ensureState(data).manualTheme = 'Old';
+    let variant = 'day';
+    const pending = [];
+    const controller = bindings.createController({
+        load() { return data; },
+        save() {},
+        getContext() { return makeBindingContext(); },
+        getCurrentThemeName() { return 'Old'; },
+        makeTargetForTheme(name) { return pairs.targetForTheme(data, name); },
+        resolveTargetTheme(target) { return pairs.resolveTargetTheme(data, target, variant); },
+        applyTheme(name, callback) { pending.push({ name, callback }); },
+    });
+    controller.beginManualIntent('Day');
+
+    controller.reconcile();
+    assert.equal(pending.length, 0);
+    variant = 'night';
+    controller.reconcile();
+    assert.equal(pending[0].name, 'Night');
+    assert.notEqual(pending[0].name, 'Old');
 });

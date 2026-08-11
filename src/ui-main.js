@@ -1748,11 +1748,18 @@
     }
 
     function applyManualTheme(themeName, cb) {
+        var intentToken = bindingController && typeof bindingController.beginManualIntent === 'function'
+            ? bindingController.beginManualIntent(themeName)
+            : null;
         pendingVerifiedManualThemes[themeName] = (pendingVerifiedManualThemes[themeName] || 0) + 1;
         applyTheme(themeName, function (ok, reason) {
             pendingVerifiedManualThemes[themeName] -= 1;
             if (pendingVerifiedManualThemes[themeName] <= 0) delete pendingVerifiedManualThemes[themeName];
-            if (ok) recordManualTheme(themeName);
+            if (intentToken && bindingController && typeof bindingController.finishManualIntent === 'function') {
+                bindingController.finishManualIntent(intentToken, ok, reason);
+            } else if (ok) {
+                recordManualTheme(themeName);
+            }
             if (cb) cb(ok, reason);
         });
     }
