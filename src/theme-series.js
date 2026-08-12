@@ -94,6 +94,41 @@
         return source;
     }
 
+    function inspectState(data) {
+        var groups = isObject(data) && isObject(data.series) && isObject(data.series.groups)
+            ? data.series.groups
+            : {};
+        var claimedTargets = {};
+        var claimedIds = {};
+        var diagnostics = [];
+        Object.keys(groups).forEach(function (key) {
+            var group = normalizeGroup(groups[key], key);
+            if (!group) {
+                diagnostics.push({ type: 'series', id: key, reason: 'invalid-record' });
+                return;
+            }
+            if (claimedIds[group.id]) {
+                diagnostics.push({ type: 'series', id: group.id, name: group.name, reason: 'duplicate-id', conflictsWith: claimedIds[group.id] });
+                return;
+            }
+            var conflicts = group.members.map(targetKey).filter(function (keyName) { return !!claimedTargets[keyName]; });
+            if (conflicts.length > 0) {
+                diagnostics.push({
+                    type: 'series',
+                    id: group.id,
+                    name: group.name,
+                    reason: 'member-conflict',
+                    members: conflicts,
+                    conflictsWith: conflicts.map(function (keyName) { return claimedTargets[keyName]; }),
+                });
+                return;
+            }
+            claimedIds[group.id] = key;
+            group.members.forEach(function (member) { claimedTargets[targetKey(member)] = group.id; });
+        });
+        return diagnostics;
+    }
+
     function createSeriesId(state) {
         var id = '';
         try {
@@ -405,29 +440,42 @@
         var imported = 0;
         var skipped = 0;
         var idMap = {};
+        var diagnostics = [];
         list.forEach(function (raw) {
             state = ensureState(data);
             var source = normalizeGroup(raw, raw && raw.id);
-            if (!source) { skipped += 1; return; }
+            if (!source) {
+                skipped += 1;
+                diagnostics.push({ type: 'series', id: raw && raw.id ? String(raw.id) : '', reason: 'invalid-record' });
+                return;
+            }
             var mappedMembers = [];
-            var incomplete = false;
+            var rejectedMembers = [];
             source.members.forEach(function (member) {
                 var target = member;
                 if (member.kind === 'day-night') {
                     var mappedPairId = pairIdMap[member.pairId] ||
                         (!requirePairIdMap && !skippedPairs[member.pairId] && availablePairs[member.pairId] ? member.pairId : '');
                     target = mappedPairId ? { kind: 'day-night', pairId: mappedPairId } : null;
-                } else if (!availableThemes[member.themeName] || pairedThemes[member.themeName]) {
+                    if (!target) rejectedMembers.push({ target: clone(member), reason: skippedPairs[member.pairId] ? 'pair-rejected' : 'missing-pair' });
+                } else if (!availableThemes[member.themeName]) {
                     target = null;
+                    rejectedMembers.push({ target: clone(member), reason: 'missing-theme' });
+                } else if (pairedThemes[member.themeName]) {
+                    target = null;
+                    rejectedMembers.push({ target: clone(member), reason: 'theme-represented-by-pair' });
                 }
                 if (!target) {
-                    incomplete = true;
                     return;
                 }
                 mappedMembers.push(target);
             });
             mappedMembers = normalizeMembers(mappedMembers);
-            if (incomplete || mappedMembers.length !== source.members.length) { skipped += 1; return; }
+            if (rejectedMembers.length > 0 || mappedMembers.length !== source.members.length) {
+                skipped += 1;
+                diagnostics.push({ type: 'series', id: source.id, name: source.name, category: source.category, reason: 'incomplete-members', members: rejectedMembers });
+                return;
+            }
             var normalized = normalizeGroup({
                 id: source.id,
                 name: source.name,
@@ -438,10 +486,16 @@
             if (existing && sameGroupContent(existing, normalized)) {
                 idMap[source.id] = existing.id;
                 skipped += 1;
+                diagnostics.push({ type: 'series', id: source.id, name: source.name, reason: 'already-present', severity: 'info', mappedId: existing.id });
                 return;
             }
-            if (mappedMembers.some(function (target) { return !!findSeriesByTargetInState(state, target); })) {
+            var conflicts = mappedMembers.map(function (target) {
+                var owner = findSeriesByTargetInState(state, target);
+                return owner ? { target: clone(target), seriesId: owner.id } : null;
+            }).filter(Boolean);
+            if (conflicts.length > 0) {
                 skipped += 1;
+                diagnostics.push({ type: 'series', id: source.id, name: source.name, category: source.category, reason: 'member-conflict', members: conflicts });
                 return;
             }
             var requestedId = existing ? '' : source.id;
@@ -451,17 +505,22 @@
                 category: source.category,
                 members: mappedMembers,
             });
-            if (!result.ok) { skipped += 1; return; }
+            if (!result.ok) {
+                skipped += 1;
+                diagnostics.push({ type: 'series', id: source.id, name: source.name, category: source.category, reason: result.reason || 'create-failed' });
+                return;
+            }
             imported += 1;
             idMap[source.id] = result.series.id;
         });
-        return { imported: imported, skipped: skipped, idMap: idMap };
+        return { imported: imported, skipped: skipped, idMap: idMap, diagnostics: diagnostics };
     }
 
     ns.themeSeries = {
         SERIES_VERSION: SERIES_VERSION,
         createState: createState,
         ensureState: ensureState,
+        inspectState: inspectState,
         normalizeTarget: normalizeTarget,
         targetKey: targetKey,
         targetsEqual: targetsEqual,

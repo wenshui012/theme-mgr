@@ -76,6 +76,42 @@
         return source;
     }
 
+    function inspectState(data) {
+        var source = isObject(data) && isObject(data.dayNight) && isObject(data.dayNight.pairs)
+            ? data.dayNight.pairs
+            : {};
+        var claimedThemes = {};
+        var claimedIds = {};
+        var diagnostics = [];
+        Object.keys(source).forEach(function (key) {
+            var pair = normalizePair(source[key], key);
+            if (!pair) {
+                diagnostics.push({ type: 'pair', id: key, reason: 'invalid-record' });
+                return;
+            }
+            if (claimedIds[pair.id]) {
+                diagnostics.push({ type: 'pair', id: pair.id, name: pair.name, reason: 'duplicate-id', conflictsWith: claimedIds[pair.id] });
+                return;
+            }
+            var conflicts = [pair.dayTheme, pair.nightTheme].filter(function (name) { return !!claimedThemes[name]; });
+            if (conflicts.length > 0) {
+                diagnostics.push({
+                    type: 'pair',
+                    id: pair.id,
+                    name: pair.name,
+                    reason: 'member-conflict',
+                    members: conflicts,
+                    conflictsWith: conflicts.map(function (name) { return claimedThemes[name]; }),
+                });
+                return;
+            }
+            claimedIds[pair.id] = key;
+            claimedThemes[pair.dayTheme] = pair.id;
+            claimedThemes[pair.nightTheme] = pair.id;
+        });
+        return diagnostics;
+    }
+
     function makePairTarget(pairId) {
         pairId = String(pairId || '').trim();
         return pairId ? { kind: 'day-night', pairId: pairId } : null;
@@ -349,6 +385,7 @@
         var skipped = 0;
         var idMap = {};
         var skippedIds = [];
+        var diagnostics = [];
         var list = Array.isArray(rawPairs)
             ? rawPairs
             : (isObject(rawPairs) ? Object.keys(rawPairs).map(function (id) {
@@ -358,9 +395,16 @@
             }) : []);
         list.forEach(function (raw) {
             var pair = normalizePair(raw, raw && raw.id);
-            if (!pair || !available[pair.dayTheme] || !available[pair.nightTheme]) {
+            if (!pair) {
                 skipped += 1;
-                if (pair && pair.id) skippedIds.push(pair.id);
+                diagnostics.push({ type: 'pair', id: raw && raw.id ? String(raw.id) : '', reason: 'invalid-record' });
+                return;
+            }
+            var missingThemes = [pair.dayTheme, pair.nightTheme].filter(function (name) { return !available[name]; });
+            if (missingThemes.length > 0) {
+                skipped += 1;
+                skippedIds.push(pair.id);
+                diagnostics.push({ type: 'pair', id: pair.id, name: pair.name, reason: 'missing-theme', members: missingThemes });
                 return;
             }
             var existingDay = findPairByTheme(data, pair.dayTheme);
@@ -369,8 +413,17 @@
                 if (existingDay && existingNight && existingDay.id === existingNight.id &&
                     existingDay.dayTheme === pair.dayTheme && existingDay.nightTheme === pair.nightTheme) {
                     idMap[pair.id] = existingDay.id;
+                    diagnostics.push({ type: 'pair', id: pair.id, name: pair.name, reason: 'already-present', severity: 'info', mappedId: existingDay.id });
                 } else {
                     skippedIds.push(pair.id);
+                    diagnostics.push({
+                        type: 'pair',
+                        id: pair.id,
+                        name: pair.name,
+                        reason: 'member-conflict',
+                        members: [pair.dayTheme, pair.nightTheme],
+                        conflictsWith: [existingDay && existingDay.id, existingNight && existingNight.id].filter(Boolean),
+                    });
                 }
                 skipped += 1;
                 return;
@@ -388,9 +441,10 @@
             } else {
                 skipped += 1;
                 skippedIds.push(pair.id);
+                diagnostics.push({ type: 'pair', id: pair.id, name: pair.name, reason: result.reason || 'create-failed' });
             }
         });
-        return { imported: imported, skipped: skipped, idMap: idMap, skippedIds: skippedIds };
+        return { imported: imported, skipped: skipped, idMap: idMap, skippedIds: skippedIds, diagnostics: diagnostics };
     }
 
     function suggestPairName(dayName, nightName) {
@@ -526,6 +580,7 @@
         SHARED_META_KEYS: SHARED_META_KEYS.slice(),
         createState: createState,
         ensureState: ensureState,
+        inspectState: inspectState,
         normalizeMeta: normalizeMeta,
         makePairTarget: makePairTarget,
         makeItemKey: makeItemKey,
