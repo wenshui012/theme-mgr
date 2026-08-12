@@ -6,6 +6,7 @@
         var schema = opts.schema || ns.themeSchema;
         var runtime = opts.runtime;
         var transactions = opts.transactions;
+        var metadata = opts.metadata || ns.themeMetadata;
         var captureBaseline = opts.captureBaseline || function () {
             return import('/scripts/power-user.js').then(function (mod) {
                 var baseline = schema.snapshotThemeBaseline(mod && mod.power_user);
@@ -52,20 +53,77 @@
             }).map(function (fingerprint) {
                 return { fingerprint: fingerprint, names: groups[fingerprint].slice() };
             });
-            var total = (themes || []).length;
-            var anomalous = duplicates.filter(function (group) {
-                return group.names.length >= 3 || (total > 1 && group.names.length === total);
-            });
-            return { byFingerprint: groups, duplicates: duplicates, anomalous: anomalous };
+            return { byFingerprint: groups, duplicates: duplicates, anomalous: [] };
         }
 
-        function prepareExport(themeNames) {
-            var names = uniqueNames(themeNames);
+        function inspectLibrary(themes, themeMeta) {
+            var list = Array.isArray(themes) ? themes : [];
+            var names = list.map(function (theme) {
+                return theme && typeof theme.name === 'string' ? theme.name.trim() : '';
+            }).filter(Boolean);
+            var metadataDiagnostics = metadata && typeof metadata.inspect === 'function'
+                ? metadata.inspect(names, themeMeta)
+                : { inventoryDuplicateNames: [], orphanMetadata: [], inventoryWithoutMetadata: [], emptyMetadata: [], annotatedNames: [], annotatedCount: 0 };
+            var filenames = {};
+            var sanitizedFilenameCollisions = [];
+            var invalidThemeObjects = [];
+            var fingerprintThemes = [];
+            list.forEach(function (theme, index) {
+                var name = theme && typeof theme.name === 'string' ? theme.name.trim() : '';
+                if (!schema.isPlainObject(theme) || !name || !schema.isUsableTheme(theme, name) || schema.isLazyThemePlaceholder(theme, name)) {
+                    invalidThemeObjects.push({ index: index, name: name || ('第 ' + (index + 1) + ' 项') });
+                    return;
+                }
+                try {
+                    JSON.stringify(theme);
+                } catch (err) {
+                    invalidThemeObjects.push({ index: index, name: name, reason: 'unserializable' });
+                    return;
+                }
+                fingerprintThemes.push(theme);
+                var filename = schema.sanitizeFilename(name);
+                var key = String(filename || '').toLowerCase();
+                if (!filename) {
+                    invalidThemeObjects.push({ index: index, name: name, reason: 'invalid-filename' });
+                } else if (filenames[key] && filenames[key] !== name) {
+                    sanitizedFilenameCollisions.push({ filename: filename, names: [filenames[key], name] });
+                } else {
+                    filenames[key] = name;
+                }
+            });
+            var fingerprints = inspectFingerprints(fingerprintThemes);
+            return Object.assign({}, metadataDiagnostics, {
+                sameConfigGroups: fingerprints.duplicates,
+                sanitizedFilenameCollisions: sanitizedFilenameCollisions,
+                invalidThemeObjects: invalidThemeObjects,
+                fingerprints: fingerprints,
+                fatal: metadataDiagnostics.inventoryDuplicateNames.length > 0 ||
+                    sanitizedFilenameCollisions.length > 0 || invalidThemeObjects.length > 0,
+            });
+        }
+
+        function prepareExport(themeNames, options) {
+            options = options || {};
+            var requestedNames = Array.isArray(themeNames) ? themeNames.map(function (name) { return String(name || '').trim(); }).filter(Boolean) : [];
+            var names = uniqueNames(requestedNames);
             var themes = [];
             var failures = [];
+            var inventorySnapshot = [];
+
+            var requestedCounts = {};
+            requestedNames.forEach(function (name) { requestedCounts[name] = (requestedCounts[name] || 0) + 1; });
+            var duplicateRequests = Object.keys(requestedCounts).filter(function (name) { return requestedCounts[name] > 1; });
+            if (duplicateRequests.length > 0) {
+                return Promise.reject(error('export-duplicate-name', '导出目标包含重名主题，无法安全确定导出对象', duplicateRequests));
+            }
 
             runtime.invalidate('theme-manager-export-read');
             return runtime.getInventory().then(function (inventory) {
+                inventorySnapshot = Array.isArray(inventory) ? inventory : [];
+                var inventoryDiagnostics = inspectLibrary(inventorySnapshot, options.themeMeta);
+                if (inventoryDiagnostics.inventoryDuplicateNames.some(function (item) { return names.indexOf(item.name) !== -1; })) {
+                    throw error('export-duplicate-name', '主题库存存在同名主题，无法安全确定导出对象', inventoryDiagnostics.inventoryDuplicateNames);
+                }
                 return names.reduce(function (pending, name) {
                     return pending.then(function () {
                         return runtime.resolveUsableTheme(name, runtime.findTheme(inventory, name))
@@ -101,11 +159,18 @@
                         }
                         return normalized;
                     });
-                    var fingerprints = inspectFingerprints(normalizedThemes);
-                    if (fingerprints.anomalous.length > 0) {
-                        throw error('export-duplicate', '检测到异常重复主题，已中止导出', fingerprints.anomalous);
+                    var diagnostics = inspectLibrary(normalizedThemes, options.themeMeta);
+                    if (diagnostics.sanitizedFilenameCollisions.length > 0) {
+                        throw error('export-filename-collision', '主题名称清理后会写入同一文件，已中止导出', diagnostics.sanitizedFilenameCollisions);
                     }
-                    return { themes: normalizedThemes, fingerprints: fingerprints, report: report };
+                    if (diagnostics.invalidThemeObjects.length > 0) {
+                        throw error('export-invalid', '导出目标包含无法安全序列化的主题', diagnostics.invalidThemeObjects);
+                    }
+                    var inventoryWarnings = inspectLibrary(inventorySnapshot, options.themeMeta);
+                    diagnostics.orphanMetadata = inventoryWarnings.orphanMetadata;
+                    diagnostics.emptyMetadata = inventoryWarnings.emptyMetadata;
+                    diagnostics.inventoryWithoutMetadata = inventoryWarnings.inventoryWithoutMetadata;
+                    return { themes: normalizedThemes, fingerprints: diagnostics.fingerprints, diagnostics: diagnostics, report: report };
                 });
             });
         }
@@ -197,6 +262,7 @@
 
         return {
             inspectFingerprints: inspectFingerprints,
+            inspectLibrary: inspectLibrary,
             prepareExport: prepareExport,
             validateImportThemes: validateImportThemes,
             importVerified: importVerified,
