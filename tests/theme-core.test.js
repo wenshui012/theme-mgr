@@ -2047,6 +2047,238 @@ test('theme API never submits markers or name-only objects but permits legacy pa
     assert.equal(requests[0].body.includes(schema.LAZY_THEME_MARKER), false);
 });
 
+test('theme API rejects malformed inventories and accepts only an explicit themes array', async (t) => {
+    const previousFetch = global.fetch;
+    let settingsBody = { themes: [] };
+    let settingsJsonError = null;
+    t.after(() => { global.fetch = previousFetch; });
+    global.fetch = async (url) => {
+        if (url === '/csrf-token') return { ok: true, json: async () => ({ token: 'test' }) };
+        if (url === '/api/settings/get') {
+            return {
+                ok: true,
+                json: async () => {
+                    if (settingsJsonError) throw settingsJsonError;
+                    return clone(settingsBody);
+                },
+            };
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+    };
+    const api = modules.createThemeApi({ schema });
+
+    for (const malformed of [
+        {},
+        { themes: null },
+        { themes: {} },
+        { themes: 'not-an-array' },
+        null,
+        { themes: [{ name: '' }] },
+        { themes: [completeTheme('Duplicate'), completeTheme('Duplicate')] },
+    ]) {
+        settingsBody = malformed;
+        await assert.rejects(
+            api.getSettingsInventory(),
+            (error) => error.code === 'inventory-invalid',
+        );
+    }
+
+    settingsJsonError = new SyntaxError('malformed settings response');
+    await assert.rejects(api.getSettingsInventory(), /malformed settings response/);
+    settingsJsonError = null;
+    settingsBody = { themes: [] };
+    assert.deepEqual(await api.getSettingsInventory(), []);
+});
+
+test('malformed initial inventory aborts standalone save before any theme write or rollback delete', async () => {
+    const old = completeTheme('Existing');
+    const harness = makeTransactionHarness([old], {
+        transformInventory() { return {}; },
+    });
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedTheme(completeTheme('Existing', { custom_css: '/* replacement */' })),
+        (error) => error.code === 'inventory-invalid',
+    );
+
+    assert.deepEqual(harness.calls, []);
+    assert.deepEqual(harness.store.Existing, old);
+});
+
+test('malformed post-save inventory restores an authoritatively present prior theme without DELETE', async () => {
+    const old = completeTheme('Existing', { custom_css: '/* prior */' });
+    const harness = makeTransactionHarness([old], {
+        transformInventory(inventory, count) { return count === 2 ? {} : inventory; },
+    });
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedTheme(completeTheme('Existing', { custom_css: '/* replacement */' })),
+        (error) => error.code === 'verify-failed',
+    );
+
+    assert.deepEqual(harness.store.Existing, old);
+    assert.deepEqual(harness.calls.map((call) => `${call.type}:${call.name}`), [
+        'save:Existing',
+        'save:Existing',
+    ]);
+});
+
+test('malformed rollback verification never turns a known prior theme into a DELETE rollback', async () => {
+    const old = completeTheme('Existing', { custom_css: '/* prior */' });
+    const harness = makeTransactionHarness([old], {
+        transformInventory(inventory, count) {
+            return count === 2 || count === 3 ? { themes: null } : inventory;
+        },
+    });
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedTheme(completeTheme('Existing', { custom_css: '/* replacement */' })),
+        (error) => error.code === 'rollback-failed',
+    );
+
+    assert.deepEqual(harness.store.Existing, old);
+    assert.deepEqual(harness.calls.map((call) => `${call.type}:${call.name}`), [
+        'save:Existing',
+        'save:Existing',
+    ]);
+});
+
+test('an unknown prior inventory cannot be declared absent to authorize a destructive rollback', async () => {
+    const harness = makeTransactionHarness([]);
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedTheme(completeTheme('New'), {
+            knownInventory: undefined,
+            knownPreviousTheme: null,
+            headers: { 'X-Test': 'known-unknown' },
+        }),
+        (error) => error.code === 'inventory-invalid',
+    );
+
+    assert.deepEqual(harness.calls, []);
+    assert.equal(harness.store.New, undefined);
+});
+
+test('malformed inventory aborts single delete before DELETE and before caller cleanup', async () => {
+    const old = completeTheme('Keep');
+    const harness = makeTransactionHarness([old], {
+        transformInventory() { return { themes: null }; },
+    });
+    let cleanupRan = false;
+    const managerState = {
+        themeMeta: { Keep: { category: 'Protected' } },
+        pairs: [{ id: 'pair-keep', themes: ['Keep', 'Other'] }],
+        series: [{ id: 'series-keep', themes: ['Keep', 'Other'] }],
+        bindings: { manualTarget: { kind: 'theme', themeName: 'Keep' } },
+    };
+    const beforeCleanup = clone(managerState);
+
+    await assert.rejects(
+        harness.transactions.deleteThemeVerified('Keep').then(() => {
+            cleanupRan = true;
+            delete managerState.themeMeta.Keep;
+            managerState.pairs = [];
+            managerState.series = [];
+            managerState.bindings = {};
+        }),
+        (error) => error.code === 'delete-read-failed',
+    );
+
+    assert.equal(cleanupRan, false);
+    assert.deepEqual(managerState, beforeCleanup);
+    assert.deepEqual(harness.calls, []);
+    assert.deepEqual(harness.store.Keep, old);
+});
+
+test('malformed post-delete verification prevents caller metadata cleanup', async () => {
+    const old = completeTheme('Keep');
+    const harness = makeTransactionHarness([old], {
+        transformInventory(inventory, count) {
+            return count === 2 ? { themes: null } : inventory;
+        },
+    });
+    const managerState = {
+        themeMeta: { Keep: { category: 'Protected' } },
+        pairs: [{ id: 'pair-keep', themes: ['Keep', 'Other'] }],
+        series: [{ id: 'series-keep', themes: ['Keep', 'Other'] }],
+        bindings: { manualTarget: { kind: 'theme', themeName: 'Keep' } },
+    };
+    const beforeCleanup = clone(managerState);
+
+    await assert.rejects(
+        harness.transactions.deleteThemeVerified('Keep').then(() => {
+            managerState.themeMeta = {};
+            managerState.pairs = [];
+            managerState.series = [];
+            managerState.bindings = {};
+        }),
+        (error) => error.code === 'delete-failed',
+    );
+
+    assert.deepEqual(harness.calls.map((call) => `${call.type}:${call.name}`), ['delete:Keep']);
+    assert.deepEqual(managerState, beforeCleanup);
+});
+
+test('malformed inventory aborts batch delete before every DELETE', async () => {
+    const keepA = completeTheme('Keep A');
+    const keepB = completeTheme('Keep B');
+    const harness = makeTransactionHarness([keepA, keepB], {
+        transformInventory() { return 'invalid inventory'; },
+    });
+
+    await assert.rejects(
+        harness.transactions.deleteThemesVerified(['Keep A', 'Keep B']),
+        (error) => error.code === 'batch-delete-read-failed',
+    );
+
+    assert.deepEqual(harness.calls, []);
+    assert.deepEqual(harness.store['Keep A'], keepA);
+    assert.deepEqual(harness.store['Keep B'], keepB);
+});
+
+test('duplicate inventory names abort save, delete, and rename before every theme write', async () => {
+    const old = completeTheme('Old');
+    const duplicateInventory = (inventory) => [clone(inventory[0]), clone(inventory[0])];
+
+    const saveHarness = makeTransactionHarness([old], { transformInventory: duplicateInventory });
+    await assert.rejects(
+        saveHarness.transactions.saveVerifiedTheme(completeTheme('Old', { custom_css: '/* replacement */' })),
+        (error) => error.code === 'inventory-invalid',
+    );
+    assert.deepEqual(saveHarness.calls, []);
+
+    const deleteHarness = makeTransactionHarness([old], { transformInventory: duplicateInventory });
+    await assert.rejects(
+        deleteHarness.transactions.deleteThemeVerified('Old'),
+        (error) => error.code === 'delete-read-failed',
+    );
+    assert.deepEqual(deleteHarness.calls, []);
+
+    const renameHarness = makeTransactionHarness([old], {
+        cachedThemes: { Old: old },
+        transformInventory: duplicateInventory,
+    });
+    await assert.rejects(
+        renameHarness.transactions.renameTheme('Old', 'New', {
+            extraNames: ['Old'],
+            extraNamesComplete: true,
+        }),
+        (error) => error.code === 'inventory-invalid',
+    );
+    assert.deepEqual(renameHarness.calls, []);
+});
+
+test('valid empty inventory remains authoritative for an already-absent delete', async () => {
+    const harness = makeTransactionHarness([], {
+        transformInventory() { return []; },
+    });
+
+    const result = await harness.transactions.deleteThemeVerified('Already Gone');
+
+    assert.equal(result.alreadyAbsent, true);
+    assert.deepEqual(harness.calls, []);
+});
+
 test('export hydrates every requested theme, normalizes legacy partials with one baseline, and reports filled fields', async () => {
     const inventory = [
         { name: 'Legacy A', main_text_color: '#a' },
@@ -2398,6 +2630,73 @@ test('batch rollback failure reports rollback-failed with a content-free state s
     );
 });
 
+test('rename treats a stale DOM name list as display-only and preserves a fresh destination', async () => {
+    const old = completeTheme('Old');
+    const concurrentNew = completeTheme('New', { custom_css: '/* concurrent */' });
+    const harness = makeTransactionHarness([old, concurrentNew], {
+        cachedThemes: { Old: old },
+    });
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Old', 'New', {
+            extraNames: ['Old'],
+            extraNamesComplete: true,
+        }),
+        (error) => error.code === 'duplicate',
+    );
+
+    assert.deepEqual(harness.calls, []);
+    assert.deepEqual(harness.store.Old, old);
+    assert.deepEqual(harness.store.New, concurrentNew);
+});
+
+test('rename performs a zero-write abort when the destination appears after the UI snapshot', async () => {
+    const old = completeTheme('Old');
+    const concurrentNew = completeTheme('New', { custom_css: '/* appeared later */' });
+    const harness = makeTransactionHarness([old], {
+        cachedThemes: { Old: old },
+        transformInventory(inventory, count, store) {
+            if (count === 1) {
+                store.New = clone(concurrentNew);
+                return inventory.concat(clone(concurrentNew));
+            }
+            return inventory;
+        },
+    });
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Old', 'New', {
+            extraNames: ['Old'],
+            extraNamesComplete: true,
+        }),
+        (error) => error.code === 'duplicate',
+    );
+
+    assert.deepEqual(harness.calls, []);
+    assert.deepEqual(harness.store.Old, old);
+    assert.deepEqual(harness.store.New, concurrentNew);
+});
+
+test('rename aborts with zero writes when the authoritative prewrite inventory is malformed', async () => {
+    const old = completeTheme('Old');
+    const harness = makeTransactionHarness([old], {
+        cachedThemes: { Old: old },
+        transformInventory() { return { themes: null }; },
+    });
+
+    await assert.rejects(
+        harness.transactions.renameTheme('Old', 'New', {
+            extraNames: ['Old'],
+            extraNamesComplete: true,
+        }),
+        (error) => error.code === 'inventory-invalid',
+    );
+
+    assert.deepEqual(harness.calls, []);
+    assert.deepEqual(harness.store.Old, old);
+    assert.equal(harness.store.New, undefined);
+});
+
 test('transactional rename preserves the exact legacy partial fields and saves before deleting', async () => {
     const original = { name: 'Legacy Old', main_text_color: '#abc', custom_css: '' };
     const harness = makeTransactionHarness([original]);
@@ -2406,7 +2705,7 @@ test('transactional rename preserves the exact legacy partial fields and saves b
     assert.deepEqual(harness.store['Legacy New'], { name: 'Legacy New', main_text_color: '#abc', custom_css: '' });
     assert.equal(harness.store['Legacy Old'], undefined);
     assert.equal(result.newName, 'Legacy New');
-    assert.equal(harness.getInventoryCount(), 2);
+    assert.equal(harness.getInventoryCount(), 3);
     assert.equal(harness.getHeaderCount(), 1);
     assert.equal(harness.calls[0].headers, harness.calls[1].headers);
     assert.deepEqual(result.transactionContext.sourceTheme, original);
@@ -2421,7 +2720,7 @@ test('transactional rename preserves the exact legacy partial fields and saves b
     assert.deepEqual(harness.calls.map((call) => `${call.type}:${call.name}`), ['save:Legacy New', 'delete:Legacy Old']);
 });
 
-test('bridge rename uses hydrated source and one final inventory when the native name list is complete', async () => {
+test('bridge rename uses hydrated source plus authoritative prewrite and final inventories', async () => {
     const original = { name: 'Bridge Old', main_text_color: '#bridge', custom_css: '' };
     let hydrateCalls = 0;
     const harness = makeTransactionHarness([original], {
@@ -2439,15 +2738,15 @@ test('bridge rename uses hydrated source and one final inventory when the native
     });
 
     assert.equal(hydrateCalls, 1);
-    assert.equal(harness.getInventoryCount(), 1);
+    assert.equal(harness.getInventoryCount(), 2);
     assert.equal(harness.getHeaderCount(), 1);
-    assert.equal(result.transactionContext.originalInventory, null);
+    assert.equal(result.transactionContext.originalInventory.length, 1);
     assert.deepEqual(result.transactionContext.existingNames, ['Bridge Old']);
     assert.deepEqual(harness.store['Bridge New'], { name: 'Bridge New', main_text_color: '#bridge', custom_css: '' });
     assert.equal(harness.store['Bridge Old'], undefined);
 });
 
-test('bridge rename falls back to two inventories when the supplied name list is not marked complete', async () => {
+test('bridge rename adds an initial source read when the supplied name list is not marked complete', async () => {
     const original = { name: 'Fallback Old', main_text_color: '#bridge' };
     const harness = makeTransactionHarness([original], {
         bridge: { ensureThemeLoaded() { return Promise.resolve(clone(original)); } },
@@ -2457,10 +2756,10 @@ test('bridge rename falls back to two inventories when the supplied name list is
         extraNames: ['Fallback Old'],
     });
 
-    assert.equal(harness.getInventoryCount(), 2);
+    assert.equal(harness.getInventoryCount(), 3);
 });
 
-test('runtime cache rename uses one final inventory when the native name list is complete', async () => {
+test('runtime cache rename still performs authoritative prewrite and final inventories', async () => {
     const original = { name: 'Cached Old', main_text_color: '#cached', custom_css: '' };
     const harness = makeTransactionHarness([original], {
         cachedThemes: { 'Cached Old': original },
@@ -2471,8 +2770,8 @@ test('runtime cache rename uses one final inventory when the native name list is
         extraNamesComplete: true,
     });
 
-    assert.equal(harness.getInventoryCount(), 1);
-    assert.equal(result.transactionContext.originalInventory, null);
+    assert.equal(harness.getInventoryCount(), 2);
+    assert.equal(result.transactionContext.originalInventory.length, 1);
     assert.deepEqual(harness.store['Cached New'], { name: 'Cached New', main_text_color: '#cached', custom_css: '' });
     assert.equal(harness.store['Cached Old'], undefined);
 });
@@ -2756,7 +3055,7 @@ test('consecutive renames keep remembering each new name for one-inventory follo
         extraNamesComplete: true,
     });
 
-    assert.equal(harness.getInventoryCount(), 4);
+    assert.equal(harness.getInventoryCount(), 7);
     assert.equal(harness.getHeaderCount(), 3);
     assert.equal(harness.store.First, undefined);
     assert.equal(harness.store.Second, undefined);

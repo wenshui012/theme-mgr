@@ -14,9 +14,36 @@
             return err;
         }
 
+        function requireValidInventory(themes, reason) {
+            if (!Array.isArray(themes)) {
+                throw error('inventory-invalid', '主题库存不是有效数组', { reason: reason || '' });
+            }
+            var seenNames = Object.create(null);
+            for (var i = 0; i < themes.length; i++) {
+                var item = themes[i];
+                if (!schema.isPlainObject(item) || typeof item.name !== 'string' || !item.name.trim()) {
+                    throw error('inventory-invalid', '主题库存包含无效主题项', {
+                        reason: reason || '',
+                        index: i,
+                    });
+                }
+                if (seenNames[item.name]) {
+                    throw error('inventory-invalid', '主题库存包含重复主题名', {
+                        reason: reason || '',
+                        index: i,
+                        name: item.name,
+                    });
+                }
+                seenNames[item.name] = true;
+            }
+            return themes;
+        }
+
         function freshInventory(reason) {
             runtime.invalidate(reason);
-            return runtime.getInventory({ bypassBaibaokuCache: true });
+            return Promise.resolve()
+                .then(function () { return runtime.getInventory({ bypassBaibaokuCache: true }); })
+                .then(function (themes) { return requireValidInventory(themes, reason); });
         }
 
         function isTauriTavernMobileRuntime() {
@@ -67,10 +94,16 @@
             });
         }
 
-        function rollbackSavedTheme(themeName, previousTheme, headers) {
-            if (previousTheme) {
+        function rollbackSavedTheme(themeName, previousTheme, previousState, headers) {
+            if (previousState === 'present' && previousTheme) {
                 return api.saveTheme(previousTheme, headers)
                     .then(function () { return verifySavedTheme(previousTheme, 'theme-manager-rollback-restore'); });
+            }
+            if (previousState !== 'absent') {
+                return Promise.reject(error(
+                    'rollback-state-unknown',
+                    '无法权威确认主题修改前不存在，已拒绝删除式回滚',
+                ));
             }
             var requestError = null;
             return api.deleteTheme(themeName, headers)
@@ -93,17 +126,20 @@
 
             var expected = schema.cloneValue(theme);
             var previousTheme = null;
+            var previousState = 'unknown';
             var headers = null;
             var saveAttempted = false;
             var inventory = null;
             var hasKnownPrevious = Object.prototype.hasOwnProperty.call(options, 'knownPreviousTheme');
-            var inventoryPromise = Array.isArray(options.knownInventory)
-                ? Promise.resolve(options.knownInventory)
+            var inventoryPromise = Object.prototype.hasOwnProperty.call(options, 'knownInventory')
+                ? Promise.resolve().then(function () {
+                    return requireValidInventory(options.knownInventory, 'theme-manager-known-inventory');
+                })
                 : freshInventory(options.readReason || 'theme-manager-save-read');
 
             return inventoryPromise
                 .then(function (themes) {
-                    inventory = themes || [];
+                    inventory = themes;
                     var targetFilename = schema.sanitizeFilename(expected.name).toLowerCase();
                     if (!targetFilename) throw error('invalid-filename', '主题名称无法生成有效文件名');
                     var filenameConflict = inventory.some(function (item) {
@@ -114,12 +150,26 @@
                         throw error('filename-conflict', '主题名称经文件名清理后与已有主题冲突');
                     }
                     if (hasKnownPrevious) {
-                        return options.knownPreviousTheme
-                            ? schema.cloneValue(options.knownPreviousTheme)
-                            : null;
+                        var knownCandidate = runtime.findTheme(inventory, expected.name);
+                        if (options.knownPreviousTheme) {
+                            if (!knownCandidate || !schema.isUsableTheme(options.knownPreviousTheme, expected.name)) {
+                                throw error('unsafe-options', '已知旧主题与权威库存不一致');
+                            }
+                            previousState = 'present';
+                            return schema.cloneValue(options.knownPreviousTheme);
+                        }
+                        if (knownCandidate) {
+                            throw error('unsafe-options', '不能将已存在的主题当作已知不存在');
+                        }
+                        previousState = 'absent';
+                        return null;
                     }
                     var previousCandidate = runtime.findTheme(inventory, expected.name);
-                    if (!previousCandidate) return null;
+                    if (!previousCandidate) {
+                        previousState = 'absent';
+                        return null;
+                    }
+                    previousState = 'present';
                     return runtime.resolveUsableTheme(expected.name, previousCandidate);
                 })
                 .then(function (previous) {
@@ -161,7 +211,7 @@
                 .catch(function (originalError) {
                     if (options.deferVerification) throw originalError;
                     if (!saveAttempted || !headers) throw originalError;
-                    return rollbackSavedTheme(expected.name, previousTheme, headers)
+                    return rollbackSavedTheme(expected.name, previousTheme, previousState, headers)
                         .then(function () { throw originalError; }, function (rollbackError) {
                             throw error('rollback-failed', originalError.message + '；恢复旧主题失败：' + rollbackError.message, {
                                 cause: originalError,
@@ -196,12 +246,13 @@
             return (entries || []).map(function (entry) {
                 var candidate = runtime.findTheme(themes, entry.expected.name);
                 var expectedPrevious = entry.previousTheme;
-                var restored = expectedPrevious
+                var restored = entry.previousState === 'present' && expectedPrevious
                     ? schema.isUsableTheme(candidate, expectedPrevious.name) &&
                         schema.fingerprint(candidate) === schema.fingerprint(expectedPrevious)
-                    : !candidate;
+                    : entry.previousState === 'absent' && !candidate;
                 return {
                     name: entry.expected.name,
+                    previousState: entry.previousState || 'unknown',
                     expectedPrevious: Boolean(expectedPrevious),
                     present: Boolean(candidate),
                     restored: restored,
@@ -214,10 +265,21 @@
             var rollbackEntries = (entries || []).slice().reverse();
             return rollbackEntries.reduce(function (pending, entry) {
                 return pending.then(function () {
-                    var rollbackRequest = entry.previousTheme
-                        ? api.saveTheme(entry.previousTheme, headers)
-                        : api.deleteTheme(entry.expected.name, headers);
-                    return rollbackRequest.catch(function () {
+                    var rollbackRequest;
+                    if (entry.previousState === 'present' && entry.previousTheme) {
+                        rollbackRequest = api.saveTheme(entry.previousTheme, headers);
+                    } else if (entry.previousState === 'absent') {
+                        rollbackRequest = api.deleteTheme(entry.expected.name, headers);
+                    } else {
+                        rollbackRequest = Promise.reject(error(
+                            'rollback-state-unknown',
+                            '批量回滚时无法权威确认主题修改前不存在',
+                        ));
+                    }
+                    return rollbackRequest.catch(function (rollbackRequestError) {
+                        if (rollbackRequestError && rollbackRequestError.code === 'rollback-state-unknown') {
+                            throw rollbackRequestError;
+                        }
                         // The final fresh inventory is authoritative. A rejected delete may
                         // still mean the requested state was reached or the response was lost.
                         return null;
@@ -280,7 +342,7 @@
 
             return freshInventory(options.readReason || 'theme-manager-import-batch-read')
                 .then(function (inventory) {
-                    initialInventory = inventory || [];
+                    initialInventory = inventory;
                     var collision = expectedThemes.some(function (expected) {
                         var targetKey = schema.sanitizeFilename(expected.name).toLowerCase();
                         return initialInventory.some(function (item) {
@@ -294,13 +356,14 @@
                         return pending.then(function () {
                             var previousCandidate = runtime.findTheme(initialInventory, expected.name);
                             if (!previousCandidate) {
-                                entries.push({ expected: expected, previousTheme: null });
+                                entries.push({ expected: expected, previousTheme: null, previousState: 'absent' });
                                 return null;
                             }
                             return runtime.resolveUsableTheme(expected.name, previousCandidate).then(function (previous) {
                                 entries.push({
                                     expected: expected,
                                     previousTheme: schema.cloneValue(previous),
+                                    previousState: 'present',
                                 });
                             });
                         });
@@ -356,30 +419,48 @@
             var requestError = null;
             var nativeThemeRef = null;
             var bridge = runtime.getBridge();
-            var preload = bridge && typeof bridge.ensureThemeLoaded === 'function'
-                ? Promise.resolve().then(function () { return bridge.ensureThemeLoaded(themeName); }).catch(function () { return null; })
-                : Promise.resolve(null);
-            return preload
-                .then(function (loaded) {
-                    if (schema.isPlainObject(loaded) && loaded.name === themeName) nativeThemeRef = loaded;
-                    return api.getPostHeaders();
-                })
-                .then(function (postHeaders) {
-                    headers = postHeaders;
-                    return api.deleteTheme(themeName, headers).catch(function (err) { requestError = err; });
-                })
-                .then(function () {
-                    runtime.invalidate(options.deleteReason || 'theme-manager-delete-written');
-                    return verifyThemeAbsent(themeName, options.verifyReason || 'theme-manager-delete-verify');
-                })
-                .then(function (themes) {
-                    return { name: themeName, themes: themes, requestError: requestError, nativeThemeRef: nativeThemeRef };
-                })
-                .catch(function (verifyError) {
-                    throw error('delete-failed', requestError ? requestError.message : verifyError.message, {
-                        request: requestError,
-                        verification: verifyError,
+            return freshInventory(options.readReason || 'theme-manager-delete-read')
+                .catch(function (err) {
+                    throw error('delete-read-failed', err && err.message ? err.message : '删除前无法读取主题库存', {
+                        inventory: err,
                     });
+                })
+                .then(function (initialInventory) {
+                    if (!runtime.findTheme(initialInventory, themeName)) {
+                        runtime.forget(themeName);
+                        return {
+                            name: themeName,
+                            themes: initialInventory,
+                            requestError: null,
+                            nativeThemeRef: null,
+                            alreadyAbsent: true,
+                        };
+                    }
+                    var preload = bridge && typeof bridge.ensureThemeLoaded === 'function'
+                        ? Promise.resolve().then(function () { return bridge.ensureThemeLoaded(themeName); }).catch(function () { return null; })
+                        : Promise.resolve(null);
+                    return preload
+                        .then(function (loaded) {
+                            if (schema.isPlainObject(loaded) && loaded.name === themeName) nativeThemeRef = loaded;
+                            return api.getPostHeaders();
+                        })
+                        .then(function (postHeaders) {
+                            headers = postHeaders;
+                            return api.deleteTheme(themeName, headers).catch(function (err) { requestError = err; });
+                        })
+                        .then(function () {
+                            runtime.invalidate(options.deleteReason || 'theme-manager-delete-written');
+                            return verifyThemeAbsent(themeName, options.verifyReason || 'theme-manager-delete-verify');
+                        })
+                        .then(function (themes) {
+                            return { name: themeName, themes: themes, requestError: requestError, nativeThemeRef: nativeThemeRef };
+                        })
+                        .catch(function (verifyError) {
+                            throw error('delete-failed', requestError ? requestError.message : verifyError.message, {
+                                request: requestError,
+                                verification: verifyError,
+                            });
+                        });
                 });
         }
 
@@ -407,7 +488,7 @@
                     throw error('batch-delete-read-failed', err && err.message ? err.message : '批量删除前无法读取主题列表');
                 })
                 .then(function (themes) {
-                    initialInventory = themes || [];
+                    initialInventory = themes;
                     names.forEach(function (name) {
                         nativeRefs[name] = runtime.findTheme(initialInventory, name);
                     });
@@ -490,10 +571,6 @@
                 names.push(name);
             });
             return names;
-        }
-
-        function namesAsInventory(names) {
-            return (names || []).map(function (name) { return { name: name }; });
         }
 
         function describeRenameState(context, themes) {
@@ -588,6 +665,14 @@
                             restoredState,
                         );
                     }
+                    if (context.destinationState !== 'absent') {
+                        return rejectRollbackFailure(
+                            context,
+                            originalError,
+                            error('rollback-state-unknown', '无法权威确认新主题在改名前不存在'),
+                            restoredState,
+                        );
+                    }
                     return api.deleteTheme(context.newName, headers)
                         .catch(function (cleanupError) {
                             return rejectRollbackFailure(context, originalError, cleanupError);
@@ -653,6 +738,7 @@
                 originalInventory: null,
                 existingNames: [],
                 previousDestinationTheme: null,
+                destinationState: 'unknown',
                 postHeaders: null,
                 expectedRenamedTheme: null,
                 saveAttempted: false,
@@ -683,6 +769,8 @@
                         context.sourceTheme = schema.cloneValue(loaded);
                     }
 
+                    // DOM/cache names are only an early rejection hint. The prewrite read
+                    // below remains the authority for the destination-existence decision.
                     if (context.sourceTheme && hasReliableNames) {
                         context.existingNames = providedNames.slice();
                         var nameConflict = getRenameConflict(oldName, newName, [], context.existingNames);
@@ -721,14 +809,23 @@
                 })
                 .then(function (headers) {
                     context.postHeaders = headers;
-                    var knownInventory = context.originalInventory || namesAsInventory(context.existingNames);
-                    return saveVerifiedTheme(context.expectedRenamedTheme, {
-                        knownInventory: knownInventory,
-                        knownPreviousTheme: context.previousDestinationTheme,
-                        headers: context.postHeaders,
-                        deferVerification: true,
-                        transactionContext: context,
-                        saveReason: 'theme-manager-rename-save',
+                    // Do not let the earlier UI/cache snapshot authorize a write. This
+                    // fresh, schema-validated inventory is the final R0 conflict gate.
+                    return freshInventory('theme-manager-rename-prewrite').then(function (authoritativeInventory) {
+                        var conflict = getRenameConflict(oldName, newName, authoritativeInventory, []);
+                        if (conflict) throw error(conflict, conflict);
+                        context.originalInventory = authoritativeInventory;
+                        context.existingNames = collectThemeNames(authoritativeInventory, options.extraNames);
+                        context.previousDestinationTheme = null;
+                        context.destinationState = 'absent';
+                        return saveVerifiedTheme(context.expectedRenamedTheme, {
+                            knownInventory: authoritativeInventory,
+                            knownPreviousTheme: null,
+                            headers: context.postHeaders,
+                            deferVerification: true,
+                            transactionContext: context,
+                            saveReason: 'theme-manager-rename-save',
+                        });
                     });
                 })
                 .then(function () {

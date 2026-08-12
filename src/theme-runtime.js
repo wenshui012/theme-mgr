@@ -159,7 +159,7 @@
                 ? api.getRawSettingsInventory(bridge.rawFetch)
                 : api.getSettingsInventory();
             return promise.then(function (themes) {
-                if (options.capture === false || options.bypassBaibaokuCache) return themes || [];
+                if (options.capture === false || options.bypassBaibaokuCache) return themes;
                 return captureInventory(themes);
             });
         }

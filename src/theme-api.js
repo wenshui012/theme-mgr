@@ -16,6 +16,37 @@
                 });
         }
 
+        function inventoryError(message, details) {
+            var err = new Error(message || '主题库存格式无效');
+            err.code = 'inventory-invalid';
+            if (details !== undefined) err.details = details;
+            return err;
+        }
+
+        function validateSettingsInventory(data) {
+            if (!schema || typeof schema.isPlainObject !== 'function' ||
+                !schema.isPlainObject(data) ||
+                !Object.prototype.hasOwnProperty.call(data, 'themes') ||
+                !Array.isArray(data.themes)) {
+                throw inventoryError('SillyTavern 主题库存响应缺少有效 themes 数组');
+            }
+            var seenNames = Object.create(null);
+            for (var i = 0; i < data.themes.length; i++) {
+                var item = data.themes[i];
+                if (!schema.isPlainObject(item) || typeof item.name !== 'string' || !item.name.trim()) {
+                    throw inventoryError('SillyTavern 主题库存包含无效主题项', { index: i });
+                }
+                if (seenNames[item.name]) {
+                    throw inventoryError('SillyTavern 主题库存包含重复主题名', {
+                        index: i,
+                        name: item.name,
+                    });
+                }
+                seenNames[item.name] = true;
+            }
+            return data.themes;
+        }
+
         function getSettingsInventory(options) {
             options = options || {};
             return getPostHeaders()
@@ -33,7 +64,7 @@
                     return response.json();
                 })
                 .then(function (data) {
-                    return data && Array.isArray(data.themes) ? data.themes : [];
+                    return validateSettingsInventory(data);
                 });
         }
 
