@@ -24,6 +24,8 @@ const MODULE_FILES = [
     'src/theme-runtime.js',
     'src/theme-transactions.js',
     'src/theme-transfer.js',
+    'src/theme-metadata.js',
+    'src/editor-draft.js',
     'src/theme-pairs.js',
     'src/theme-series.js',
     'src/theme-bindings.js',
@@ -80,21 +82,6 @@ function makeThemes(count, dataset) {
 
 function makeMetadata(themes) {
     const themeMeta = {};
-    themes.forEach((theme, index) => {
-        themeMeta[theme.name] = {
-            category: `Category ${index % 12}`,
-            tags: [`tag-${index % 17}`, `group-${index % 7}`],
-            starred: index % 13 === 0,
-            imageData: null,
-            thumbData: null,
-            crop: null,
-            useCount: index % 31,
-            lastUsed: index,
-            author: `Author ${index % 23}`,
-            description: `Synthetic theme ${index}`,
-            backgroundName: '',
-        };
-    });
     const dayNight = { version: 1, pairs: {} };
     const series = { version: 1, groups: {} };
     if (themes.length >= 6) {
@@ -167,6 +154,7 @@ async function addModules(page) {
 async function measureCase(browser, count, dataset) {
     const themes = makeThemes(count, dataset);
     const metadata = makeMetadata(themes);
+    const initialMetadataCount = Object.keys(metadata.themeMeta).length;
     const settingsBody = JSON.stringify({ themes });
     const payloadBytes = Buffer.byteLength(settingsBody);
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -393,6 +381,11 @@ async function measureCase(browser, count, dataset) {
     });
     const firstOpenMemory = await collectBrowserMetrics(cdp);
     const fetchCountsAfterOpen = await page.evaluate(() => ({ ...window.__fetchCounts }));
+    const metadataCountAfterOpen = await page.evaluate(() => {
+        const raw = localStorage.getItem('theme_mgr_v2');
+        const data = raw ? JSON.parse(raw) : {};
+        return Object.keys(data.themeMeta || {}).length;
+    });
 
     const closeFirst = await page.evaluate(async () => {
         const start = performance.now();
@@ -776,6 +769,7 @@ async function measureCase(browser, count, dataset) {
             afterReopen: fetchCountsAfterReopen['/api/settings/get'] || 0,
             final: finalFetchCounts['/api/settings/get'] || 0,
         },
+        metadata: { initial: initialMetadataCount, afterFirstOpen: metadataCountAfterOpen },
         memory: { beforeOpen: beforeOpenMemory, firstOpen: firstOpenMemory, afterFirstClose: afterFirstCloseMemory, reopen: reopenMemory, beforeFinalClose: beforeFinalCloseMemory, afterFinalClose: afterFinalCloseMemory },
         closeFinal,
         pageErrors,
@@ -849,6 +843,7 @@ async function main() {
         operations: result.operations,
         pureCosts: result.pureCosts,
         inventory: result.inventory,
+        metadata: result.metadata,
         heap: {
             beforeOpen: result.memory.beforeOpen.jsHeapUsedBytes,
             firstOpen: result.memory.firstOpen.jsHeapUsedBytes,

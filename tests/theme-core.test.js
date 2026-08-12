@@ -8,12 +8,15 @@ require('../src/theme-api.js');
 require('../src/theme-runtime.js');
 require('../src/theme-transactions.js');
 require('../src/theme-transfer.js');
+require('../src/theme-metadata.js');
+require('../src/editor-draft.js');
 require('../src/image-tools.js');
 require('../src/theme-pairs.js');
 require('../src/theme-series.js');
 require('../src/theme-bindings.js');
 require('../src/theme-appearance.js');
 require('../src/storage.js');
+require('../src/ui-sheets.js');
 require('../src/ui-events.js');
 
 const modules = global.ThemeMgrModules;
@@ -23,6 +26,8 @@ const appearance = modules.themeAppearance;
 const pairs = modules.themePairs;
 const series = modules.themeSeries;
 const bindings = modules.themeBindings;
+const metadata = modules.themeMetadata;
+const editorDraft = modules.editorDraft;
 
 function clone(value) {
     return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -908,6 +913,113 @@ function createNativeCssSaveSyncHarness(t, options) {
     };
 }
 
+test('editor draft closes cleanly without changes', () => {
+    const baseline = { note: 'same', tags: ['one'] };
+    const session = editorDraft.createSession(baseline);
+    assert.equal(session.isDirty(clone(baseline)), false);
+});
+
+test('editor draft detects a changed note', () => {
+    const session = editorDraft.createSession({ note: 'before' });
+    assert.equal(session.isDirty({ note: 'after' }), true);
+});
+
+test('editor draft becomes clean when a value is reverted to its baseline', () => {
+    const session = editorDraft.createSession({ note: 'before', tags: ['a'] });
+    assert.equal(session.isDirty({ note: 'after', tags: ['a'] }), true);
+    assert.equal(session.isDirty({ note: 'before', tags: ['a'] }), false);
+});
+
+test('one successful editor save advances the baseline and clears dirty state', () => {
+    const session = editorDraft.createSession({ note: 'before' });
+    const ticket = session.beginSave({ note: 'after' });
+    assert.ok(ticket);
+    assert.equal(session.completeSave(ticket.token, ticket.snapshot), true);
+    assert.equal(session.isDirty({ note: 'after' }), false);
+});
+
+test('rapid double editor save creates only one active commit ticket', () => {
+    const session = editorDraft.createSession({ note: 'before' });
+    const first = session.beginSave({ note: 'after' });
+    const second = session.beginSave({ note: 'other' });
+    assert.ok(first);
+    assert.equal(second, null);
+});
+
+test('failed editor save keeps the draft dirty and permits a retry', () => {
+    const session = editorDraft.createSession({ note: 'before' });
+    const first = session.beginSave({ note: 'after' });
+    assert.equal(session.failSave(first.token), true);
+    assert.equal(session.isDirty({ note: 'after' }), true);
+    assert.ok(session.beginSave({ note: 'after' }));
+});
+
+test('closing an editor invalidates a late asynchronous save result', () => {
+    const session = editorDraft.createSession({ note: 'before' });
+    const ticket = session.beginSave({ note: 'after' });
+    session.invalidate();
+    assert.equal(session.isActive(), false);
+    assert.equal(session.isCurrent(ticket.token), false);
+    assert.equal(session.completeSave(ticket.token, ticket.snapshot), false);
+});
+
+test('editor draft fingerprint covers category tags and variant image/background fields', () => {
+    const baseline = {
+        category: 'A',
+        tags: ['one'],
+        variants: { day: { imageData: null, backgroundName: '' } },
+    };
+    const session = editorDraft.createSession(baseline);
+    assert.equal(session.isDirty(clone(baseline)), false);
+    assert.equal(session.isDirty({ category: 'B', tags: ['one'], variants: clone(baseline.variants) }), true);
+    assert.equal(session.isDirty({ category: 'A', tags: ['one', 'two'], variants: clone(baseline.variants) }), true);
+    assert.equal(session.isDirty({ category: 'A', tags: ['one'], variants: { day: { imageData: 'new.png', backgroundName: '' } } }), true);
+    assert.equal(session.isDirty({ category: 'A', tags: ['one'], variants: { day: { imageData: null, backgroundName: 'bg' } } }), true);
+});
+
+function createFakeSheet() {
+    const parent = {
+        removed: [],
+        removeChild(node) {
+            this.removed.push(node);
+            node.parentNode = null;
+        },
+    };
+    return { className: 'tm-sheet-overlay', parentNode: parent, parent };
+}
+
+test('sheet backdrop and programmatic close use the same dirty guard', () => {
+    const api = modules.createUiSheets({ getPopupLayer() {}, load() {}, esc(value) { return value; } });
+    const reasons = [];
+    const backdropSheet = createFakeSheet();
+    api.setBeforeClose(backdropSheet, (reason) => { reasons.push(reason); return false; });
+    assert.equal(api.requestClose(backdropSheet, 'backdrop'), false);
+    assert.ok(backdropSheet.parentNode);
+
+    const programmaticSheet = createFakeSheet();
+    api.setBeforeClose(programmaticSheet, (reason) => { reasons.push(reason); return false; });
+    assert.equal(api.closeSheet(programmaticSheet), false);
+    assert.ok(programmaticSheet.parentNode);
+    assert.deepEqual(reasons, ['backdrop', 'programmatic']);
+});
+
+test('manager close preflights the same dirty guard before removing any sheet', () => {
+    const api = modules.createUiSheets({ getPopupLayer() {}, load() {}, esc(value) { return value; } });
+    const clean = createFakeSheet();
+    const dirty = createFakeSheet();
+    const root = { querySelectorAll() { return [clean, dirty]; } };
+    api.setBeforeClose(dirty, (reason) => reason !== 'manager-close');
+
+    assert.equal(api.requestCloseAll(root, 'manager-close'), false);
+    assert.ok(clean.parentNode);
+    assert.ok(dirty.parentNode);
+
+    api.setBeforeClose(dirty, () => true);
+    assert.equal(api.requestCloseAll(root, 'manager-close'), true);
+    assert.equal(clean.parentNode, null);
+    assert.equal(dirty.parentNode, null);
+});
+
 test('confirmed native CSS save replaces an old cache across A to B to A', async (t) => {
     const harness = createNativeCssSaveSyncHarness(t);
     const saved = completeTheme('A', { custom_css: 'saved new css', main_text_color: 'saved color' });
@@ -1368,7 +1480,7 @@ test('export aborts with the failed theme names when lazy hydration fails', asyn
     );
 });
 
-test('export fingerprint audit aborts when three differently named themes have identical configuration', async () => {
+test('export diagnostics allow three differently named themes with identical configuration', async () => {
     const first = completeTheme('Duplicate One');
     const inventory = ['Duplicate One', 'Duplicate Two', 'Duplicate Three'].map((name) => {
         const theme = clone(first);
@@ -1378,10 +1490,100 @@ test('export fingerprint audit aborts when three differently named themes have i
     const runtime = makeRuntimeForTransfer(inventory);
     const transfer = modules.createThemeTransfer({ schema, runtime, transactions: {} });
 
-    await assert.rejects(
-        transfer.prepareExport(inventory.map((theme) => theme.name)),
-        (error) => error.code === 'export-duplicate' && error.details[0].names.length === 3,
-    );
+    const result = await transfer.prepareExport(inventory.map((theme) => theme.name));
+    assert.equal(result.themes.length, 3);
+    assert.equal(result.diagnostics.sameConfigGroups.length, 1);
+    assert.deepEqual(result.diagnostics.sameConfigGroups[0].names, inventory.map((theme) => theme.name));
+});
+
+test('export diagnostics identify true inventory duplicate names without deleting either object', () => {
+    const first = completeTheme('Same Name');
+    const second = completeTheme('Same Name', { custom_css: '/* second */' });
+    const transfer = modules.createThemeTransfer({ schema, runtime: makeRuntimeForTransfer([]), transactions: {}, metadata });
+    const diagnostics = transfer.inspectLibrary([first, second], {});
+
+    assert.deepEqual(diagnostics.inventoryDuplicateNames, [{ name: 'Same Name', count: 2 }]);
+    assert.equal(diagnostics.fatal, true);
+    assert.equal(first.custom_css, '/* Same Name */');
+    assert.equal(second.custom_css, '/* second */');
+});
+
+test('export diagnostics identify sanitized filename collisions as fatal', () => {
+    const transfer = modules.createThemeTransfer({ schema, runtime: makeRuntimeForTransfer([]), transactions: {}, metadata });
+    const diagnostics = transfer.inspectLibrary([
+        completeTheme('Folder/Theme'),
+        completeTheme('Folder\\Theme'),
+    ], {});
+
+    assert.equal(diagnostics.sanitizedFilenameCollisions.length, 1);
+    assert.equal(diagnostics.fatal, true);
+});
+
+test('export diagnostics classify malformed theme objects as fatal without throwing', () => {
+    const transfer = modules.createThemeTransfer({ schema, runtime: makeRuntimeForTransfer([]), transactions: {}, metadata });
+    const diagnostics = transfer.inspectLibrary([{ name: 'Only Name' }, null], {});
+
+    assert.equal(diagnostics.invalidThemeObjects.length, 2);
+    assert.equal(diagnostics.fatal, true);
+});
+
+test('orphan and empty metadata are warnings and only current meaningful annotations are counted', () => {
+    const themeMeta = {
+        Current: { category: '分类' },
+        Empty: {},
+        Deleted: { tags: ['orphan'] },
+    };
+    const diagnostics = metadata.inspect(['Current', 'Empty', 'No Meta'], themeMeta);
+
+    assert.equal(diagnostics.annotatedCount, 1);
+    assert.deepEqual(diagnostics.annotatedNames, ['Current']);
+    assert.deepEqual(diagnostics.orphanMetadata, ['Deleted']);
+    assert.deepEqual(diagnostics.emptyMetadata, ['Empty']);
+    assert.deepEqual(diagnostics.inventoryWithoutMetadata, ['No Meta']);
+    assert.deepEqual(Object.keys(themeMeta), ['Current', 'Empty', 'Deleted']);
+});
+
+test('read-only metadata lookup for 1000 themes creates no empty records', () => {
+    const data = { themeMeta: {} };
+    for (let index = 0; index < 1000; index += 1) {
+        assert.equal(metadata.peekMeta(data, `Theme ${index}`).category, '');
+    }
+    assert.equal(Object.keys(data.themeMeta).length, 0);
+});
+
+test('metadata records are created only by an explicit write', () => {
+    const data = { themeMeta: {} };
+    metadata.peekMeta(data, 'Write Later');
+    assert.equal(data.themeMeta['Write Later'], undefined);
+
+    metadata.ensureMeta(data, 'Write Later').category = '分类';
+    assert.equal(data.themeMeta['Write Later'].category, '分类');
+});
+
+test('ordinary category metadata round trip preserves classified and unclassified themes', () => {
+    const target = { categories: [], themeMeta: {} };
+    metadata.mergeImported(target, ['A', 'B', 'C'], {
+        A: { category: 'X', tags: ['red'], author: 'Alice', description: 'note' },
+        B: { category: 'Y' },
+        C: { category: '' },
+    }, ['X', 'Y'], { forceCategory: true });
+
+    assert.deepEqual(target.categories, ['X', 'Y']);
+    assert.equal(target.themeMeta.A.category, 'X');
+    assert.equal(target.themeMeta.B.category, 'Y');
+    assert.equal(target.themeMeta.C.category, '');
+    assert.deepEqual(target.themeMeta.A.tags, ['red']);
+    assert.equal(target.themeMeta.A.author, 'Alice');
+    assert.equal(target.themeMeta.A.description, 'note');
+});
+
+test('empty and special-character category definitions survive metadata round trip in order', () => {
+    const categories = ['空分类', '夜/日 ✨', '引号「测试」'];
+    const target = { categories: [], themeMeta: {} };
+    metadata.mergeImported(target, ['A'], { A: { category: '夜/日 ✨' } }, categories);
+
+    assert.deepEqual(target.categories, categories);
+    assert.equal(target.themeMeta.A.category, '夜/日 ✨');
 });
 
 test('import rejects marker and name-only inputs before capturing a baseline or saving', async () => {
@@ -2045,6 +2247,50 @@ test('day-night pair export and import preserve both real themes and the logical
     assert.equal(outcome.skipped, 0);
     assert.equal(outcome.idMap['pair-export'], 'pair-export');
     assert.equal(pairs.getPair(target, 'pair-export').nightTheme, 'Dark');
+    assert.equal(pairs.getPair(target, 'pair-export').meta.category, 'Series');
+});
+
+test('pair import reports missing members and preserves safe theme metadata', () => {
+    const target = { categories: [], themeMeta: {} };
+    metadata.mergeImported(target, ['Light'], { Light: { category: 'Safe', tags: ['kept'] } }, ['Safe']);
+    const outcome = pairs.importPairs(target, [{
+        id: 'missing-pair',
+        name: 'Incomplete Pair',
+        dayTheme: 'Light',
+        nightTheme: 'Missing',
+        meta: { category: 'Pair Category' },
+    }], ['Light']);
+
+    assert.equal(outcome.imported, 0);
+    assert.equal(outcome.diagnostics[0].reason, 'missing-theme');
+    assert.deepEqual(outcome.diagnostics[0].members, ['Missing']);
+    assert.equal(target.themeMeta.Light.category, 'Safe');
+    assert.deepEqual(target.themeMeta.Light.tags, ['kept']);
+});
+
+test('pair member conflicts are diagnosed without replacing the existing relationship', () => {
+    const target = { themeMeta: {} };
+    pairs.createPair(target, { id: 'local', name: 'Local', dayTheme: 'A', nightTheme: 'B' });
+    const outcome = pairs.importPairs(target, [{ id: 'incoming', name: 'Incoming', dayTheme: 'A', nightTheme: 'C' }], ['A', 'B', 'C']);
+
+    assert.equal(outcome.imported, 0);
+    assert.equal(outcome.diagnostics[0].reason, 'member-conflict');
+    assert.equal(pairs.getPair(target, 'local').nightTheme, 'B');
+    assert.equal(pairs.getPair(target, 'incoming'), null);
+});
+
+test('pair ensureState diagnostics expose records that normalization would discard', () => {
+    const data = { dayNight: { pairs: {
+        first: { id: 'first', name: 'First', dayTheme: 'A', nightTheme: 'B' },
+        second: { id: 'second', name: 'Second', dayTheme: 'A', nightTheme: 'C' },
+    } } };
+    const diagnostics = pairs.inspectState(data);
+
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].reason, 'member-conflict');
+    assert.equal(Object.keys(data.dayNight.pairs).length, 2);
+    pairs.ensureState(data);
+    assert.deepEqual(Object.keys(data.dayNight.pairs), ['first']);
 });
 
 test('series groups ordinary and day-night logical items without changing their theme data', () => {
@@ -2144,6 +2390,7 @@ test('series export and import require every member and remap day-night pair ids
         { kind: 'theme', themeName: 'Solo' },
         { kind: 'day-night', pairId: 'pair-new' },
     ]);
+    assert.equal(series.getSeries(target, 'series-export').category, 'Sets');
 
     const incomplete = {};
     const skipped = series.importSeries(incomplete, series.exportSeries(source, ['Solo'], ['pair-old']), {
@@ -2153,6 +2400,99 @@ test('series export and import require every member and remap day-night pair ids
     });
     assert.equal(skipped.imported, 0);
     assert.equal(series.listSeries(incomplete).length, 0);
+});
+
+test('series partial-member diagnostics preserve safe metadata and do not fabricate a group', () => {
+    const target = { categories: [], themeMeta: {} };
+    metadata.mergeImported(target, ['First'], { First: { category: 'Safe', author: 'Alice' } }, ['Safe']);
+    const outcome = series.importSeries(target, [{
+        id: 'partial-series',
+        name: 'Partial',
+        category: 'Series Category',
+        members: [
+            { kind: 'theme', themeName: 'First' },
+            { kind: 'theme', themeName: 'Missing' },
+        ],
+    }], { availableThemeNames: ['First'], availablePairIds: [] });
+
+    assert.equal(outcome.imported, 0);
+    assert.equal(outcome.diagnostics[0].reason, 'incomplete-members');
+    assert.equal(outcome.diagnostics[0].category, 'Series Category');
+    assert.equal(target.themeMeta.First.category, 'Safe');
+    assert.equal(target.themeMeta.First.author, 'Alice');
+    assert.equal(series.listSeries(target).length, 0);
+});
+
+test('series member conflicts are diagnosed without replacing a legal local group', () => {
+    const target = {};
+    series.createSeries(target, {
+        id: 'local-series',
+        name: 'Local',
+        members: [{ kind: 'theme', themeName: 'A' }, { kind: 'theme', themeName: 'B' }],
+    });
+    const outcome = series.importSeries(target, [{
+        id: 'incoming-series',
+        name: 'Incoming',
+        members: [{ kind: 'theme', themeName: 'A' }, { kind: 'theme', themeName: 'C' }],
+    }], { availableThemeNames: ['A', 'B', 'C'], availablePairIds: [] });
+
+    assert.equal(outcome.imported, 0);
+    assert.equal(outcome.diagnostics[0].reason, 'member-conflict');
+    assert.deepEqual(series.getSeries(target, 'local-series').members, [
+        { kind: 'theme', themeName: 'A' },
+        { kind: 'theme', themeName: 'B' },
+    ]);
+    assert.equal(series.getSeries(target, 'incoming-series'), null);
+});
+
+test('series ensureState diagnostics expose overlapping records before normalization', () => {
+    const data = { series: { groups: {
+        first: { id: 'first', name: 'First', members: [{ kind: 'theme', themeName: 'A' }, { kind: 'theme', themeName: 'B' }] },
+        second: { id: 'second', name: 'Second', members: [{ kind: 'theme', themeName: 'A' }, { kind: 'theme', themeName: 'C' }] },
+    } } };
+    const diagnostics = series.inspectState(data);
+
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].reason, 'member-conflict');
+    assert.equal(Object.keys(data.series.groups).length, 2);
+    series.ensureState(data);
+    assert.equal(series.getSeries(data, 'first').members.length, 2);
+    assert.equal(series.getSeries(data, 'second'), null);
+});
+
+test('mixed category pair and series data survive an export-import round trip', () => {
+    const source = { categories: ['Ordinary', 'Pairs', 'Series'], themeMeta: {} };
+    metadata.mergeImported(source, ['Solo', 'Day', 'Night', 'Series A'], {
+        Solo: { category: 'Ordinary', tags: ['solo'], author: 'A', description: 'note' },
+        Day: { imageData: 'day.png' },
+        Night: { imageData: 'night.png' },
+        'Series A': { tags: ['member'] },
+    }, source.categories);
+    pairs.createPair(source, { id: 'mixed-pair', name: 'Mixed Pair', dayTheme: 'Day', nightTheme: 'Night', meta: { category: 'Pairs', author: 'Pair Author' } });
+    series.createSeries(source, {
+        id: 'mixed-series',
+        name: 'Mixed Series',
+        category: 'Series',
+        members: [{ kind: 'theme', themeName: 'Solo' }, { kind: 'theme', themeName: 'Series A' }],
+    });
+    const exportedPairs = pairs.exportPairs(source, ['Solo', 'Day', 'Night', 'Series A']);
+    const exportedSeries = series.exportSeries(source, ['Solo', 'Series A'], exportedPairs.map((pair) => pair.id));
+    const target = { categories: [], themeMeta: {} };
+
+    metadata.mergeImported(target, ['Solo', 'Day', 'Night', 'Series A'], source.themeMeta, source.categories);
+    const pairOutcome = pairs.importPairs(target, exportedPairs, ['Solo', 'Day', 'Night', 'Series A']);
+    const seriesOutcome = series.importSeries(target, exportedSeries, {
+        availableThemeNames: ['Solo', 'Day', 'Night', 'Series A'],
+        availablePairIds: Object.keys(pairs.ensureState(target).pairs),
+        pairIdMap: pairOutcome.idMap,
+        requirePairIdMap: true,
+    });
+
+    assert.deepEqual(target.categories, source.categories);
+    assert.equal(target.themeMeta.Solo.category, 'Ordinary');
+    assert.equal(pairs.getPair(target, 'mixed-pair').meta.category, 'Pairs');
+    assert.equal(series.getSeries(target, 'mixed-series').category, 'Series');
+    assert.equal(seriesOutcome.imported, 1);
 });
 
 test('series export skips the whole group when any member is outside the export', () => {
@@ -2192,7 +2532,9 @@ test('series import skips the whole group when any member is unavailable', () =>
         availablePairIds: ['pair-target'],
         pairIdMap: { 'pair-source': 'pair-target' },
     });
-    assert.deepEqual(themeOutcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.equal(themeOutcome.imported, 0);
+    assert.equal(themeOutcome.skipped, 1);
+    assert.equal(themeOutcome.diagnostics[0].reason, 'incomplete-members');
     assert.deepEqual(series.listSeries(missingTheme), []);
 
     const missingPair = {};
@@ -2201,7 +2543,9 @@ test('series import skips the whole group when any member is unavailable', () =>
         availablePairIds: [],
         pairIdMap: {},
     });
-    assert.deepEqual(pairOutcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.equal(pairOutcome.imported, 0);
+    assert.equal(pairOutcome.skipped, 1);
+    assert.equal(pairOutcome.diagnostics[0].reason, 'incomplete-members');
     assert.deepEqual(series.listSeries(missingPair), []);
 });
 
@@ -2231,7 +2575,9 @@ test('series import rejects ordinary targets already represented by a local day-
         availablePairIds: ['pair-local'],
     });
 
-    assert.deepEqual(outcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.equal(outcome.imported, 0);
+    assert.equal(outcome.skipped, 1);
+    assert.equal(outcome.diagnostics[0].reason, 'incomplete-members');
     assert.deepEqual(series.listSeries(data), []);
 });
 
@@ -2262,7 +2608,9 @@ test('series import does not reuse a skipped source pair id that belongs to a lo
         skippedPairIds: ['pair-source'],
     });
 
-    assert.deepEqual(outcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.equal(outcome.imported, 0);
+    assert.equal(outcome.skipped, 1);
+    assert.equal(outcome.diagnostics[0].reason, 'incomplete-members');
     assert.deepEqual(series.listSeries(data), []);
 });
 
@@ -2294,7 +2642,9 @@ test('series import can require an explicit pair id mapping instead of reusing a
         requirePairIdMap: true,
     });
 
-    assert.deepEqual(outcome, { imported: 0, skipped: 1, idMap: {} });
+    assert.equal(outcome.imported, 0);
+    assert.equal(outcome.skipped, 1);
+    assert.equal(outcome.diagnostics[0].reason, 'incomplete-members');
     assert.deepEqual(series.listSeries(data), []);
 });
 
@@ -2323,11 +2673,13 @@ test('series import is idempotent for an already imported group', () => {
         imported: 1,
         skipped: 0,
         idMap: { 'series-idempotent': 'series-idempotent' },
+        diagnostics: [],
     });
     assert.deepEqual(second, {
         imported: 0,
         skipped: 1,
         idMap: { 'series-idempotent': 'series-idempotent' },
+        diagnostics: [{ type: 'series', id: 'series-idempotent', name: 'Idempotent', reason: 'already-present', severity: 'info', mappedId: 'series-idempotent' }],
     });
     assert.deepEqual(data.series, afterFirst);
     assert.equal(series.listSeries(data).length, 1);
