@@ -22,7 +22,11 @@
 
         var dbInstance = null;
         var dataCache = null;
+        var legacyMigrationPending = false;
+        var localWritesAuthorized = false;
         var serverMode = false;
+        var serverDataStatus = 'unknown';
+        var serverWritesAuthorized = false;
         var serverDirty = false;
         var serverPutInFlight = false;
         var serverDebounceTimer = null;
@@ -32,6 +36,9 @@
         var SERVER_RETRY_DELAYS = Array.isArray(opts.serverRetryDelays) && opts.serverRetryDelays.length > 0
             ? opts.serverRetryDelays.slice()
             : [1000, 2000, 4000, 8000, 16000];
+        var SERVER_READ_TIMEOUT_MS = Number(opts.serverReadTimeoutMs) > 0
+            ? Number(opts.serverReadTimeoutMs)
+            : 10000;
         var storageReady = false;
         var storageInitStarted = false;
         var initCallbacks = [];
@@ -81,8 +88,28 @@
             req.onerror = function () { cb(null); };
         }
 
+        function isDataObject(value) {
+            return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+        }
+
+        function readLegacyState() {
+            try {
+                if (typeof localStorage === 'undefined') return { status: 'absent', data: null };
+                var raw = localStorage.getItem(LS_KEY);
+                if (!raw) return { status: 'absent', data: null };
+                var parsed = JSON.parse(raw);
+                if (!isDataObject(parsed)) {
+                    return { status: 'error', data: null, error: new Error('legacy settings are not an object') };
+                }
+                return { status: 'present', data: parsed };
+            } catch (error) {
+                return { status: 'error', data: null, error: error };
+            }
+        }
+
         function loadFromLS() {
-            try { var r = localStorage.getItem(LS_KEY); return r ? JSON.parse(r) : null; } catch (e) { return null; }
+            var legacy = readLegacyState();
+            return legacy.status === 'present' ? legacy.data : null;
         }
 
         function loadSyncFromLS() {
@@ -90,22 +117,72 @@
         }
 
         function readLocalState() {
-            if (localStore && typeof localStore.read === 'function') {
-                return Promise.resolve(localStore.read()).then(function (result) {
-                    result = result || {};
-                    var fallback = result.data || loadFromLS();
+            function fromCurrentResult(result) {
+                result = result || {};
+                var legacy = readLegacyState();
+                var explicitStatus = result.status;
+                var currentStatus = explicitStatus === 'present' || explicitStatus === 'absent' || explicitStatus === 'error'
+                    ? explicitStatus
+                    : (result.hasData === true || isDataObject(result.data) ? 'present' : 'absent');
+
+                if (currentStatus === 'present' && isDataObject(result.data)) {
                     return {
-                        data: fallback,
-                        sync: normalizeSyncState(result.sync || loadSyncFromLS()),
-                        hasData: result.hasData === true || !!fallback,
+                        data: result.data,
+                        sync: normalizeSyncState(result.sync),
+                        hasData: true,
+                        status: 'present',
+                        source: 'current',
                     };
-                });
+                }
+                if (currentStatus === 'absent') {
+                    if (legacy.status === 'present') {
+                        return {
+                            data: legacy.data,
+                            sync: normalizeSyncState(loadSyncFromLS()),
+                            hasData: true,
+                            status: 'absent',
+                            source: 'legacy',
+                        };
+                    }
+                    if (legacy.status === 'error') {
+                        return {
+                            data: null,
+                            sync: normalizeSyncState(result.sync),
+                            hasData: false,
+                            status: 'error',
+                            source: 'legacy',
+                            error: legacy.error,
+                        };
+                    }
+                    return {
+                        data: null,
+                        sync: normalizeSyncState(result.sync),
+                        hasData: false,
+                        status: 'absent',
+                        source: 'none',
+                    };
+                }
+                return {
+                    data: legacy.status === 'present' ? legacy.data : null,
+                    sync: normalizeSyncState(loadSyncFromLS()),
+                    hasData: legacy.status === 'present',
+                    status: 'error',
+                    source: legacy.status === 'present' ? 'legacy' : 'none',
+                    error: result.error || legacy.error || new Error('local settings state is unknown'),
+                };
+            }
+
+            if (localStore && typeof localStore.read === 'function') {
+                return Promise.resolve()
+                    .then(function () { return localStore.read(); })
+                    .then(fromCurrentResult, function (readError) {
+                        return fromCurrentResult({ status: 'error', error: readError });
+                    });
             }
             return new Promise(function (resolve) {
                 openDB(function (db) {
                     if (!db) {
-                        var fallback = loadFromLS();
-                        resolve({ data: fallback, sync: normalizeSyncState(loadSyncFromLS()), hasData: !!fallback });
+                        resolve(fromCurrentResult({ status: 'error', error: new Error('IndexedDB open failed') }));
                         return;
                     }
                     var tx = db.transaction(STORE_NAME, 'readonly');
@@ -117,26 +194,48 @@
                     dataReq.onsuccess = function () { dataResult = dataReq.result; };
                     syncReq.onsuccess = function () { syncResult = syncReq.result; };
                     tx.oncomplete = function () {
-                        var fallback = dataResult || loadFromLS();
-                        resolve({
-                            data: fallback,
-                            sync: normalizeSyncState(syncResult || loadSyncFromLS()),
-                            hasData: dataResult !== undefined && dataResult !== null || !!fallback,
-                        });
+                        if (dataResult !== undefined && dataResult !== null && !isDataObject(dataResult)) {
+                            resolve(fromCurrentResult({ status: 'error', error: new Error('IndexedDB settings are invalid') }));
+                            return;
+                        }
+                        resolve(fromCurrentResult({
+                            data: dataResult,
+                            sync: syncResult,
+                            status: dataResult !== undefined && dataResult !== null ? 'present' : 'absent',
+                        }));
                     };
                     tx.onerror = function () {
-                        var fallback = loadFromLS();
-                        resolve({ data: fallback, sync: normalizeSyncState(loadSyncFromLS()), hasData: !!fallback });
+                        resolve(fromCurrentResult({ status: 'error', error: tx.error || new Error('IndexedDB read failed') }));
                     };
                 });
             });
         }
 
+        function completeLegacyMigration() {
+            if (!legacyMigrationPending) return;
+            try {
+                localStorage.removeItem(LS_SYNC_KEY);
+                localStorage.removeItem(LS_KEY);
+                legacyMigrationPending = false;
+            } catch (error) {
+                console.warn('[美化管理] 旧版设置已写入新存储，但旧数据源暂时无法删除:', error);
+            }
+        }
+
         function persistLocalState(data, state) {
+            if (!localWritesAuthorized) {
+                return Promise.reject(new Error('local settings state is not authoritative enough to overwrite'));
+            }
             var dataSnapshot = cloneValue(data);
             var syncSnapshot = cloneValue(normalizeSyncState(state));
             if (localStore && typeof localStore.write === 'function') {
-                return Promise.resolve(localStore.write(dataSnapshot, syncSnapshot)).then(function () { return true; });
+                return Promise.resolve()
+                    .then(function () { return localStore.write(dataSnapshot, syncSnapshot); })
+                    .then(function (result) {
+                        if (result === false) throw new Error('local settings write was not confirmed');
+                        completeLegacyMigration();
+                        return true;
+                    });
             }
             return new Promise(function (resolve, reject) {
                 openDB(function (db) {
@@ -152,7 +251,10 @@
                     var store = tx.objectStore(STORE_NAME);
                     store.put(dataSnapshot, DATA_KEY);
                     store.put(syncSnapshot, SYNC_KEY);
-                    tx.oncomplete = function () { resolve(true); };
+                    tx.oncomplete = function () {
+                        completeLegacyMigration();
+                        resolve(true);
+                    };
                     tx.onerror = function () { reject(tx.error || new Error('IndexedDB write failed')); };
                     tx.onabort = function () { reject(tx.error || new Error('IndexedDB write aborted')); };
                 });
@@ -213,21 +315,113 @@
         }
 
         function detectServer(cb) {
-            fetchFn(SERVER_BASE + '/status', { method: 'GET', credentials: 'same-origin' })
-                .then(function (r) { return r && r.ok ? r.json() : null; })
-                .then(function (j) { cb(!!(j && j.ok)); })
-                .catch(function () { cb(false); });
+            fetchServerRead(SERVER_BASE + '/status', { method: 'GET', credentials: 'same-origin' })
+                .then(function (r) {
+                    if (!r) throw new Error('server status response is missing');
+                    if (r.status === 404) return { status: 'absent' };
+                    if (!r.ok) throw new Error('server status GET rejected');
+                    return readResponseJson(r).then(function (body) {
+                        if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.ok !== 'boolean') {
+                            throw new Error('server status response is invalid');
+                        }
+                        if (body.ok !== true) throw new Error('server status response is not authoritative');
+                        return { status: 'present' };
+                    });
+                })
+                .catch(function (error) { return { status: 'error', error: error }; })
+                .then(function (result) { cb(result); });
+        }
+
+        function fetchServerRead(url, requestOptions) {
+            return new Promise(function (resolve, reject) {
+                var settled = false;
+                var controller = typeof global.AbortController === 'function'
+                    ? new global.AbortController()
+                    : null;
+                var options = Object.assign({}, requestOptions || {});
+                if (controller) options.signal = controller.signal;
+                var timer = setTimeoutFn(function () {
+                    if (settled) return;
+                    settled = true;
+                    if (controller) {
+                        try { controller.abort(); } catch (e) {}
+                    }
+                    reject(new Error('server settings read timed out'));
+                }, SERVER_READ_TIMEOUT_MS);
+
+                Promise.resolve()
+                    .then(function () { return fetchFn(url, options); })
+                    .then(function (response) {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeoutFn(timer);
+                        resolve(response);
+                    }, function (error) {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeoutFn(timer);
+                        reject(error);
+                    });
+            });
+        }
+
+        function readResponseJson(response) {
+            return new Promise(function (resolve, reject) {
+                var settled = false;
+                var timer = setTimeoutFn(function () {
+                    if (settled) return;
+                    settled = true;
+                    reject(new Error('server settings body read timed out'));
+                }, SERVER_READ_TIMEOUT_MS);
+                Promise.resolve()
+                    .then(function () { return response.json(); })
+                    .then(function (body) {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeoutFn(timer);
+                        resolve(body);
+                    }, function (error) {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeoutFn(timer);
+                        reject(error);
+                    });
+            });
         }
 
         function serverGetData(cb) {
-            fetchFn(SERVER_BASE + '/data', { method: 'GET', credentials: 'same-origin' })
-                .then(function (r) { return r && r.ok ? r.json() : null; })
-                .then(function (j) { cb(j && j.ok ? (j.data || null) : null); })
-                .catch(function () { cb(null); });
+            fetchServerRead(SERVER_BASE + '/data', { method: 'GET', credentials: 'same-origin' })
+                .then(function (r) {
+                    if (!r || !r.ok) {
+                        throw new Error('server settings GET rejected');
+                    }
+                    return readResponseJson(r);
+                })
+                .then(function (j) {
+                    if (!j || typeof j !== 'object' || Array.isArray(j) || j.ok !== true
+                        || !Object.prototype.hasOwnProperty.call(j, 'data')) {
+                        throw new Error('server settings GET returned an invalid body');
+                    }
+                    if (j.data === null) return { status: 'absent' };
+                    if (typeof j.data === 'object' && !Array.isArray(j.data)) {
+                        return { status: 'present', data: j.data };
+                    }
+                    throw new Error('server settings GET returned invalid data');
+                })
+                .catch(function (error) {
+                    return { status: 'error', error: error };
+                })
+                .then(function (result) { cb(result); });
+        }
+
+        function canWriteServerData() {
+            return localWritesAuthorized
+                && serverWritesAuthorized
+                && (serverDataStatus === 'present' || serverDataStatus === 'absent');
         }
 
         function scheduleServerPut() {
-            if (!serverMode || !dataCache) return;
+            if (!serverMode || !dataCache || !canWriteServerData()) return;
             serverDirty = true;
             if (serverPutInFlight) return;
             if (serverDebounceTimer) clearTimeoutFn(serverDebounceTimer);
@@ -239,7 +433,8 @@
         }
 
         function scheduleServerRetry() {
-            if (!serverMode || !syncState.pendingServerSync || serverRetryTimer || serverPutInFlight) return;
+            if (!serverMode || !canWriteServerData() || !syncState.pendingServerSync
+                || serverRetryTimer || serverPutInFlight) return;
             if (serverRetryAttempt >= SERVER_RETRY_DELAYS.length) {
                 flushWaiters.splice(0).forEach(function (waiter) { waiter.resolve(false); });
                 return;
@@ -263,7 +458,7 @@
         }
 
         function serverPutDataNow(cb) {
-            if (!serverMode || !dataCache) { if (cb) cb(false); return; }
+            if (!serverMode || !dataCache || !canWriteServerData()) { if (cb) cb(false); return; }
             if (serverPutInFlight) { serverDirty = true; if (cb) cb(false); return; }
             if (serverDebounceTimer) { clearTimeoutFn(serverDebounceTimer); serverDebounceTimer = null; }
             if (serverRetryTimer) { clearTimeoutFn(serverRetryTimer); serverRetryTimer = null; }
@@ -322,6 +517,7 @@
             }).then(function (localOk) {
                 if (!localOk) return false;
                 if (!serverMode || !syncState.pendingServerSync) return true;
+                if (!canWriteServerData()) return false;
                 var targetRevision = syncState.localRevision;
                 return new Promise(function (resolve) {
                     flushWaiters.push({ revision: targetRevision, resolve: resolve });
@@ -350,7 +546,7 @@
         }
 
         function uploadImage(dataUrl, cb) {
-            if (!serverMode || !isDataImage(dataUrl)) { cb(null, dataUrl); return; }
+            if (!serverMode || !canWriteServerData() || !isDataImage(dataUrl)) { cb(null, dataUrl); return; }
             getPostHeaders()
                 .then(function (headers) {
                     return fetchFn(SERVER_BASE + '/images', {
@@ -378,6 +574,11 @@
                 } else result[url] = url;
             });
             if (serverUrls.length === 0) { cb(result); return; }
+            if (!serverMode || !canWriteServerData()) {
+                serverUrls.forEach(function (url) { result[url] = url; });
+                cb(result);
+                return;
+            }
             getPostHeaders()
                 .then(function (headers) {
                     return fetchFn(SERVER_BASE + '/images/batch-fetch', {
@@ -418,7 +619,7 @@
         }
 
         function migrateImagesToServer(d, cb) {
-            if (!serverMode || !d) { if (cb) cb(false); return; }
+            if (!serverMode || !canWriteServerData() || !d) { if (cb) cb(false); return; }
             var refs = collectImageFields(d).filter(function (ref) { return isDataImage(ref.value); });
             if (refs.length === 0) { if (cb) cb(false); return; }
             var idx = 0;
@@ -456,20 +657,36 @@
             storageReady = true;
             readyResolve(dataCache);
             drainInitCallbacks();
-            if (serverMode && syncState.pendingServerSync) {
+            if (serverMode && canWriteServerData() && syncState.pendingServerSync) {
                 serverDirty = true;
                 serverPutDataNow();
             }
         }
 
-        function persistThenFinish() {
-            queueLocalPersist().catch(function () { return false; }).then(finishStorageInit);
+        function persistThenFinish(requireDurableBeforeServerWrite) {
+            queueLocalPersist().then(finishStorageInit, function () {
+                if (requireDurableBeforeServerWrite) serverWritesAuthorized = false;
+                finishStorageInit();
+            });
         }
 
-        function finishWithImageMigration() {
+        function finishWithImageMigration(requireDurableBeforeServerWrite) {
+            if (requireDurableBeforeServerWrite) {
+                queueLocalPersist().then(function () {
+                    migrateImagesToServer(dataCache, function (changed) {
+                        if (changed) markPendingMutation();
+                        if (changed) persistThenFinish(true);
+                        else finishStorageInit();
+                    });
+                }, function () {
+                    serverWritesAuthorized = false;
+                    finishStorageInit();
+                });
+                return;
+            }
             migrateImagesToServer(dataCache, function (changed) {
                 if (changed) markPendingMutation();
-                persistThenFinish();
+                persistThenFinish(false);
             });
         }
 
@@ -480,43 +697,78 @@
             storageInitStarted = true;
 
             readLocalState().then(function (local) {
+                localWritesAuthorized = local.status !== 'error';
+                legacyMigrationPending = local.status === 'absent' && local.source === 'legacy';
                 syncState = normalizeSyncState(local.sync);
                 dataCache = ensureDefaults(local.data);
-                detectServer(function (ok) {
-                    serverMode = !!ok;
+                detectServer(function (statusResult) {
+                    serverMode = statusResult.status === 'present';
+                    serverDataStatus = 'unknown';
+                    serverWritesAuthorized = false;
+                    if (statusResult.status === 'error') {
+                        if (local.status !== 'present') localWritesAuthorized = false;
+                        console.warn('[美化管理] 后端状态读取失败，本次会话禁止自动迁移或写入:', statusResult.error);
+                        finishStorageInit();
+                        return;
+                    }
                     if (!serverMode) {
-                        persistThenFinish();
+                        if (local.status === 'error') finishStorageInit();
+                        else persistThenFinish();
                         return;
                     }
 
-                    // An unacknowledged local revision is the newest durable truth.
-                    // Never replace it with an older GET response after restart.
-                    if (local.hasData && syncState.pendingServerSync) {
-                        serverDirty = true;
-                        finishWithImageMigration();
-                        return;
-                    }
+                    serverGetData(function (result) {
+                        serverDataStatus = result.status;
+                        if (result.status === 'error') {
+                            if (local.status !== 'present') localWritesAuthorized = false;
+                            console.warn('[美化管理] 后端设置读取失败，本次会话保留本地数据且禁止覆盖后端:', result.error);
+                            finishStorageInit();
+                            return;
+                        }
 
-                    serverGetData(function (serverData) {
-                        if (serverData && typeof serverData === 'object') {
-                            dataCache = ensureDefaults(serverData);
+                        if (result.status === 'present') {
+                            if (local.status === 'error') {
+                                serverWritesAuthorized = false;
+                                console.warn('[美化管理] 本地设置读取状态不明，已禁止自动覆盖本地或后端存储。');
+                                finishStorageInit();
+                                return;
+                            }
+                            serverWritesAuthorized = true;
+                            if (local.hasData && syncState.pendingServerSync) {
+                                serverDirty = true;
+                                finishWithImageMigration(local.source === 'legacy');
+                                return;
+                            }
+                            legacyMigrationPending = false;
+                            dataCache = ensureDefaults(result.data);
                             syncState.pendingServerSync = false;
                             syncState.lastAckRevision = syncState.localRevision;
                             finishWithImageMigration();
                             return;
                         }
 
-                        // The server has no settings yet. Seed it from the local
-                        // snapshot (or defaults) and persist the pending marker first.
+                        // Only the backend's explicit { ok: true, data: null }
+                        // response authorizes a first seed. A failed local read is
+                        // not authoritative enough to choose a seed snapshot.
+                        if (local.status === 'error') {
+                            legacyMigrationPending = false;
+                            serverWritesAuthorized = false;
+                            console.warn('[美化管理] 本地设置读取状态不明，已禁止自动初始化空的后端存储。');
+                            finishStorageInit();
+                            return;
+                        }
+                        serverWritesAuthorized = true;
                         markPendingMutation();
-                        finishWithImageMigration();
+                        finishWithImageMigration(true);
                     });
                 });
             }).catch(function (err) {
                 console.warn('[美化管理] 存储初始化失败，使用安全默认设置:', err);
+                legacyMigrationPending = false;
+                localWritesAuthorized = false;
                 dataCache = ensureDefaults(null);
                 syncState = createSyncState();
-                persistThenFinish();
+                finishStorageInit();
             });
             return readyPromise;
         }
@@ -535,7 +787,7 @@
             collectImageFields: collectImageFields,
             isDataImage: isDataImage,
             isServerImage: isServerImage,
-            getServerMode: function () { return serverMode; },
+            getServerMode: function () { return serverMode && canWriteServerData(); },
             getSyncState: function () { return cloneValue(syncState); },
         };
     };

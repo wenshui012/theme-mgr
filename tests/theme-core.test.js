@@ -71,7 +71,10 @@ function createStorageTestHarness(options) {
     const config = options || {};
     const shared = config.shared || { data: null, sync: null };
     const puts = [];
+    const imagePosts = [];
+    const imageBatchPosts = [];
     let getCount = 0;
+    let localWriteCount = 0;
     const putFactory = config.putFactory || (() => {
         const request = deferred();
         request.resolve({ ok: true, json: async () => ({ ok: true }) });
@@ -80,10 +83,15 @@ function createStorageTestHarness(options) {
     const fetch = (url, requestOptions) => {
         const method = requestOptions && requestOptions.method || 'GET';
         if (url.endsWith('/status')) {
-            return Promise.resolve({ ok: true, json: async () => ({ ok: config.server !== false }) });
+            if (typeof config.statusFactory === 'function') return config.statusFactory();
+            if (config.server === false) {
+                return Promise.resolve({ ok: false, status: 404, json: async () => ({ ok: false }) });
+            }
+            return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) });
         }
         if (url.endsWith('/data') && method === 'GET') {
             getCount += 1;
+            if (typeof config.getFactory === 'function') return config.getFactory(getCount);
             return Promise.resolve({
                 ok: true,
                 json: async () => ({ ok: true, data: clone(config.serverData === undefined ? { value: 'server' } : config.serverData) }),
@@ -94,6 +102,14 @@ function createStorageTestHarness(options) {
             puts.push({ body: JSON.parse(requestOptions.body), pending });
             return pending.promise;
         }
+        if (url.endsWith('/images') && method === 'POST') {
+            imagePosts.push(JSON.parse(requestOptions.body));
+            return Promise.resolve({ ok: true, json: async () => ({ ok: true, url: '/server/images/test.png' }) });
+        }
+        if (url.endsWith('/images/batch-fetch') && method === 'POST') {
+            imageBatchPosts.push(JSON.parse(requestOptions.body));
+            return Promise.resolve({ ok: true, json: async () => ({ ok: true, images: {} }) });
+        }
         throw new Error(`unexpected fetch: ${method} ${url}`);
     };
     const storage = modules.createStorage({
@@ -103,23 +119,60 @@ function createStorageTestHarness(options) {
         DATA_KEY: 'data',
         SERVER_BASE: '/server',
         SERVER_IMAGE_PREFIX: '/server/images/',
-        IMAGE_FIELD_KEYS: {},
+        IMAGE_FIELD_KEYS: config.imageFieldKeys || {},
         ensureDefaults(value) { return Object.assign({ value: 'default' }, value || {}); },
         getPostHeaders() { return Promise.resolve({ 'Content-Type': 'application/json' }); },
         fetch,
         localStore: {
             read() {
+                if (config.localReadError) throw config.localReadError;
+                if (Object.prototype.hasOwnProperty.call(config, 'localReadResult')) {
+                    return clone(config.localReadResult);
+                }
                 return { data: clone(shared.data), sync: clone(shared.sync), hasData: !!shared.data };
             },
             write(data, sync) {
+                localWriteCount += 1;
+                if (config.localWriteError) throw config.localWriteError;
+                if (typeof config.localWriteFactory === 'function') {
+                    return Promise.resolve(config.localWriteFactory(clone(data), clone(sync), localWriteCount))
+                        .then((result) => {
+                            if (result === false) return false;
+                            shared.data = clone(data);
+                            shared.sync = clone(sync);
+                            return result;
+                        });
+                }
                 shared.data = clone(data);
                 shared.sync = clone(sync);
             },
         },
         serverDebounceMs: config.serverDebounceMs === undefined ? 0 : config.serverDebounceMs,
         serverRetryDelays: config.serverRetryDelays || [0, 0, 0],
+        serverReadTimeoutMs: config.serverReadTimeoutMs,
     });
-    return { storage, shared, puts, getCount: () => getCount };
+    return {
+        storage,
+        shared,
+        puts,
+        imagePosts,
+        imageBatchPosts,
+        getCount: () => getCount,
+        localWriteCount: () => localWriteCount,
+    };
+}
+
+function createMemoryLocalStorage(initial) {
+    const values = new Map(Object.entries(initial || {}));
+    const removed = [];
+    return {
+        getItem(key) { return values.has(key) ? values.get(key) : null; },
+        setItem(key, value) { values.set(key, String(value)); },
+        removeItem(key) { removed.push(key); values.delete(key); },
+        has(key) { return values.has(key); },
+        value(key) { return values.get(key); },
+        removed,
+    };
 }
 
 function initTestStorage(storage) {
@@ -229,11 +282,568 @@ test('pending local snapshot survives recreation and takes precedence over stale
     await initTestStorage(second.storage);
     await waitFor(() => second.puts.length === 1);
 
-    assert.equal(second.getCount(), 0);
+    assert.equal(second.getCount(), 1);
     assert.equal(second.storage.load().value, 'local-new');
     assert.equal(second.puts[0].body.value, 'local-new');
     secondRequests[0].resolve({ ok: true, json: async () => ({ ok: true }) });
     assert.equal(await second.storage.flush(), true);
+});
+
+test('backend data HTTP failure keeps the server untouched', async () => {
+    const harness = createStorageTestHarness({
+        getFactory() {
+            return Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false }) });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(harness.puts.length, 0);
+    assert.equal(harness.storage.getSyncState().pendingServerSync, false);
+});
+
+test('backend data fetch rejection keeps the server untouched', async () => {
+    const harness = createStorageTestHarness({
+        getFactory() { return Promise.reject(new Error('connection reset')); },
+    });
+
+    await initTestStorage(harness.storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(harness.puts.length, 0);
+});
+
+test('backend data timeout becomes an error and releases storage readiness without a PUT', async () => {
+    const harness = createStorageTestHarness({
+        serverReadTimeoutMs: 5,
+        getFactory() { return new Promise(() => {}); },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.isReady(), true);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(harness.storage.getServerMode(), false);
+});
+
+test('backend data body timeout becomes an error and releases storage readiness without a PUT', async () => {
+    const harness = createStorageTestHarness({
+        serverReadTimeoutMs: 5,
+        getFactory() {
+            return Promise.resolve({ ok: true, json: () => new Promise(() => {}) });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.isReady(), true);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(harness.storage.getServerMode(), false);
+});
+
+test('backend status error keeps an absent legacy migration source untouched', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const legacyRaw = JSON.stringify({ value: 'legacy-status-recovery' });
+    const memory = createMemoryLocalStorage({ theme_mgr_v2: legacyRaw });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        statusFactory() { return Promise.reject(new Error('status offline')); },
+    });
+
+    await initTestStorage(harness.storage);
+    await assert.rejects(
+        harness.storage.save({ value: 'must-stay-session-only' }),
+        /not authoritative enough to overwrite/,
+    );
+
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.value('theme_mgr_v2'), legacyRaw);
+});
+
+test('backend status ok false is an error and cannot authorize legacy migration', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const legacyRaw = JSON.stringify({ value: 'legacy-status-ok-false' });
+    const memory = createMemoryLocalStorage({ theme_mgr_v2: legacyRaw });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        statusFactory() {
+            return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: false }) });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(memory.value('theme_mgr_v2'), legacyRaw);
+});
+
+test('backend data invalid JSON keeps the server untouched', async () => {
+    const harness = createStorageTestHarness({
+        getFactory() {
+            return Promise.resolve({
+                ok: true,
+                json: async () => { throw new SyntaxError('invalid JSON'); },
+            });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(harness.puts.length, 0);
+});
+
+test('backend data ok false body keeps the server untouched', async () => {
+    const harness = createStorageTestHarness({
+        getFactory() {
+            return Promise.resolve({ ok: true, json: async () => ({ ok: false, data: null }) });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(harness.puts.length, 0);
+});
+
+test('only an explicit authoritative absent response permits the first server seed', async () => {
+    const harness = createStorageTestHarness({ serverData: null });
+
+    await initTestStorage(harness.storage);
+    await waitFor(() => harness.puts.length === 1, 'authoritative absent did not seed the server');
+
+    assert.equal(harness.getCount(), 1);
+    assert.equal(harness.puts[0].body.value, 'default');
+});
+
+test('local data remains usable after backend GET error without any server write', async () => {
+    const shared = { data: { value: 'local-safe' }, sync: null };
+    const harness = createStorageTestHarness({
+        shared,
+        getFactory() { return Promise.reject(new Error('offline')); },
+    });
+
+    await initTestStorage(harness.storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(harness.storage.load().value, 'local-safe');
+    assert.equal(harness.puts.length, 0);
+});
+
+test('pending local data remains pending after backend GET error and flush stays fail closed', async () => {
+    const shared = {
+        data: { value: 'pending-local' },
+        sync: { localRevision: 4, lastAckRevision: 3, pendingServerSync: true },
+    };
+    const harness = createStorageTestHarness({
+        shared,
+        getFactory() { return Promise.reject(new Error('offline')); },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.getSyncState().pendingServerSync, true);
+    assert.equal(await harness.storage.flush(), false);
+    assert.equal(harness.puts.length, 0);
+});
+
+test('backend GET error blocks image uploads until server data authority is re-established', async () => {
+    const harness = createStorageTestHarness({
+        getFactory() { return Promise.reject(new Error('offline')); },
+    });
+
+    await initTestStorage(harness.storage);
+    const originalDataUrl = 'data:image/png;base64,AAAA';
+    const resolvedUrl = await new Promise((resolve) => {
+        harness.storage.uploadImage(originalDataUrl, (_error, url) => resolve(url));
+    });
+
+    assert.equal(resolvedUrl, originalDataUrl);
+    assert.equal(harness.imagePosts.length, 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(harness.storage.getServerMode(), false);
+});
+
+test('backend GET error blocks image batch requests until server data authority is re-established', async () => {
+    const harness = createStorageTestHarness({
+        getFactory() { return Promise.reject(new Error('offline')); },
+    });
+
+    await initTestStorage(harness.storage);
+    const url = '/server/images/example.png';
+    const images = await new Promise((resolve) => {
+        harness.storage.batchResolveImages([url], resolve);
+    });
+
+    assert.deepEqual(images, { [url]: url });
+    assert.equal(harness.imageBatchPosts.length, 0);
+});
+
+test('backend GET error cannot promote generated defaults into a later pending overwrite', async () => {
+    const shared = { data: null, sync: null };
+    const first = createStorageTestHarness({
+        shared,
+        getFactory() { return Promise.reject(new Error('offline')); },
+    });
+
+    await initTestStorage(first.storage);
+    await assert.rejects(
+        first.storage.save({ value: 'default-derived-session' }),
+        /not authoritative enough to overwrite/,
+    );
+
+    assert.equal(shared.data, null);
+    assert.equal(first.puts.length, 0);
+
+    const second = createStorageTestHarness({ shared, serverData: { value: 'server-correct' } });
+    await initTestStorage(second.storage);
+
+    assert.equal(second.storage.load().value, 'server-correct');
+    assert.equal(second.puts.length, 0);
+});
+
+test('existing current data is never replaced by a legacy snapshot selected only by themeMeta', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const legacy = {
+        themeMeta: { Old: { note: 'legacy' } },
+        categories: ['Legacy'],
+        settings: 'old',
+    };
+    const memory = createMemoryLocalStorage({ theme_mgr_v2: JSON.stringify(legacy) });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const current = {
+        themeMeta: {},
+        categories: ['A'],
+        pairs: [{ id: 'pair-current' }],
+        bindings: { manualTarget: 'Current' },
+        settings: 'new',
+    };
+    const harness = createStorageTestHarness({
+        server: false,
+        shared: { data: clone(current), sync: null },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.deepEqual(harness.storage.load().themeMeta, {});
+    assert.deepEqual(harness.storage.load().categories, ['A']);
+    assert.deepEqual(harness.storage.load().pairs, [{ id: 'pair-current' }]);
+    assert.deepEqual(harness.storage.load().bindings, { manualTarget: 'Current' });
+    assert.equal(harness.storage.load().settings, 'new');
+    assert.equal(memory.has('theme_mgr_v2'), true);
+    assert.equal(harness.puts.length, 0);
+});
+
+test('genuinely absent current storage may migrate a valid legacy snapshot', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const legacy = { value: 'legacy-safe', themeMeta: { Old: { note: 'kept' } } };
+    const memory = createMemoryLocalStorage({ theme_mgr_v2: JSON.stringify(legacy) });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const shared = { data: null, sync: null };
+    const harness = createStorageTestHarness({ server: false, shared });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.load().value, 'legacy-safe');
+    assert.equal(shared.data.value, 'legacy-safe');
+    assert.deepEqual(shared.data.themeMeta, legacy.themeMeta);
+});
+
+test('current storage read error cannot turn legacy data into an automatic migration or server seed', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({
+        theme_mgr_v2: JSON.stringify({ value: 'legacy-session-copy', settings: 'old' }),
+    });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        localReadError: new Error('IndexedDB read failed'),
+        serverData: null,
+    });
+
+    await initTestStorage(harness.storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(harness.storage.load().value, 'legacy-session-copy');
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.has('theme_mgr_v2'), true);
+});
+
+test('current storage read error blocks later saves from overwriting the unknown current snapshot', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({
+        theme_mgr_v2: JSON.stringify({ value: 'legacy-session-copy' }),
+    });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        localReadError: new Error('IndexedDB read failed'),
+        serverData: null,
+    });
+
+    await initTestStorage(harness.storage);
+    await assert.rejects(
+        harness.storage.save({ value: 'must-remain-session-only' }),
+        /not authoritative enough to overwrite/,
+    );
+
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.value('theme_mgr_v2'), JSON.stringify({ value: 'legacy-session-copy' }));
+});
+
+test('current storage read error cannot let a present server overwrite local recovery data', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const legacyRaw = JSON.stringify({ value: 'legacy-recovery' });
+    const memory = createMemoryLocalStorage({ theme_mgr_v2: legacyRaw });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        localReadError: new Error('IndexedDB read failed'),
+        serverData: { value: 'server-present' },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.load().value, 'legacy-recovery');
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.value('theme_mgr_v2'), legacyRaw);
+});
+
+test('backend GET error leaves a pending legacy migration source completely untouched', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const legacyRaw = JSON.stringify({ value: 'legacy-pending' });
+    const syncRaw = JSON.stringify({
+        localRevision: 7,
+        lastAckRevision: 6,
+        pendingServerSync: true,
+    });
+    const memory = createMemoryLocalStorage({
+        theme_mgr_v2: legacyRaw,
+        'theme_mgr_v2:sync-state': syncRaw,
+    });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        getFactory() { return Promise.reject(new Error('offline')); },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.value('theme_mgr_v2'), legacyRaw);
+    assert.equal(memory.value('theme_mgr_v2:sync-state'), syncRaw);
+});
+
+test('authoritative pending legacy data survives a present stale server and syncs only after durable migration', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({
+        theme_mgr_v2: JSON.stringify({ value: 'legacy-newer' }),
+        'theme_mgr_v2:sync-state': JSON.stringify({
+            localRevision: 7,
+            lastAckRevision: 6,
+            pendingServerSync: true,
+        }),
+    });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const shared = { data: null, sync: null };
+    const harness = createStorageTestHarness({
+        shared,
+        serverData: { value: 'server-stale' },
+    });
+
+    await initTestStorage(harness.storage);
+    await waitFor(() => harness.puts.length === 1, 'pending legacy snapshot was not synced');
+
+    assert.equal(harness.storage.load().value, 'legacy-newer');
+    assert.equal(shared.data.value, 'legacy-newer');
+    assert.equal(harness.puts[0].body.value, 'legacy-newer');
+    assert.equal(memory.has('theme_mgr_v2'), false);
+});
+
+test('legacy data never inherits an orphan pending sync record from the absent current store', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({
+        theme_mgr_v2: JSON.stringify({ value: 'legacy-not-pending' }),
+        'theme_mgr_v2:sync-state': JSON.stringify({
+            localRevision: 2,
+            lastAckRevision: 2,
+            pendingServerSync: false,
+        }),
+    });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        localReadResult: {
+            status: 'absent',
+            data: null,
+            sync: { localRevision: 9, lastAckRevision: 8, pendingServerSync: true },
+        },
+        serverData: { value: 'server-authoritative' },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.load().value, 'server-authoritative');
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.has('theme_mgr_v2'), true);
+});
+
+test('malformed legacy data is retained and cannot authorize defaults or a server seed', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({ theme_mgr_v2: '{not-json' });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({ serverData: null });
+
+    await initTestStorage(harness.storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.has('theme_mgr_v2'), true);
+});
+
+test('failed legacy migration destination write preserves the legacy source', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({
+        theme_mgr_v2: JSON.stringify({ value: 'legacy-only-copy' }),
+    });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        serverData: null,
+        localWriteError: new Error('quota exceeded'),
+    });
+
+    await initTestStorage(harness.storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(harness.storage.load().value, 'legacy-only-copy');
+    assert.equal(harness.localWriteCount(), 1);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.has('theme_mgr_v2'), true);
+});
+
+test('an unconfirmed local migration write result preserves legacy and blocks server seed', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({
+        theme_mgr_v2: JSON.stringify({ value: 'legacy-unconfirmed' }),
+    });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        serverData: null,
+        localWriteFactory() { return false; },
+    });
+
+    await initTestStorage(harness.storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(harness.localWriteCount(), 1);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.has('theme_mgr_v2'), true);
+});
+
+test('legacy image migration does not upload before the destination is durable', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({
+        theme_mgr_v2: JSON.stringify({ value: 'legacy-image', imageData: 'data:image/png;base64,AAAA' }),
+    });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const harness = createStorageTestHarness({
+        serverData: null,
+        localWriteError: new Error('quota exceeded'),
+        imageFieldKeys: { imageData: true },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.localWriteCount(), 1);
+    assert.equal(harness.imagePosts.length, 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.has('theme_mgr_v2'), true);
+});
+
+test('legacy source is removed only after the migration destination resolves durably', async (t) => {
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({
+        theme_mgr_v2: JSON.stringify({ value: 'legacy-durable' }),
+        'theme_mgr_v2:sync-state': JSON.stringify({ pendingServerSync: false }),
+    });
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+    const destinationWrite = deferred();
+    const harness = createStorageTestHarness({
+        server: false,
+        localWriteFactory() { return destinationWrite.promise; },
+    });
+
+    const initialization = initTestStorage(harness.storage);
+    await waitFor(() => harness.localWriteCount() === 1, 'legacy destination write did not start');
+    assert.equal(memory.has('theme_mgr_v2'), true);
+
+    destinationWrite.resolve(true);
+    await initialization;
+
+    assert.equal(memory.has('theme_mgr_v2'), false);
+    assert.equal(memory.has('theme_mgr_v2:sync-state'), false);
 });
 
 test('FAB stays absent while storage readiness is delayed beyond the former 1.5 second injection', async () => {

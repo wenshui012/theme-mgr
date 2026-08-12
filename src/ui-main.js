@@ -240,8 +240,6 @@
         invalidateLibraryView();
         return storageApi.save(d);
     }
-    function saveToDB(d, cb) { storageApi.saveToDB(d, cb); }
-    function loadFromLS() { return storageApi.loadFromLS(); }
     function initStorage(cb) { storageApi.initStorage(cb); }
     function whenStorageReady() {
         return storageApi && typeof storageApi.whenReady === 'function'
@@ -6207,12 +6205,6 @@
         if (eventsApi) eventsApi.startFabInjection();
 
         initStorage(function (d) {
-            var lsData = loadFromLS();
-            if (lsData && lsData.themeMeta && Object.keys(lsData.themeMeta).length > 0 && (!d.themeMeta || Object.keys(d.themeMeta).length === 0)) {
-                var migratedData = ensureDefaults(lsData);
-                save(migratedData);
-                saveToDB(migratedData, function () { try { localStorage.removeItem('theme_mgr_v2'); } catch (e) {} });
-            }
             if (eventsApi && typeof eventsApi.syncFabVisibility === 'function') eventsApi.syncFabVisibility(d);
             bindColorSchemeListener();
             if (bindingController) bindingController.start();
