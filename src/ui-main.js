@@ -31,6 +31,8 @@
     var themeRuntime = null;
     var themeTransactions = null;
     var themeTransfer = null;
+    var metadataApi = null;
+    var editorDraftApi = null;
     var pairsApi = null;
     var seriesApi = null;
     var bindingsApi = null;
@@ -91,6 +93,7 @@
             var ok = true;
             if (!ok || !modules.themeSchema || !modules.createThemeApi || !modules.createThemeRuntime ||
                 !modules.createThemeTransactions || !modules.createThemeTransfer ||
+                !modules.themeMetadata || !modules.editorDraft ||
                 !modules.themePairs ||
                 !modules.themeSeries ||
                 !modules.themeBindings ||
@@ -110,6 +113,8 @@
                     if (!modules.createThemeRuntime) missing.push('theme-runtime.js');
                     if (!modules.createThemeTransactions) missing.push('theme-transactions.js');
                     if (!modules.createThemeTransfer) missing.push('theme-transfer.js');
+                    if (!modules.themeMetadata) missing.push('theme-metadata.js');
+                    if (!modules.editorDraft) missing.push('editor-draft.js');
                     if (!modules.themePairs) missing.push('theme-pairs.js');
                     if (!modules.themeSeries) missing.push('theme-series.js');
                     if (!modules.themeBindings) missing.push('theme-bindings.js');
@@ -135,7 +140,10 @@
                 schema: themeSchema,
                 runtime: themeRuntime,
                 transactions: themeTransactions,
+                metadata: modules.themeMetadata,
             });
+            metadataApi = modules.themeMetadata;
+            editorDraftApi = modules.editorDraft;
             pairsApi = modules.themePairs;
             seriesApi = modules.themeSeries;
             bindingsApi = modules.themeBindings;
@@ -230,7 +238,7 @@
     }
     function save(d) {
         invalidateLibraryView();
-        storageApi.save(d);
+        return storageApi.save(d);
     }
     function saveToDB(d, cb) { storageApi.saveToDB(d, cb); }
     function loadFromLS() { return storageApi.loadFromLS(); }
@@ -275,6 +283,14 @@
         if (typeof d.followThemePreviewShape !== 'boolean') d.followThemePreviewShape = false;
         if (typeof d.simplifyGridText !== 'boolean') d.simplifyGridText = false;
         if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
+        var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
+        var seriesNormalizationDiagnostics = seriesApi && typeof seriesApi.inspectState === 'function' ? seriesApi.inspectState(d) : [];
+        if (pairNormalizationDiagnostics.length || seriesNormalizationDiagnostics.length) {
+            console.warn('[美化管理] 关系数据规范化将拒绝无效或冲突记录:', {
+                pairs: pairNormalizationDiagnostics,
+                series: seriesNormalizationDiagnostics,
+            });
+        }
         if (pairsApi) pairsApi.ensureState(d);
         else if (!d.dayNight || typeof d.dayNight !== 'object') d.dayNight = { version: 1, pairs: {} };
         if (seriesApi) seriesApi.ensureState(d);
@@ -319,12 +335,12 @@
         };
     }
 
-    function getMeta(d, name) {
-        if (!d.themeMeta[name]) d.themeMeta[name] = { category: '', tags: [], starred: false, imageData: null, thumbData: null, crop: null, useCount: 0, lastUsed: 0, author: '', description: '', backgroundName: '' };
-        if (d.themeMeta[name].backgroundName === undefined) d.themeMeta[name].backgroundName = '';
-        if (d.themeMeta[name].thumbData === undefined) d.themeMeta[name].thumbData = null;
-        if (d.themeMeta[name].crop === undefined) d.themeMeta[name].crop = null;
-        return d.themeMeta[name];
+    function peekMeta(d, name) {
+        return metadataApi.peekMeta(d, name);
+    }
+
+    function ensureMeta(d, name) {
+        return metadataApi.ensureMeta(d, name);
     }
 
     function getSystemDayNightVariant() {
@@ -418,7 +434,7 @@
         var pairById = Object.create(null);
 
         items.forEach(function (item) {
-            var meta = item.kind === 'pair' ? (item.meta || {}) : getMeta(d, item.themeName);
+            var meta = item.kind === 'pair' ? (item.meta || {}) : peekMeta(d, item.themeName);
             item.meta = meta;
             itemByKey[item.key] = item;
             itemByRef[item.key] = item;
@@ -489,6 +505,15 @@
         if (!item) return {};
         var view = buildLibraryView(d);
         return view.metaByKey[item.key] || item.meta || {};
+    }
+
+    function getItemMetaForWrite(d, item) {
+        if (!item) return null;
+        if (item.kind === 'pair') {
+            var pair = pairsApi.getPair(d, item.pairId);
+            return pair ? pair.meta : null;
+        }
+        return ensureMeta(d, item.themeName);
     }
 
     function getItemDisplayTheme(d, item, variant) {
@@ -1307,6 +1332,16 @@
         return meta;
     }
 
+    function reportExportWarnings(prepared) {
+        var diagnostics = prepared && prepared.diagnostics;
+        if (!diagnostics) return;
+        var warningCount = (diagnostics.sameConfigGroups || []).length +
+            (diagnostics.orphanMetadata || []).length +
+            (diagnostics.emptyMetadata || []).length +
+            (diagnostics.inventoryWithoutMetadata || []).length;
+        if (warningCount > 0) console.warn('[美化管理] 导出前只读诊断（不阻止导出、不删除数据）:', diagnostics);
+    }
+
     function buildSeriesManifestForBundle(data, themes, exportedPairs) {
         if (!seriesApi) return { version: 1, groups: [] };
         return {
@@ -1465,24 +1500,41 @@
         }).length;
     }
 
+    function collectSelectionRelationshipDiagnostics(payload, selectedThemeNames, selectedPairIds) {
+        var themes = {};
+        var pairIds = {};
+        (selectedThemeNames || []).forEach(function (name) { themes[name] = true; });
+        (selectedPairIds || []).forEach(function (id) { pairIds[id] = true; });
+        var diagnostics = [];
+        (payload.dayNightPairs || []).forEach(function (pair) {
+            if (!pair) return;
+            var selectedMembers = [pair.dayTheme, pair.nightTheme].filter(function (name) { return !!themes[name]; });
+            if (selectedMembers.length === 1) diagnostics.push({
+                type: 'pair', id: pair.id || '', name: pair.name || '', reason: 'partial-selection',
+                members: [pair.dayTheme, pair.nightTheme].filter(function (name) { return !themes[name]; }),
+            });
+        });
+        (payload.seriesGroups || []).forEach(function (group) {
+            if (!group || !Array.isArray(group.members)) return;
+            var selectedCount = group.members.filter(function (member) {
+                return member && (member.kind === 'theme' ? themes[member.themeName] : pairIds[member.pairId]);
+            }).length;
+            if (selectedCount > 0 && selectedCount < group.members.length) diagnostics.push({
+                type: 'series', id: group.id || '', name: group.name || '', category: group.category || '',
+                reason: 'partial-selection', members: cloneJson(group.members),
+            });
+        });
+        return diagnostics;
+    }
+
     function mergeImportedThemeMeta(themeNames, metaByName, categories, forceCategory) {
         if ((!metaByName || Object.keys(metaByName).length === 0) && (!categories || categories.length === 0)) return;
         var dd = load();
-        (categories || []).forEach(function (cat) {
-            if (cat && dd.categories.indexOf(cat) === -1) dd.categories.push(cat);
-        });
-        themeNames.forEach(function (name) {
-            var imp = metaByName ? metaByName[name] : null;
-            if (!imp) return;
-            var existing = getMeta(dd, name);
-            if (!Array.isArray(existing.tags)) existing.tags = [];
-            if (forceCategory && Object.prototype.hasOwnProperty.call(imp, 'category')) existing.category = imp.category || '';
-            else if (!existing.category && imp.category) existing.category = imp.category;
-            if (imp.tags) imp.tags.forEach(function (t) { if (existing.tags.indexOf(t) === -1) existing.tags.push(t); });
-            if (!existing.author && imp.author) existing.author = imp.author;
-            if (!existing.description && imp.description) existing.description = imp.description;
-            if (!existing.backgroundName && imp.backgroundName) existing.backgroundName = imp.backgroundName;
-            imageToolsApi.mergeMissingPreview(existing, imp);
+        metadataApi.mergeImported(dd, themeNames, metaByName, categories, {
+            forceCategory: forceCategory,
+            mergePreview: function (existing, incoming) {
+                imageToolsApi.mergeMissingPreview(existing, incoming);
+            },
         });
         save(dd);
     }
@@ -1509,7 +1561,7 @@
                 uncatCount++;
             }
         });
-        return { categories: order.filter(function (cat) { return (counts[cat] || 0) > 0; }), counts: counts, uncatCount: uncatCount };
+        return { categories: order, counts: counts, uncatCount: uncatCount };
     }
 
     function importThemePayload(payload, opts) {
@@ -1598,6 +1650,7 @@
                 return pair && selectedThemeNames.indexOf(pair.dayTheme) !== -1 && selectedThemeNames.indexOf(pair.nightTheme) !== -1;
             });
             var selectedPairIds = selectedPairs.map(function (pair) { return pair.id; });
+            var selectionRelationshipDiagnostics = collectSelectionRelationshipDiagnostics(payload, selectedThemeNames, selectedPairIds);
             var selectedSeriesGroups = filterImportedSeriesGroups(
                 payload.seriesGroups,
                 selectedThemeNames,
@@ -1613,6 +1666,7 @@
                 dayNightPairs: selectedPairs,
                 seriesGroups: selectedSeriesGroups,
                 skippedSeriesGroups: countPartiallySelectedSeriesGroups(payload.seriesGroups, selectedThemeNames, selectedPairIds),
+                relationshipDiagnostics: selectionRelationshipDiagnostics,
             });
         });
     }
@@ -1666,7 +1720,9 @@
                 var pairImport = { imported: 0, skipped: 0, idMap: {}, skippedIds: [] };
                 var seriesImport = { imported: 0, skipped: 0 };
                 var relationData = load();
-                var relationThemeNames = okNames.slice();
+                var relationThemeNames = Array.isArray(outcome.themes)
+                    ? outcome.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; })
+                    : stThemeList.slice();
                 if (pairsApi && opts.dayNightPairs && opts.dayNightPairs.length > 0) {
                     pairImport = pairsApi.importPairs(relationData, opts.dayNightPairs, relationThemeNames);
                 }
@@ -1680,9 +1736,16 @@
                     });
                 }
                 if (pairImport.imported > 0 || seriesImport.imported > 0) save(relationData);
+                var relationshipDiagnostics = (pairImport.diagnostics || []).concat(seriesImport.diagnostics || []);
+                relationshipDiagnostics = (opts.relationshipDiagnostics || []).concat(relationshipDiagnostics);
+                var rejectedRelationshipDiagnostics = relationshipDiagnostics.filter(function (item) { return item.severity !== 'info'; });
+                if (relationshipDiagnostics.length > 0) {
+                    console.warn('[美化管理] 导入关系诊断:', relationshipDiagnostics);
+                }
                 var skippedSeriesCount = (opts.skippedSeriesGroups || 0) + (seriesImport.skipped || 0);
                 var seriesImportText = (seriesImport.imported ? '，恢复 ' + seriesImport.imported + ' 个系列' : '') +
-                    (skippedSeriesCount ? '；' + skippedSeriesCount + ' 个系列未新增（可能已存在、成员缺失或归属冲突）' : '');
+                    (skippedSeriesCount ? '；' + skippedSeriesCount + ' 个系列未新增' : '') +
+                    (rejectedRelationshipDiagnostics.length ? '；关系诊断 ' + rejectedRelationshipDiagnostics.length + ' 项（详情见控制台）' : '');
 
                 if (outcome.legacyPartials && outcome.legacyPartials.length > 0) {
                     console.info('[美化管理] 旧版部分主题已使用同一份固定 baseline 按 SillyTavern 语义补齐:', outcome.legacyPartials);
@@ -3435,6 +3498,8 @@
     }
 
     function closePopup() {
+        var currentOverlay = document.querySelector('.tm-overlay');
+        if (currentOverlay && uiSheetsApi && !uiSheetsApi.requestCloseAll(currentOverlay, 'manager-close')) return false;
         cancelSearchDebounce();
         searchComposing = false;
         cancelPendingGridRender();
@@ -3446,6 +3511,7 @@
         if (seriesResizeTimer) clearTimeout(seriesResizeTimer);
         seriesResizeTimer = null;
         var ov = document.querySelector('.tm-overlay'); if (ov) ov.parentNode.removeChild(ov);
+        return true;
     }
 
     // ── 分类栏 ───────────────────────────────────────────────
@@ -3930,7 +3996,8 @@
                 if (ok) {
                     var dd = load();
                     var refreshedItem = getLogicalItem(item.key, dd);
-                    var meta = refreshedItem ? getItemMeta(dd, refreshedItem) : {};
+                    var meta = refreshedItem ? getItemMetaForWrite(dd, refreshedItem) : null;
+                    if (!meta) return;
                     meta.useCount = (meta.useCount || 0) + 1;
                     meta.lastUsed = Date.now();
                     save(dd);
@@ -4074,7 +4141,7 @@
                     return;
                 }
                 selectedItems.forEach(function (item) {
-                    if (!getSeriesForItem(dd, item)) getItemMeta(dd, item).category = cats[ci];
+                    if (!getSeriesForItem(dd, item)) getItemMetaForWrite(dd, item).category = cats[ci];
                 });
                 Object.keys(selectedGroups).forEach(function (seriesId) {
                     seriesApi.setSeriesCategory(dd, seriesId, cats[ci]);
@@ -4093,7 +4160,7 @@
                 batchSelected.forEach(function (key) {
                     var item = getLogicalItem(key, dd);
                     if (item) {
-                        var m = getItemMeta(dd, item);
+                        var m = getItemMetaForWrite(dd, item);
                         m.starred = !m.starred;
                     }
                 });
@@ -4108,7 +4175,7 @@
                 batchSelected.forEach(function (key) {
                     var item = getLogicalItem(key, dd);
                     if (!item) return;
-                    var m = getItemMeta(dd, item);
+                    var m = getItemMetaForWrite(dd, item);
                     if (!Array.isArray(m.tags)) m.tags = [];
                     if (m.tags.indexOf(tag) === -1) m.tags.push(tag);
                 });
@@ -4702,7 +4769,8 @@
                 if (ok) {
                     var dd = load();
                     var refreshed = getLogicalItem(item.key, dd);
-                    var m = refreshed ? getItemMeta(dd, refreshed) : {};
+                    var m = refreshed ? getItemMetaForWrite(dd, refreshed) : null;
+                    if (!m) return;
                     m.useCount = (m.useCount || 0) + 1;
                     m.lastUsed = Date.now();
                     save(dd);
@@ -4730,7 +4798,8 @@
             closeSheet(sheet);
             var dd = load();
             var refreshed = getLogicalItem(item.key, dd);
-            var m = refreshed ? getItemMeta(dd, refreshed) : {};
+            var m = refreshed ? getItemMetaForWrite(dd, refreshed) : null;
+            if (!m) return;
             m.starred = !m.starred;
             save(dd); toast(m.starred ? '⭐ 已收藏' : '已取消收藏');
             refreshSingleItemCard(item.key, { starred: true });
@@ -5029,7 +5098,7 @@
         if (pair) {
             ['day', 'night'].forEach(function (variant) {
                 var name = variant === 'night' ? pair.nightTheme : pair.dayTheme;
-                var variantMeta = getMeta(d, name);
+                var variantMeta = peekMeta(d, name);
                 variantDrafts[variant] = {
                     themeName: name,
                     imageData: variantMeta.imageData || null,
@@ -5039,7 +5108,7 @@
                 };
             });
         } else {
-            var ordinaryMeta = getMeta(d, item.themeName);
+            var ordinaryMeta = peekMeta(d, item.themeName);
             variantDrafts.day = {
                 themeName: item.themeName,
                 imageData: ordinaryMeta.imageData || null,
@@ -5098,6 +5167,7 @@
         }
         sheet.querySelector('#tm-bg-bind').addEventListener('click', function () {
             openBackgroundPickerSheet(editBackgroundName, function (name) {
+                if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
                 editBackgroundName = name || '';
                 renderBackgroundBind();
             });
@@ -5151,6 +5221,17 @@
             draft.crop = editCrop;
             draft.backgroundName = editBackgroundName;
         }
+        function captureEditSnapshot() {
+            captureVariantDraft();
+            return {
+                pairName: pair ? sheet.querySelector('#tm-pair-edit-name').value.trim() : '',
+                category: sheet.querySelector('#tm-dcat').value,
+                author: sheet.querySelector('#tm-dauthor').value.trim(),
+                description: sheet.querySelector('#tm-ddesc').value.trim(),
+                tags: editTags.slice(),
+                variants: cloneJson(variantDrafts),
+            };
+        }
         function loadVariantDraft(variant) {
             var draft = variantDrafts[variant];
             if (!draft) return;
@@ -5195,8 +5276,11 @@
             if (!f || f.type.indexOf('image') !== 0) return;
             var r = new FileReader();
             r.onload = function (e) {
+                if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
                 compressImage(e.target.result, function (c) {
+                    if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
                     openImageCropSheet(c, null, function (res) {
+                        if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
                         setImg(res.imageData, res.thumbData, res.crop);
                     });
                 });
@@ -5207,6 +5291,7 @@
             var source = editImgData || editThumbData;
             if (!source) return;
             openImageCropSheet(source, editCrop, function (res) {
+                if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
                 setImg(res.imageData, res.thumbData, res.crop);
             });
         }
@@ -5236,10 +5321,34 @@
             sel2.value = name; toast('分类「' + name + '」已添加');
         });
 
+        var editorSession = editorDraftApi.createSession(captureEditSnapshot());
+        function setEditorSaving(saving) {
+            sheet.querySelectorAll('input,select,textarea,button').forEach(function (control) {
+                if (control.id !== 'tm-dcancel') control.disabled = saving;
+            });
+            var button = sheet.querySelector('#tm-dsave');
+            if (button) button.textContent = saving ? '保存中...' : '保存';
+        }
+        uiSheetsApi.setBeforeClose(sheet, function () {
+            var dirty = editorSession.isDirty(captureEditSnapshot());
+            if (!dirty && !editorSession.isSaving()) {
+                editorSession.invalidate();
+                return true;
+            }
+            if (editorSession.isSaving()) {
+                toast('美化仍在保存处理中，请等待完成后再关闭', true);
+                return false;
+            }
+            var message = '当前修改尚未保存，是否放弃修改？';
+            if (!confirm(message)) return false;
+            editorSession.invalidate();
+            return true;
+        });
         sheet.querySelector('#tm-dcancel').addEventListener('click', function () { closeSheet(sheet); });
         sheet.querySelector('#tm-dsave').addEventListener('click', function () {
             var saveBtn = sheet.querySelector('#tm-dsave');
-            var pairName = pair ? sheet.querySelector('#tm-pair-edit-name').value.trim() : '';
+            var snapshot = captureEditSnapshot();
+            var pairName = snapshot.pairName;
             if (pair && !pairName) { toast('美化名称不能为空', true); return; }
             if (pair) {
                 var duplicate = getLogicalItems(load()).some(function (other) {
@@ -5247,14 +5356,16 @@
                 });
                 if (duplicate) { toast('已有同名美化，请换一个名称', true); return; }
             }
-            saveBtn.disabled = true;
-            saveBtn.textContent = '保存中...';
-            captureVariantDraft();
+            var saveTicket = editorSession.beginSave(snapshot);
+            if (!saveTicket) return;
+            setEditorSaving(true);
 
             function uploadDraft(draft, callback) {
-                uploadImage(draft.imageData, function (_err, imgUrl) {
-                    uploadImage(draft.thumbData, function (_err2, thumbUrl) {
-                        callback({
+                uploadImage(draft.imageData, function (imgErr, imgUrl) {
+                    if (imgErr) { callback(imgErr); return; }
+                    uploadImage(draft.thumbData, function (thumbErr, thumbUrl) {
+                        if (thumbErr) { callback(thumbErr); return; }
+                        callback(null, {
                             themeName: draft.themeName,
                             imageData: imgUrl || draft.imageData || null,
                             thumbData: draft.thumbData ? (thumbUrl || draft.thumbData) : null,
@@ -5268,8 +5379,17 @@
             var draftKeys = pair ? ['day', 'night'] : ['day'];
             var uploaded = {};
             var remaining = draftKeys.length;
+            var uploadFailed = false;
             draftKeys.forEach(function (variant) {
-                uploadDraft(variantDrafts[variant], function (result) {
+                uploadDraft(saveTicket.snapshot.variants[variant], function (err, result) {
+                    if (!editorSession.isCurrent(saveTicket.token) || uploadFailed) return;
+                    if (err) {
+                        uploadFailed = true;
+                        editorSession.failSave(saveTicket.token);
+                        setEditorSaving(false);
+                        toast('图片处理失败，草稿仍保留，请重试', true);
+                        return;
+                    }
                     uploaded[variant] = result;
                     remaining -= 1;
                     if (remaining === 0) finishSave();
@@ -5277,24 +5397,25 @@
             });
 
             function finishSave() {
-                var dd = load();
+                if (!editorSession.isCurrent(saveTicket.token)) return;
+                var dd = cloneJson(load());
                 var refreshedItem = getLogicalItem(item.key, dd);
                 if (!refreshedItem) {
-                    saveBtn.disabled = false;
-                    saveBtn.textContent = '保存';
+                    editorSession.failSave(saveTicket.token);
+                    setEditorSaving(false);
                     toast('美化已发生变化，请关闭后重试', true);
                     return;
                 }
-                var shared = getItemMeta(dd, refreshedItem);
-                shared.category = sheet.querySelector('#tm-dcat').value;
-                shared.author = sheet.querySelector('#tm-dauthor').value.trim();
-                shared.description = sheet.querySelector('#tm-ddesc').value.trim();
-                shared.tags = editTags.slice();
+                var shared = getItemMetaForWrite(dd, refreshedItem);
+                shared.category = saveTicket.snapshot.category;
+                shared.author = saveTicket.snapshot.author;
+                shared.description = saveTicket.snapshot.description;
+                shared.tags = saveTicket.snapshot.tags.slice();
                 if (refreshedItem.kind === 'pair') {
                     pairsApi.renamePair(dd, refreshedItem.pairId, pairName);
                     ['day', 'night'].forEach(function (variant) {
                         var result = uploaded[variant];
-                        var variantMeta = getMeta(dd, result.themeName);
+                        var variantMeta = ensureMeta(dd, result.themeName);
                         variantMeta.backgroundName = result.backgroundName;
                         variantMeta.imageData = result.imageData;
                         variantMeta.thumbData = result.thumbData;
@@ -5307,24 +5428,39 @@
                     shared.thumbData = ordinary.thumbData;
                     shared.crop = ordinary.crop;
                 }
-                save(dd);
-                closeSheet(sheet);
-                var editEffects = {
-                    name: refreshedItem.name !== originalEditName || (refreshedItem.kind === 'pair' && pairName !== originalEditName),
-                    category: shared.category !== originalEditCategory,
-                    searchable: true,
-                    layout: refreshedItem.kind === 'pair' && pairName !== originalEditName,
-                };
-                var currentTheme = getCurrentThemeName();
-                if (refreshedItem.themeNames.indexOf(currentTheme) !== -1) {
-                    applyBoundBackground(currentTheme, function () {
-                        toast('✨ 已保存');
-                        renderCatbar(); refreshSingleItemCard(item.key, editEffects); renderBottomStatus();
-                    });
-                } else {
-                    toast('✨ 已保存');
-                    renderCatbar(); refreshSingleItemCard(item.key, editEffects);
+                var persist;
+                try {
+                    persist = save(dd);
+                } catch (err) {
+                    editorSession.failSave(saveTicket.token);
+                    setEditorSaving(false);
+                    toast('保存失败，草稿仍保留，请重试', true);
+                    return;
                 }
+                Promise.resolve(persist).then(function () {
+                    if (!editorSession.completeSave(saveTicket.token, saveTicket.snapshot)) return;
+                    closeSheet(sheet, { force: true });
+                    var editEffects = {
+                        name: refreshedItem.name !== originalEditName || (refreshedItem.kind === 'pair' && pairName !== originalEditName),
+                        category: shared.category !== originalEditCategory,
+                        searchable: true,
+                        layout: refreshedItem.kind === 'pair' && pairName !== originalEditName,
+                    };
+                    var currentTheme = getCurrentThemeName();
+                    if (refreshedItem.themeNames.indexOf(currentTheme) !== -1) {
+                        applyBoundBackground(currentTheme, function () {
+                            toast('✨ 已保存');
+                            renderCatbar(); refreshSingleItemCard(item.key, editEffects); renderBottomStatus();
+                        });
+                    } else {
+                        toast('✨ 已保存');
+                        renderCatbar(); refreshSingleItemCard(item.key, editEffects);
+                    }
+                }).catch(function () {
+                    if (!editorSession.failSave(saveTicket.token)) return;
+                    setEditorSaving(false);
+                    toast('保存失败，草稿仍保留，请重试', true);
+                });
             }
         });
     }
@@ -5338,6 +5474,7 @@
         var skippedImportedSeriesCount = 0;
         var importedPairIdMap = {};
         var skippedImportedPairIds = {};
+        var relationshipDiagnostics = [];
 
         for (var k in imported.themeMeta) {
             var imp = imported.themeMeta[k] || {};
@@ -5347,7 +5484,7 @@
                 if (dd.themeMeta[k].thumbData === undefined) dd.themeMeta[k].thumbData = null;
                 if (dd.themeMeta[k].crop === undefined) dd.themeMeta[k].crop = null;
             } else {
-                var existing = getMeta(dd, k);
+                var existing = ensureMeta(dd, k);
                 if (!Array.isArray(existing.tags)) existing.tags = [];
                 imageToolsApi.mergeMissingPreview(existing, imp);
                 if (!existing.category && imp.category) existing.category = imp.category;
@@ -5366,6 +5503,7 @@
             importedPairCount = pairOutcome.imported;
             importedPairIdMap = pairOutcome.idMap || {};
             (pairOutcome.skippedIds || []).forEach(function (id) { skippedImportedPairIds[id] = true; });
+            relationshipDiagnostics = relationshipDiagnostics.concat(pairOutcome.diagnostics || []);
         }
         if (seriesApi && imported.series && typeof imported.series === 'object') {
             var importedGroups = imported.series.groups || imported.series;
@@ -5378,6 +5516,7 @@
             });
             importedSeriesCount = seriesOutcome.imported;
             skippedImportedSeriesCount = seriesOutcome.skipped;
+            relationshipDiagnostics = relationshipDiagnostics.concat(seriesOutcome.diagnostics || []);
         }
         if (bindingsApi && imported.bindings && typeof imported.bindings === 'object') {
             var importedBindingData = { bindings: cloneJson(imported.bindings) };
@@ -5410,6 +5549,7 @@
             }
         }
 
+        if (relationshipDiagnostics.length > 0) console.warn('[美化管理] 标注备份关系诊断:', relationshipDiagnostics);
         save(dd);
         if (bindingController && importedBindingCount) bindingController.reconcile();
         renderCatbar();
@@ -5419,6 +5559,7 @@
             (importedPairCount ? '，' + importedPairCount + ' 组日夜美化' : '') +
             (importedSeriesCount ? '，' + importedSeriesCount + ' 个系列' : '') +
             (skippedImportedSeriesCount ? '；' + skippedImportedSeriesCount + ' 个系列未新增（可能已存在、成员缺失或归属冲突）' : '') +
+            (relationshipDiagnostics.filter(function (item) { return item.severity !== 'info'; }).length ? '；关系诊断见控制台' : '') +
             (importedBindingCount ? '，' + importedBindingCount + ' 个绑定' : ''));
     }
 
@@ -5450,8 +5591,9 @@
                 var data = load();
                 var targetItems = getItemsForDisplayCategory(data, cat);
                 var targetNames = expandItemThemeNames(targetItems);
-                themeTransfer.prepareExport(targetNames)
+                themeTransfer.prepareExport(targetNames, { themeMeta: data.themeMeta })
                     .then(function (prepared) {
+                        reportExportWarnings(prepared);
                         var catName = cat === '__uncategorized__' ? '未分类' : cat;
                         var exportedPairs = pairsApi.exportPairs(data, prepared.themes.map(function (theme) { return theme.name; }));
                         var seriesManifest = buildSeriesManifestForBundle(data, prepared.themes, exportedPairs);
@@ -5490,7 +5632,9 @@
     // ── 设置 ─────────────────────────────────────────────────
     function openSettingsSheet() {
         var d = load();
-        var metaCount = Object.keys(d.themeMeta).length;
+        var metadataDiagnostics = metadataApi.inspect(stThemeList, d.themeMeta);
+        var metaCount = metadataDiagnostics.annotatedCount;
+        var orphanMetaCount = metadataDiagnostics.orphanMetadata.length;
         var imgCount = 0;
         for (var k in d.themeMeta) { if (d.themeMeta[k].imageData) imgCount++; }
 
@@ -5522,7 +5666,9 @@
             '<input type="range" class="tm-range" id="tm-fab-size" min="28" max="64" value="' + (d.fabSize || 38) + '" /></div>',
             '<div class="tm-divider"></div>',
             '<div class="tm-sec-title">数据</div>',
-            '<div class="tm-storage-info">ST 共有 ' + stThemeList.length + ' 个主题 / 已标注 ' + metaCount + ' 个 / ' + imgCount + ' 张截图 / ' + (getServerMode() ? '后端存储' : '浏览器存储') + '</div>',
+            '<div class="tm-storage-info">ST 共有 ' + stThemeList.length + ' 个主题 / 已标注 ' + metaCount + ' 个' +
+            (orphanMetaCount ? ' / 孤儿标注 ' + orphanMetaCount + ' 个' : '') + ' / ' + imgCount + ' 张截图 / ' +
+            (getServerMode() ? '后端存储' : '浏览器存储') + '</div>',
             '<div class="tm-data-grid">' +
             '<button class="tm-btn tm-btn-outline" id="tm-imp-theme"><i class="fa-solid fa-file-import"></i> 导入美化</button>' +
             '<button class="tm-btn tm-btn-outline" id="tm-imp-theme-batch"><i class="fa-solid fa-upload"></i> 批量导入美化</button>' +
@@ -5725,8 +5871,9 @@
         });
         sheet.querySelector('#tm-exp-theme-bundle').addEventListener('click', function () {
             if (stThemeList.length === 0) { toast('没有可导出的美化', true); return; }
-            themeTransfer.prepareExport(stThemeList.slice())
+            themeTransfer.prepareExport(stThemeList.slice(), { themeMeta: load().themeMeta })
                 .then(function (prepared) {
+                    reportExportWarnings(prepared);
                     var data = load();
                     var exportedPairs = pairsApi.exportPairs(data, prepared.themes.map(function (theme) { return theme.name; }));
                     var seriesManifest = buildSeriesManifestForBundle(data, prepared.themes, exportedPairs);
@@ -5980,7 +6127,7 @@
                 nw = nw.trim(); dd.categories[idx] = nw;
                 getLogicalItems(dd).forEach(function (item) {
                     var meta = getItemMeta(dd, item);
-                    if (meta.category === old) meta.category = nw;
+                    if (meta.category === old) getItemMetaForWrite(dd, item).category = nw;
                 });
                 if (seriesApi) {
                     seriesApi.listSeries(dd).forEach(function (group) {
@@ -5997,7 +6144,7 @@
                 dd.categories.splice(idx, 1);
                 getLogicalItems(dd).forEach(function (item) {
                     var meta = getItemMeta(dd, item);
-                    if (meta.category === name) meta.category = '';
+                    if (meta.category === name) getItemMetaForWrite(dd, item).category = '';
                 });
                 if (seriesApi) {
                     seriesApi.listSeries(dd).forEach(function (group) {
@@ -6014,7 +6161,7 @@
     function createSheet(contentHtml) {
         return uiSheetsApi.createSheet(contentHtml);
     }
-    function closeSheet(ov) { return uiSheetsApi.closeSheet(ov); }
+    function closeSheet(ov, options) { return uiSheetsApi.closeSheet(ov, options); }
 
     // ── Lightbox ─────────────────────────────────────────────
     function openLightbox(themeNames, startName) {

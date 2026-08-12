@@ -6,6 +6,7 @@
         var getPopupLayer = opts.getPopupLayer;
         var load = opts.load;
         var esc = opts.esc;
+        var beforeCloseHandlers = new WeakMap();
 
         function createSheet(contentHtml) {
             var overlay = global.document.createElement('div');
@@ -13,13 +14,45 @@
             overlay.innerHTML = '<div class="tm-sheet"><div class="tm-sheet-handle"></div><div class="tm-sheet-content">' + contentHtml + '</div></div>';
             getPopupLayer().appendChild(overlay);
             overlay.addEventListener('click', function (event) {
-                if (event.target === overlay) closeSheet(overlay);
+                if (event.target === overlay) requestClose(overlay, 'backdrop');
             });
             return overlay;
         }
 
-        function closeSheet(overlay) {
+        function setBeforeClose(overlay, handler) {
+            if (!overlay) return;
+            if (typeof handler === 'function') beforeCloseHandlers.set(overlay, handler);
+            else beforeCloseHandlers.delete(overlay);
+        }
+
+        function removeSheet(overlay) {
+            beforeCloseHandlers.delete(overlay);
             if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            return true;
+        }
+
+        function requestClose(overlay, reason, options) {
+            options = options || {};
+            if (!overlay || !overlay.parentNode) return true;
+            var guard = beforeCloseHandlers.get(overlay);
+            if (!options.force && guard && guard(reason || 'close') === false) return false;
+            return removeSheet(overlay);
+        }
+
+        function closeSheet(overlay, options) {
+            return requestClose(overlay, 'programmatic', options);
+        }
+
+        function requestCloseAll(root, reason) {
+            var sheets = root && root.querySelectorAll
+                ? Array.prototype.slice.call(root.querySelectorAll('.tm-sheet-overlay'))
+                : [];
+            for (var i = sheets.length - 1; i >= 0; i--) {
+                var guard = beforeCloseHandlers.get(sheets[i]);
+                if (guard && guard(reason || 'manager-close') === false) return false;
+            }
+            sheets.forEach(removeSheet);
+            return true;
         }
 
         function openLightbox(themeNames, startName) {
@@ -89,6 +122,9 @@
         return {
             createSheet: createSheet,
             closeSheet: closeSheet,
+            requestClose: requestClose,
+            requestCloseAll: requestCloseAll,
+            setBeforeClose: setBeforeClose,
             openLightbox: openLightbox,
         };
     };
