@@ -5476,6 +5476,7 @@
         var skippedImportedPairIds = {};
         var relationshipDiagnostics = [];
 
+        if (imported.categories) imported.categories.forEach(function (c) { if (dd.categories.indexOf(c) === -1) dd.categories.push(c); });
         for (var k in imported.themeMeta) {
             var imp = imported.themeMeta[k] || {};
             if (!dd.themeMeta[k]) {
@@ -5495,8 +5496,6 @@
             }
             importedCount++;
         }
-
-        if (imported.categories) imported.categories.forEach(function (c) { if (dd.categories.indexOf(c) === -1) dd.categories.push(c); });
         if (pairsApi && imported.dayNight) {
             var rawPairs = imported.dayNight.pairs || imported.dayNight;
             var pairOutcome = pairsApi.importPairs(dd, rawPairs, stThemeList);
