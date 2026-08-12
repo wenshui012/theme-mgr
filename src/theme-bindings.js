@@ -67,6 +67,23 @@
         return normalized;
     }
 
+    function inspectState(data) {
+        var state = isObject(data) && isObject(data.bindings) ? data.bindings : {};
+        var diagnostics = [];
+        ['characters', 'chats'].forEach(function (scope) {
+            var map = isObject(state[scope]) ? state[scope] : {};
+            Object.keys(map).forEach(function (key) {
+                if (!String(key || '').trim() || !normalizeRecord(map[key])) {
+                    diagnostics.push({ type: 'binding', scope: scope, key: key, reason: 'invalid-record' });
+                }
+            });
+        });
+        if (state.manualTarget !== undefined && state.manualTarget !== null && !normalizeTarget(state.manualTarget) && !makeThemeTarget(state.manualTheme)) {
+            diagnostics.push({ type: 'binding', scope: 'manual', key: '', reason: 'invalid-target' });
+        }
+        return diagnostics;
+    }
+
     function ensureState(data) {
         if (!isObject(data)) return createState();
         var state = isObject(data.bindings) ? data.bindings : createState();
@@ -890,6 +907,7 @@
         BINDING_VERSION: BINDING_VERSION,
         createState: createState,
         ensureState: ensureState,
+        inspectState: inspectState,
         makeThemeTarget: makeThemeTarget,
         normalizeTarget: normalizeTarget,
         targetsEqual: targetsEqual,

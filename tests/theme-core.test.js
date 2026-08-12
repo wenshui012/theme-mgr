@@ -2946,6 +2946,23 @@ test('binding state normalizes legacy strings and drops malformed records', () =
     assert.equal(state.manualTheme, '');
 });
 
+test('binding diagnostics expose malformed records before normalization drops them', () => {
+    const data = {
+        bindings: {
+            characters: { 'valid.png': 'Rose', 'broken.png': { target: { kind: 'pair', themeName: 'Future' } } },
+            chats: { '': 'Ignored' },
+            manualTarget: { kind: 'unknown' },
+        },
+    };
+    const diagnostics = bindings.inspectState(data);
+
+    assert.equal(diagnostics.length, 3);
+    assert.deepEqual(diagnostics.map((item) => item.scope).sort(), ['characters', 'chats', 'manual']);
+    assert.equal(Object.keys(data.bindings.characters).length, 2);
+    bindings.ensureState(data);
+    assert.equal(data.bindings.characters['broken.png'], undefined);
+});
+
 test('chat binding overrides character binding and both fall back to the manual theme', () => {
     const data = {};
     const context = makeBindingContext();

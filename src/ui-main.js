@@ -285,10 +285,12 @@
         if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
         var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
         var seriesNormalizationDiagnostics = seriesApi && typeof seriesApi.inspectState === 'function' ? seriesApi.inspectState(d) : [];
-        if (pairNormalizationDiagnostics.length || seriesNormalizationDiagnostics.length) {
+        var bindingNormalizationDiagnostics = bindingsApi && typeof bindingsApi.inspectState === 'function' ? bindingsApi.inspectState(d) : [];
+        if (pairNormalizationDiagnostics.length || seriesNormalizationDiagnostics.length || bindingNormalizationDiagnostics.length) {
             console.warn('[美化管理] 关系数据规范化将拒绝无效或冲突记录:', {
                 pairs: pairNormalizationDiagnostics,
                 series: seriesNormalizationDiagnostics,
+                bindings: bindingNormalizationDiagnostics,
             });
         }
         if (pairsApi) pairsApi.ensureState(d);
