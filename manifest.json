@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v4.0.0",
-  "version": "4.0.0",
+  "display_name": "美化管理 v4.0.2",
+  "version": "4.0.2",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v4.0: 角色与聊天绑定、日夜美化、系列收纳、响应式预览与批量管理升级"
+  "description": "v4.0.2: 大型主题库性能、保存切换稳定性与数据安全增强"
 }

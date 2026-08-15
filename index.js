@@ -1,6 +1,6 @@
-// ST美化管理扩展 v4.0 - 模块装配与总入口
+// ST美化管理扩展 v4.0.2 - 模块装配与总入口
 (function () {
-    var TM_VERSION = '4.0.0';
+    var TM_VERSION = '4.0.2';
 
     function getExtensionBaseUrl() {
         var script = document.currentScript;
