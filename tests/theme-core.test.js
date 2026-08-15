@@ -1338,6 +1338,7 @@ function makeTransactionHarness(initialThemes, hooks) {
         deleteTheme(name, headers) {
             deleteCount += 1;
             calls.push({ type: 'delete', name, headers });
+            if (typeof hooks.onDelete === 'function') hooks.onDelete(name, deleteCount);
             if (hooks.deleteErrorAt === deleteCount || hooks.deleteErrorName === name) {
                 return Promise.reject(new Error('injected delete failure'));
             }
@@ -1466,6 +1467,40 @@ test('runtime aborts when a lazy placeholder cannot hydrate', async (t) => {
         runtime.resolveUsableTheme('Lazy', { name: 'Lazy', __baibaokuLazyTheme: true }),
         (error) => error.code === 'incomplete',
     );
+});
+
+test('confirmed current theme identity requires matching power user and native control state', async (t) => {
+    const previousDocument = global.document;
+    let powerUserTheme = 'A';
+    let controlTheme = 'A';
+    t.after(() => { global.document = previousDocument; });
+    global.document = {
+        getElementById(id) {
+            if (id !== 'themes') return null;
+            return {
+                tagName: 'SELECT',
+                selectedIndex: 0,
+                options: [{ value: controlTheme, textContent: controlTheme }],
+            };
+        },
+    };
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([]), getRawSettingsInventory: () => Promise.resolve([]) },
+        loadPowerUserModule() { return Promise.resolve({ power_user: { theme: powerUserTheme } }); },
+    });
+
+    assert.deepEqual(await runtime.captureConfirmedCurrentThemeIdentity(), {
+        status: 'known',
+        name: 'A',
+        powerUserTheme: 'A',
+        controlTheme: 'A',
+    });
+    controlTheme = 'B';
+    assert.equal((await runtime.captureConfirmedCurrentThemeIdentity()).status, 'unknown');
+    controlTheme = 'A';
+    powerUserTheme = '';
+    assert.equal((await runtime.captureConfirmedCurrentThemeIdentity()).status, 'unknown');
 });
 
 test('theme appearance derives readable palettes from both light and dark beautifications', () => {
@@ -3418,6 +3453,145 @@ test('delete failure is reported only after a fresh read confirms the old theme 
         (error) => error.code === 'delete-failed',
     );
     assert.deepEqual(harness.store['Keep Me'], old);
+});
+
+test('safe single delete removes a non-current theme without switching', async () => {
+    const events = [];
+    const harness = makeTransactionHarness([completeTheme('A'), completeTheme('B')], {
+        onDelete(name) { events.push(`delete:${name}`); },
+    });
+
+    const result = await harness.transactions.deleteThemeSafely('B', {
+        readCurrentTheme() { return { status: 'known', name: 'A' }; },
+        applyFallback() { throw new Error('non-current delete must not switch'); },
+    });
+
+    assert.equal(result.switchedFromCurrent, false);
+    assert.equal(result.fallbackTheme, '');
+    assert.deepEqual(events, ['delete:B']);
+    assert.equal(harness.store.A.name, 'A');
+    assert.equal(harness.store.B, undefined);
+});
+
+test('safe single delete applies and confirms a fallback before deleting the current theme', async () => {
+    const events = [];
+    let currentTheme = 'A';
+    const harness = makeTransactionHarness([completeTheme('A'), completeTheme('B')], {
+        onDelete(name) { events.push(`delete:${name}`); },
+    });
+
+    const result = await harness.transactions.deleteThemeSafely('A', {
+        readCurrentTheme() { return { status: 'known', name: currentTheme }; },
+        applyFallback(name) {
+            events.push(`apply:${name}`);
+            currentTheme = name;
+            return { ok: true };
+        },
+    });
+
+    assert.deepEqual(events, ['apply:B', 'delete:A']);
+    assert.equal(result.switchedFromCurrent, true);
+    assert.equal(result.fallbackTheme, 'B');
+    assert.equal(currentTheme, 'B');
+    assert.equal(harness.store.A, undefined);
+    assert.equal(harness.store.B.name, 'B');
+});
+
+test('safe single delete performs zero delete when fallback application fails', async () => {
+    const harness = makeTransactionHarness([completeTheme('A'), completeTheme('B')]);
+
+    await assert.rejects(
+        harness.transactions.deleteThemeSafely('A', {
+            readCurrentTheme() { return { status: 'known', name: 'A' }; },
+            applyFallback() { return { ok: false, reason: 'injected apply failure' }; },
+        }),
+        (error) => error.code === 'fallback-apply-failed',
+    );
+
+    assert.equal(harness.calls.filter((call) => call.type === 'delete').length, 0);
+    assert.equal(harness.store.A.name, 'A');
+});
+
+test('safe single delete performs zero delete when fallback state verification fails', async () => {
+    const harness = makeTransactionHarness([completeTheme('A'), completeTheme('B')]);
+
+    await assert.rejects(
+        harness.transactions.deleteThemeSafely('A', {
+            readCurrentTheme() { return { status: 'known', name: 'A' }; },
+            applyFallback() { return { ok: true }; },
+        }),
+        (error) => error.code === 'fallback-verify-failed',
+    );
+
+    assert.equal(harness.calls.filter((call) => call.type === 'delete').length, 0);
+    assert.equal(harness.store.A.name, 'A');
+});
+
+test('safe single delete performs zero delete when current identity is unknown', async () => {
+    const harness = makeTransactionHarness([completeTheme('A'), completeTheme('B')]);
+
+    await assert.rejects(
+        harness.transactions.deleteThemeSafely('A', {
+            readCurrentTheme() { return { status: 'unknown' }; },
+            applyFallback() { return { ok: true }; },
+        }),
+        (error) => error.code === 'current-theme-unknown',
+    );
+
+    assert.equal(harness.calls.filter((call) => call.type === 'delete').length, 0);
+    assert.equal(harness.store.A.name, 'A');
+});
+
+test('safe single delete performs zero delete when its authoritative inventory is malformed', async () => {
+    let currentReads = 0;
+    const harness = makeTransactionHarness([completeTheme('A'), completeTheme('B')], {
+        transformInventory() { return { themes: null }; },
+    });
+
+    await assert.rejects(
+        harness.transactions.deleteThemeSafely('A', {
+            readCurrentTheme() { currentReads += 1; return { status: 'known', name: 'A' }; },
+            applyFallback() { return { ok: true }; },
+        }),
+        (error) => error.code === 'delete-read-failed',
+    );
+
+    assert.equal(currentReads, 0);
+    assert.equal(harness.calls.filter((call) => call.type === 'delete').length, 0);
+    assert.equal(harness.store.A.name, 'A');
+});
+
+test('safe single delete refuses to remove the sole current theme without a proven fallback', async () => {
+    const harness = makeTransactionHarness([completeTheme('A')]);
+
+    await assert.rejects(
+        harness.transactions.deleteThemeSafely('A', {
+            readCurrentTheme() { return { status: 'known', name: 'A' }; },
+            applyFallback() { return { ok: true }; },
+        }),
+        (error) => error.code === 'no-safe-fallback',
+    );
+
+    assert.equal(harness.calls.filter((call) => call.type === 'delete').length, 0);
+    assert.equal(harness.store.A.name, 'A');
+});
+
+test('malformed safe-delete verification never runs caller metadata cleanup', async () => {
+    let cleanupRan = false;
+    const harness = makeTransactionHarness([completeTheme('A'), completeTheme('B')], {
+        transformInventory(inventory, count) {
+            return count === 3 ? { themes: null } : inventory;
+        },
+    });
+
+    await harness.transactions.deleteThemeSafely('B', {
+        readCurrentTheme() { return { status: 'known', name: 'A' }; },
+    }).then(() => { cleanupRan = true; }, (error) => {
+        assert.equal(error.code, 'delete-failed');
+    });
+
+    assert.equal(harness.calls.filter((call) => call.type === 'delete').length, 1);
+    assert.equal(cleanupRan, false);
 });
 
 test('batch delete uses one initial and one final inventory for every selected theme', async () => {

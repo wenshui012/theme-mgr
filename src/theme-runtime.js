@@ -663,6 +663,31 @@
             }).catch(function () { return null; });
         }
 
+        function captureConfirmedCurrentThemeIdentity() {
+            return loadPowerUserModule().then(function (mod) {
+                var powerUser = mod && mod.power_user;
+                var powerUserTheme = powerUser && typeof powerUser.theme === 'string'
+                    ? powerUser.theme.trim()
+                    : '';
+                var controlTheme = getThemeControlName();
+                if (!powerUserTheme || !controlTheme || powerUserTheme !== controlTheme) {
+                    return {
+                        status: 'unknown',
+                        powerUserTheme: powerUserTheme,
+                        controlTheme: controlTheme,
+                    };
+                }
+                return {
+                    status: 'known',
+                    name: powerUserTheme,
+                    powerUserTheme: powerUserTheme,
+                    controlTheme: controlTheme,
+                };
+            }).catch(function () {
+                return { status: 'unknown', powerUserTheme: '', controlTheme: getThemeControlName() };
+            });
+        }
+
         function applyThemeAndWait(themeName, applyFn, fallbackFn, rollbackFn) {
             var requestId = beginApply();
             var previousTheme = null;
@@ -783,6 +808,7 @@
             waitForThemeVisuals: waitForThemeVisuals,
             waitForThemeApplied: waitForThemeApplied,
             captureCurrentThemeSnapshot: captureCurrentThemeSnapshot,
+            captureConfirmedCurrentThemeIdentity: captureConfirmedCurrentThemeIdentity,
             applyThemeAndWait: applyThemeAndWait,
             makeError: makeError,
         };

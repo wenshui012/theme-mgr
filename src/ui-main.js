@@ -1156,25 +1156,29 @@
     }
 
     function deleteThemeEverywhere(themeName, cb) {
-        themeTransactions.deleteThemeVerified(themeName, {
+        themeTransactions.deleteThemeSafely(themeName, {
+            readCurrentTheme: function () {
+                return themeRuntime.captureConfirmedCurrentThemeIdentity();
+            },
+            applyFallback: function (fallbackTheme) {
+                return new Promise(function (resolve) {
+                    applyTheme(fallbackTheme, function (ok, reason) {
+                        resolve({ ok: ok, reason: reason || '' });
+                    });
+                });
+            },
+            readReason: 'theme-manager-safe-delete-read',
+            deleteReadReason: 'theme-manager-delete-read',
             deleteReason: 'theme-manager-delete',
             verifyReason: 'theme-manager-delete-verify',
         })
             .then(function (result) {
-                var wasCurrent = getCurrentThemeName() === themeName;
                 themeRuntime.forget(themeName);
                 themeRuntime.evictNativeTheme(themeName, result.nativeThemeRef);
                 removeThemeMetaName(themeName);
                 removeThemeOption(themeName);
                 setThemeList(result.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; }), true);
-                var nextTheme = stThemeList[0] || '';
-                if (wasCurrent && nextTheme) {
-                    applyTheme(nextTheme, function () {
-                        fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); });
-                    });
-                } else {
-                    fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); });
-                }
+                fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); });
                 if (cb) cb(true);
             })
             .catch(function (err) {

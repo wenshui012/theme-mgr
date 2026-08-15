@@ -464,6 +464,104 @@
                 });
         }
 
+        function readConfirmedCurrentTheme(options) {
+            if (typeof options.readCurrentTheme !== 'function') {
+                return Promise.reject(error('current-theme-unknown', '无法确认 SillyTavern 当前主题'));
+            }
+            return Promise.resolve()
+                .then(function () { return options.readCurrentTheme(); })
+                .then(function (identity) {
+                    var name = identity && identity.status === 'known' && typeof identity.name === 'string'
+                        ? identity.name.trim()
+                        : '';
+                    if (!name) throw error('current-theme-unknown', '无法确认 SillyTavern 当前主题');
+                    return name;
+                })
+                .catch(function (err) {
+                    if (err && err.code === 'current-theme-unknown') throw err;
+                    throw error('current-theme-unknown', err && err.message ? err.message : '无法确认 SillyTavern 当前主题');
+                });
+        }
+
+        function deleteThemeSafely(themeName, options) {
+            options = options || {};
+            themeName = String(themeName || '').trim();
+            if (!themeName) return Promise.reject(error('empty', '主题名称不能为空'));
+
+            var initialInventory = null;
+            var fallbackTheme = null;
+            var fallbackThemeName = '';
+            var switchedFromCurrent = false;
+            return freshInventory(options.readReason || 'theme-manager-safe-delete-read')
+                .catch(function (err) {
+                    throw error('delete-read-failed', err && err.message ? err.message : '删除前无法读取主题库存', {
+                        inventory: err,
+                    });
+                })
+                .then(function (themes) {
+                    initialInventory = themes;
+                    return readConfirmedCurrentTheme(options);
+                })
+                .then(function (currentTheme) {
+                    var targetTheme = runtime.findTheme(initialInventory, themeName);
+                    if (!targetTheme && currentTheme === themeName) {
+                        throw error('current-theme-unknown', '当前主题与权威主题库存不一致');
+                    }
+                    if (currentTheme !== themeName) return null;
+
+                    switchedFromCurrent = true;
+                    fallbackTheme = initialInventory.find(function (candidate) {
+                        var candidateName = candidate && typeof candidate.name === 'string'
+                            ? candidate.name.trim()
+                            : '';
+                        return candidateName && candidateName !== themeName &&
+                            schema.isUsableTheme(candidate, candidateName) &&
+                            !schema.isLazyThemePlaceholder(candidate, candidateName);
+                    }) || null;
+                    if (!fallbackTheme) {
+                        throw error('no-safe-fallback', '当前主题没有可验证的安全备用主题，已拒绝删除');
+                    }
+                    fallbackThemeName = String(fallbackTheme.name).trim();
+                    if (typeof options.applyFallback !== 'function') {
+                        throw error('fallback-apply-failed', '无法安全切换到备用主题');
+                    }
+
+                    return Promise.resolve()
+                        .then(function () { return options.applyFallback(fallbackThemeName); })
+                        .catch(function (err) {
+                            if (err && err.code === 'fallback-apply-failed') throw err;
+                            throw error('fallback-apply-failed', err && err.message ? err.message : '备用主题应用失败');
+                        })
+                        .then(function (result) {
+                            var ok = result === true || Boolean(result && result.ok === true);
+                            if (!ok) {
+                                throw error('fallback-apply-failed', result && result.reason
+                                    ? String(result.reason)
+                                    : '备用主题应用失败');
+                            }
+                            return readConfirmedCurrentTheme(options);
+                        })
+                        .then(function (confirmedTheme) {
+                            if (confirmedTheme !== fallbackThemeName || confirmedTheme === themeName) {
+                                throw error('fallback-verify-failed', '备用主题状态未能确认，已拒绝删除');
+                            }
+                        });
+                })
+                .then(function () {
+                    return deleteThemeVerified(themeName, {
+                        readReason: options.deleteReadReason || 'theme-manager-safe-delete-final-read',
+                        deleteReason: options.deleteReason || 'theme-manager-safe-delete-written',
+                        verifyReason: options.verifyReason || 'theme-manager-safe-delete-verify',
+                    });
+                })
+                .then(function (result) {
+                    result.switchedFromCurrent = switchedFromCurrent;
+                    result.fallbackTheme = fallbackThemeName;
+                    result.initialInventory = initialInventory;
+                    return result;
+                });
+        }
+
         function deleteThemesVerified(themeNames, options) {
             options = options || {};
             var seen = Object.create(null);
@@ -886,6 +984,7 @@
             saveVerifiedTheme: saveVerifiedTheme,
             saveVerifiedThemes: saveVerifiedThemes,
             deleteThemeVerified: deleteThemeVerified,
+            deleteThemeSafely: deleteThemeSafely,
             deleteThemesVerified: deleteThemesVerified,
             getRenameConflict: getRenameConflict,
             renameTheme: renameTheme,
