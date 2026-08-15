@@ -284,12 +284,18 @@
         var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
         var seriesNormalizationDiagnostics = seriesApi && typeof seriesApi.inspectState === 'function' ? seriesApi.inspectState(d) : [];
         var bindingNormalizationDiagnostics = bindingsApi && typeof bindingsApi.inspectState === 'function' ? bindingsApi.inspectState(d) : [];
+        var categoryDiagnostics = metadataApi && typeof metadataApi.inspectCategories === 'function'
+            ? metadataApi.inspectCategories(d.categories)
+            : { reservedNames: [] };
         if (pairNormalizationDiagnostics.length || seriesNormalizationDiagnostics.length || bindingNormalizationDiagnostics.length) {
             console.warn('[美化管理] 关系数据规范化将拒绝无效或冲突记录:', {
                 pairs: pairNormalizationDiagnostics,
                 series: seriesNormalizationDiagnostics,
                 bindings: bindingNormalizationDiagnostics,
             });
+        }
+        if (categoryDiagnostics.reservedNames.length > 0) {
+            console.warn('[美化管理] 检测到与内部控制值同名的旧分类，已保留原数据但禁止新建或改名为这些名称:', categoryDiagnostics.reservedNames);
         }
         if (pairsApi) pairsApi.ensureState(d);
         else if (!d.dayNight || typeof d.dayNight !== 'object') d.dayNight = { version: 1, pairs: {} };
@@ -510,7 +516,7 @@
     function getItemMetaForWrite(d, item) {
         if (!item) return null;
         if (item.kind === 'pair') {
-            var pair = pairsApi.getPair(d, item.pairId);
+            var pair = pairsApi.getPairForWrite(d, item.pairId);
             return pair ? pair.meta : null;
         }
         return ensureMeta(d, item.themeName);
@@ -1019,7 +1025,10 @@
     function migrateThemeMetaName(oldName, newName) {
         var dd = load();
         var changed = false;
-        if (dd.themeMeta[oldName]) {
+        if (metadataApi.findThemeIdentityConflicts(dd, newName).length > 0) {
+            throw new Error('目标名称存在遗留 ThemeMgr 数据，请先处理冲突。');
+        }
+        if (Object.prototype.hasOwnProperty.call(dd.themeMeta, oldName)) {
             dd.themeMeta[newName] = dd.themeMeta[oldName];
             delete dd.themeMeta[oldName];
             changed = true;
@@ -1102,11 +1111,18 @@
         if (!newName) { if (cb) cb(false, 'empty'); return; }
         if (newName === oldName) { if (cb) cb(false, 'same'); return; }
 
+        var destinationIdentityConflicts = metadataApi.findThemeIdentityConflicts(load(), newName);
+        if (destinationIdentityConflicts.length > 0) {
+            if (cb) cb(false, 'manager-identity-conflict');
+            return;
+        }
+
         var wasCurrent = getCurrentThemeName() === oldName;
 
         themeTransactions.renameTheme(oldName, newName, {
             extraNames: stThemeList.slice(),
             extraNamesComplete: stThemeListReliable,
+            destinationIdentityConflicts: destinationIdentityConflicts,
         })
             .then(function (result) {
                 themeRuntime.forget(oldName);
@@ -5908,13 +5924,14 @@
             if (!confirm('确定清空所有标注数据（分类、标签、截图）？\n主题文件本身不受影响。')) return;
             var dd = load(); dd.themeMeta = {}; dd.categories = []; curCat = '__all__';
             if (pairsApi) {
-                var pairState = pairsApi.ensureState(dd);
+                var pairState = pairsApi.ensureMutableState(dd);
                 Object.keys(pairState.pairs).forEach(function (id) {
                     pairState.pairs[id].meta = pairsApi.normalizeMeta({});
                 });
             }
             if (seriesApi) {
-                seriesApi.listSeries(dd).forEach(function (group) { group.category = ''; });
+                var seriesState = seriesApi.ensureMutableState(dd);
+                Object.keys(seriesState.groups).forEach(function (id) { seriesState.groups[id].category = ''; });
             }
             save(dd); closeSheet(sheet);
             fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); });
@@ -6052,6 +6069,7 @@
         sheet.querySelector('#tm-newadd').addEventListener('click', function () {
             var name = inp.value.trim(); if (!name) return;
             var dd = load();
+            if (metadataApi.isReservedCategoryName(name)) { toast('该名称为内部保留名称，请使用其他分类名', true); return; }
             if (dd.categories.indexOf(name) === -1) { dd.categories.push(name); save(dd); inp.value = ''; closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('分类「' + name + '」已添加'); }
             else toast('分类已存在', true);
         });
@@ -6123,15 +6141,14 @@
             btn.addEventListener('click', function () {
                 var dd = load(); var idx = parseInt(btn.dataset.idx); var old = dd.categories[idx];
                 var nw = prompt('重命名（原：' + old + '）：', old); if (!nw || !nw.trim() || nw.trim() === old) return;
-                nw = nw.trim(); dd.categories[idx] = nw;
-                getLogicalItems(dd).forEach(function (item) {
-                    var meta = getItemMeta(dd, item);
-                    if (meta.category === old) getItemMetaForWrite(dd, item).category = nw;
-                });
-                if (seriesApi) {
-                    seriesApi.listSeries(dd).forEach(function (group) {
-                        if (group.category === old) group.category = nw;
-                    });
+                nw = nw.trim();
+                var renameResult = metadataApi.renameCategory(dd, old, nw);
+                if (!renameResult.ok) {
+                    var renameMessage = renameResult.reason === 'collision'
+                        ? '目标分类已存在，重命名已取消'
+                        : (renameResult.reason === 'reserved' ? '该名称为内部保留名称，请使用其他分类名' : '分类状态无法安全确认，重命名已取消');
+                    toast(renameMessage, true);
+                    return;
                 }
                 save(dd); closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('已重命名');
             });
@@ -6146,8 +6163,9 @@
                     if (meta.category === name) getItemMetaForWrite(dd, item).category = '';
                 });
                 if (seriesApi) {
-                    seriesApi.listSeries(dd).forEach(function (group) {
-                        if (group.category === name) group.category = '';
+                    var seriesState = seriesApi.ensureMutableState(dd);
+                    Object.keys(seriesState.groups).forEach(function (id) {
+                        if (seriesState.groups[id].category === name) seriesState.groups[id].category = '';
                     });
                 }
                 if (curCat === name) curCat = '__all__';

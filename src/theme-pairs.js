@@ -194,6 +194,12 @@
         return pairId ? (ensureState(data).pairs[pairId] || null) : null;
     }
 
+    function getPairForWrite(data, pairId) {
+        pairId = String(pairId || '').trim();
+        if (!pairId || !ensureState(data).pairs[pairId]) return null;
+        return ensureMutableState(data).pairs[pairId] || null;
+    }
+
     function findPairByTheme(data, themeName) {
         themeName = String(themeName || '').trim();
         if (!themeName) return null;
@@ -610,12 +616,14 @@
         SHARED_META_KEYS: SHARED_META_KEYS.slice(),
         createState: createState,
         ensureState: ensureState,
+        ensureMutableState: ensureMutableState,
         inspectState: inspectState,
         normalizeMeta: normalizeMeta,
         makePairTarget: makePairTarget,
         makeItemKey: makeItemKey,
         createPair: createPair,
         getPair: getPair,
+        getPairForWrite: getPairForWrite,
         findPairByTheme: findPairByTheme,
         getVariantTheme: getVariantTheme,
         buildLogicalItems: buildLogicalItems,

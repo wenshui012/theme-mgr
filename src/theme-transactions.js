@@ -720,6 +720,16 @@
             newName = String(newName || '').trim();
             if (!newName) return Promise.reject(error('empty', '主题名称不能为空'));
             if (newName === oldName) return Promise.reject(error('same', '主题名称没有变化'));
+            var managerIdentityConflicts = Array.isArray(options.destinationIdentityConflicts)
+                ? options.destinationIdentityConflicts.filter(Boolean)
+                : [];
+            if (managerIdentityConflicts.length > 0) {
+                return Promise.reject(error(
+                    'manager-identity-conflict',
+                    '目标名称存在遗留 ThemeMgr 数据，请先处理冲突。',
+                    { conflicts: managerIdentityConflicts }
+                ));
+            }
 
             var nativeThemeRef = null;
             var bridge = runtime.getBridge();

@@ -2639,6 +2639,67 @@ test('metadata records are created only by an explicit write', () => {
     assert.equal(data.themeMeta['Write Later'].category, '分类');
 });
 
+test('category rename collision aborts without changing categories metadata pairs or series', () => {
+    const data = {
+        categories: ['A', 'B'],
+        themeMeta: {
+            One: { category: 'A', note: 'keep-a' },
+            Two: { category: 'B', note: 'keep-b' },
+        },
+        dayNight: { pairs: {
+            pairA: { id: 'pairA', name: 'Pair A', dayTheme: 'Day', nightTheme: 'Night', meta: { category: 'A', future: 'keep' } },
+        } },
+        series: { groups: {
+            seriesA: { id: 'seriesA', name: 'Series A', category: 'A', members: [] },
+        } },
+    };
+    const before = clone(data);
+
+    const result = metadata.renameCategory(data, 'A', 'B');
+
+    assert.deepEqual(result, { ok: false, reason: 'collision' });
+    assert.deepEqual(data, before);
+});
+
+test('category rename to a clean name updates every raw category reference exactly once', () => {
+    const data = {
+        categories: ['A', 'B'],
+        themeMeta: { One: { category: 'A' }, Two: { category: 'B' } },
+        dayNight: { pairs: {
+            pairA: { id: 'pairA', meta: { category: 'A', future: 'keep' } },
+            pairB: { id: 'pairB', meta: { category: 'B' } },
+        } },
+        series: { groups: {
+            seriesA: { id: 'seriesA', category: 'A', members: [] },
+            seriesB: { id: 'seriesB', category: 'B', members: [] },
+        } },
+    };
+
+    const result = metadata.renameCategory(data, 'A', 'C');
+
+    assert.equal(result.ok, true);
+    assert.equal(result.changedReferences, 3);
+    assert.deepEqual(data.categories, ['C', 'B']);
+    assert.equal(data.themeMeta.One.category, 'C');
+    assert.equal(data.themeMeta.Two.category, 'B');
+    assert.equal(data.dayNight.pairs.pairA.meta.category, 'C');
+    assert.equal(data.dayNight.pairs.pairA.meta.future, 'keep');
+    assert.equal(data.dayNight.pairs.pairB.meta.category, 'B');
+    assert.equal(data.series.groups.seriesA.category, 'C');
+    assert.equal(data.series.groups.seriesB.category, 'B');
+});
+
+test('reserved category sentinels are rejected only at create and rename boundaries', () => {
+    for (const name of ['__all__', '__uncategorized__', '__new__', '__keep__']) {
+        assert.equal(metadata.isReservedCategoryName(name), true);
+        const data = { categories: ['A', name], themeMeta: { Existing: { category: name } } };
+        const before = clone(data);
+        assert.deepEqual(metadata.renameCategory(data, 'A', name), { ok: false, reason: 'reserved' });
+        assert.deepEqual(data, before);
+    }
+    assert.deepEqual(metadata.inspectCategories(['Normal', '__all__']).reservedNames, ['__all__']);
+});
+
 test('ordinary category metadata round trip preserves classified and unclassified themes', () => {
     const target = { categories: [], themeMeta: {} };
     metadata.mergeImported(target, ['A', 'B', 'C'], {
@@ -2932,6 +2993,70 @@ test('rename aborts with zero writes when the authoritative prewrite inventory i
     assert.deepEqual(harness.calls, []);
     assert.deepEqual(harness.store.Old, old);
     assert.equal(harness.store.New, undefined);
+});
+
+test('orphan ThemeMgr destination identities abort rename before every theme write', async () => {
+    const cases = [
+        {
+            label: 'metadata',
+            data: { themeMeta: { New: { note: 'orphan', screenshot: 'keep.png', category: 'Keep' } } },
+            expectedType: 'metadata',
+        },
+        {
+            label: 'pair',
+            data: { dayNight: { pairs: { orphanPair: { id: 'orphanPair', dayTheme: 'New', nightTheme: 'Other' } } } },
+            expectedType: 'pair',
+        },
+        {
+            label: 'series',
+            data: { series: { groups: { orphanSeries: { id: 'orphanSeries', members: [{ kind: 'theme', themeName: 'New' }] } } } },
+            expectedType: 'series',
+        },
+        {
+            label: 'binding',
+            data: { bindings: { characters: { 'orphan.png': { target: { kind: 'theme', themeName: 'New' } } } } },
+            expectedType: 'binding',
+        },
+    ];
+
+    for (const item of cases) {
+        const before = clone(item.data);
+        const conflicts = metadata.findThemeIdentityConflicts(item.data, 'New');
+        assert.equal(conflicts.some((conflict) => conflict.type === item.expectedType), true, item.label);
+        const harness = makeTransactionHarness([completeTheme('Old')]);
+
+        await assert.rejects(
+            harness.transactions.renameTheme('Old', 'New', { destinationIdentityConflicts: conflicts }),
+            (error) => error && error.code === 'manager-identity-conflict',
+        );
+
+        assert.deepEqual(harness.calls, [], item.label);
+        assert.equal(harness.getInventoryCount(), 0, item.label);
+        assert.equal(harness.getHeaderCount(), 0, item.label);
+        assert.deepEqual(item.data, before, item.label);
+        assert.equal(harness.store.Old.name, 'Old', item.label);
+        assert.equal(harness.store.New, undefined, item.label);
+    }
+});
+
+test('even an empty own metadata destination key blocks rename while a clean destination proceeds', async () => {
+    const orphanData = { themeMeta: { New: {} } };
+    assert.deepEqual(metadata.findThemeIdentityConflicts(orphanData, 'New'), [{ type: 'metadata', key: 'New' }]);
+    const blocked = makeTransactionHarness([completeTheme('Old')]);
+    await assert.rejects(
+        blocked.transactions.renameTheme('Old', 'New', {
+            destinationIdentityConflicts: metadata.findThemeIdentityConflicts(orphanData, 'New'),
+        }),
+        (error) => error && error.code === 'manager-identity-conflict',
+    );
+    assert.deepEqual(blocked.calls, []);
+
+    const cleanData = { themeMeta: {} };
+    assert.deepEqual(metadata.findThemeIdentityConflicts(cleanData, 'New'), []);
+    const clean = makeTransactionHarness([completeTheme('Old')]);
+    const result = await clean.transactions.renameTheme('Old', 'New', { destinationIdentityConflicts: [] });
+    assert.equal(result.newName, 'New');
+    assert.deepEqual(clean.calls.map((call) => `${call.type}:${call.name}`), ['save:New', 'delete:Old']);
 });
 
 test('transactional rename preserves the exact legacy partial fields and saves before deleting', async () => {

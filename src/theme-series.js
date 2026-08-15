@@ -560,6 +560,7 @@
         SERIES_VERSION: SERIES_VERSION,
         createState: createState,
         ensureState: ensureState,
+        ensureMutableState: ensureMutableState,
         inspectState: inspectState,
         normalizeTarget: normalizeTarget,
         targetKey: targetKey,

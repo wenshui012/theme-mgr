@@ -14,6 +14,12 @@
         description: '',
         backgroundName: '',
     });
+    var RESERVED_CATEGORY_NAMES = Object.freeze([
+        '__all__',
+        '__uncategorized__',
+        '__new__',
+        '__keep__',
+    ]);
 
     function isObject(value) {
         return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -112,6 +118,107 @@
         return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
     }
 
+    function isReservedCategoryName(name) {
+        return RESERVED_CATEGORY_NAMES.indexOf(String(name || '').trim()) !== -1;
+    }
+
+    function inspectCategories(categories) {
+        var values = Array.isArray(categories) ? categories : [];
+        return {
+            reservedNames: values.filter(function (name) { return isReservedCategoryName(name); }),
+        };
+    }
+
+    function renameCategory(data, oldName, newName) {
+        if (!isObject(data) || !Array.isArray(data.categories)) return { ok: false, reason: 'invalid-state' };
+        oldName = String(oldName || '');
+        newName = String(newName || '').trim();
+        if (!newName) return { ok: false, reason: 'empty' };
+        if (newName === oldName) return { ok: false, reason: 'same' };
+        if (isReservedCategoryName(newName)) return { ok: false, reason: 'reserved' };
+        var sourceIndexes = [];
+        data.categories.forEach(function (name, index) {
+            if (name === oldName) sourceIndexes.push(index);
+        });
+        if (sourceIndexes.length !== 1) return { ok: false, reason: sourceIndexes.length ? 'ambiguous-source' : 'missing' };
+        if (data.categories.some(function (name, index) { return index !== sourceIndexes[0] && name === newName; })) {
+            return { ok: false, reason: 'collision' };
+        }
+
+        data.categories[sourceIndexes[0]] = newName;
+        var changedReferences = 0;
+        var themeMeta = isObject(data.themeMeta) ? data.themeMeta : {};
+        Object.keys(themeMeta).forEach(function (themeName) {
+            var meta = themeMeta[themeName];
+            if (isObject(meta) && meta.category === oldName) {
+                meta.category = newName;
+                changedReferences += 1;
+            }
+        });
+        var pairMap = isObject(data.dayNight) && isObject(data.dayNight.pairs) ? data.dayNight.pairs : {};
+        Object.keys(pairMap).forEach(function (id) {
+            var pair = pairMap[id];
+            if (isObject(pair) && isObject(pair.meta) && pair.meta.category === oldName) {
+                pair.meta.category = newName;
+                changedReferences += 1;
+            }
+        });
+        var seriesMap = isObject(data.series) && isObject(data.series.groups) ? data.series.groups : {};
+        Object.keys(seriesMap).forEach(function (id) {
+            var group = seriesMap[id];
+            if (isObject(group) && group.category === oldName) {
+                group.category = newName;
+                changedReferences += 1;
+            }
+        });
+        return { ok: true, oldName: oldName, newName: newName, changedReferences: changedReferences };
+    }
+
+    function targetReferencesTheme(target, themeName) {
+        if (typeof target === 'string') return target === themeName;
+        if (!isObject(target)) return false;
+        if (target.kind === 'theme' && String(target.themeName || '').trim() === themeName) return true;
+        if (typeof target.themeName === 'string' && target.themeName.trim() === themeName) return true;
+        return isObject(target.target) && targetReferencesTheme(target.target, themeName);
+    }
+
+    function findThemeIdentityConflicts(data, themeName) {
+        themeName = String(themeName || '').trim();
+        if (!themeName || !isObject(data)) return [];
+        var conflicts = [];
+        if (isObject(data.themeMeta) && Object.prototype.hasOwnProperty.call(data.themeMeta, themeName)) {
+            conflicts.push({ type: 'metadata', key: themeName });
+        }
+        var pairMap = isObject(data.dayNight) && isObject(data.dayNight.pairs) ? data.dayNight.pairs : {};
+        Object.keys(pairMap).forEach(function (id) {
+            var pair = pairMap[id];
+            if (!isObject(pair)) return;
+            if (String(pair.dayTheme || '').trim() === themeName || String(pair.nightTheme || '').trim() === themeName) {
+                conflicts.push({ type: 'pair', key: id });
+            }
+        });
+        var seriesMap = isObject(data.series) && isObject(data.series.groups) ? data.series.groups : {};
+        Object.keys(seriesMap).forEach(function (id) {
+            var group = seriesMap[id];
+            if (!isObject(group) || !Array.isArray(group.members)) return;
+            if (group.members.some(function (member) { return targetReferencesTheme(member, themeName); })) {
+                conflicts.push({ type: 'series', key: id });
+            }
+        });
+        var bindingState = isObject(data.bindings) ? data.bindings : {};
+        if (targetReferencesTheme(bindingState.manualTarget, themeName) ||
+            typeof bindingState.manualTheme === 'string' && bindingState.manualTheme.trim() === themeName) {
+            conflicts.push({ type: 'binding', key: 'manual' });
+        }
+        ['characters', 'chats'].forEach(function (scope) {
+            var map = isObject(bindingState[scope]) ? bindingState[scope] : {};
+            Object.keys(map).forEach(function (key) {
+                if (targetReferencesTheme(map[key], themeName)) conflicts.push({ type: 'binding', scope: scope, key: key });
+            });
+        });
+        return conflicts;
+    }
+
     function mergeImported(data, themeNames, metaByName, categories, options) {
         options = options || {};
         if (!isObject(data)) throw new TypeError('metadata data must be an object');
@@ -152,5 +259,10 @@
         hasMeaningfulAnnotation: hasMeaningfulAnnotation,
         inspect: inspect,
         mergeImported: mergeImported,
+        RESERVED_CATEGORY_NAMES: RESERVED_CATEGORY_NAMES.slice(),
+        isReservedCategoryName: isReservedCategoryName,
+        inspectCategories: inspectCategories,
+        renameCategory: renameCategory,
+        findThemeIdentityConflicts: findThemeIdentityConflicts,
     };
 })(window);
