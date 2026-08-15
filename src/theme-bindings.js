@@ -84,19 +84,36 @@
         return diagnostics;
     }
 
+    function buildUsableState(data) {
+        var source = isObject(data) && isObject(data.bindings) ? data.bindings : createState();
+        var manualTheme = typeof source.manualTheme === 'string' ? source.manualTheme.trim() : '';
+        var manualTarget = normalizeTarget(source.manualTarget) || makeThemeTarget(manualTheme);
+        return {
+            version: BINDING_VERSION,
+            characters: normalizeMap(source.characters),
+            chats: normalizeMap(source.chats),
+            manualTheme: manualTarget && manualTarget.kind === 'theme'
+                ? manualTarget.themeName
+                : '',
+            manualTarget: manualTarget,
+        };
+    }
+
     function ensureState(data) {
+        return buildUsableState(data);
+    }
+
+    function ensureMutableState(data) {
         if (!isObject(data)) return createState();
-        var state = isObject(data.bindings) ? data.bindings : createState();
-        state.version = BINDING_VERSION;
-        state.characters = normalizeMap(state.characters);
-        state.chats = normalizeMap(state.chats);
-        state.manualTheme = typeof state.manualTheme === 'string' ? state.manualTheme.trim() : '';
-        state.manualTarget = normalizeTarget(state.manualTarget) || makeThemeTarget(state.manualTheme);
-        state.manualTheme = state.manualTarget && state.manualTarget.kind === 'theme'
-            ? state.manualTarget.themeName
-            : '';
+        var state = buildUsableState(data);
         data.bindings = state;
         return state;
+    }
+
+    function ensureRawState(data) {
+        if (!isObject(data)) return createState();
+        if (!isObject(data.bindings)) data.bindings = createState();
+        return data.bindings;
     }
 
     function getContextInfo(context) {
@@ -182,19 +199,20 @@
     }
 
     function setBinding(data, scope, context, targetInput) {
-        var state = ensureState(data);
         var info = getContextInfo(context);
         var target = normalizeTarget(targetInput);
         if (!target) return { ok: false, reason: 'invalid-theme', context: info };
 
         if (scope === 'character') {
             if (info.isGroup || !info.characterKey) return { ok: false, reason: 'no-character', context: info };
+            var state = ensureMutableState(data);
             state.characters[info.characterKey] = {
                 label: info.characterLabel,
                 target: target,
             };
         } else if (scope === 'chat') {
             if (!info.chatKey || !info.chatId) return { ok: false, reason: 'no-chat', context: info };
+            state = ensureMutableState(data);
             state.chats[info.chatKey] = {
                 label: info.chatLabel,
                 target: target,
@@ -206,23 +224,26 @@
     }
 
     function clearBinding(data, scope, context) {
-        var state = ensureState(data);
         var info = getContextInfo(context);
+        var view = ensureState(data);
         var map;
         var key;
         if (scope === 'character') {
-            map = state.characters;
+            map = view.characters;
             key = info.isGroup ? '' : info.characterKey;
         } else if (scope === 'chat') {
-            map = state.chats;
+            map = view.chats;
             key = info.chatKey;
         } else {
             return { ok: false, reason: 'invalid-scope', context: info };
         }
         if (!key) return { ok: false, reason: scope === 'chat' ? 'no-chat' : 'no-character', context: info };
         var existed = !!map[key];
+        if (!existed) return { ok: true, scope: scope, removed: false, context: info };
+        var state = ensureMutableState(data);
+        map = scope === 'character' ? state.characters : state.chats;
         delete map[key];
-        return { ok: true, scope: scope, removed: existed, context: info };
+        return { ok: true, scope: scope, removed: true, context: info };
     }
 
     function visitRecords(state, visitor) {
@@ -239,6 +260,20 @@
         if (!oldName || !newName || oldName === newName) return 0;
         var state = ensureState(data);
         var changed = 0;
+        if (state.manualTarget && state.manualTarget.kind === 'theme' && state.manualTarget.themeName === oldName) {
+            state.manualTarget.themeName = newName;
+            state.manualTheme = newName;
+            changed += 1;
+        }
+        visitRecords(state, function (record) {
+            if (record.target.kind === 'theme' && record.target.themeName === oldName) {
+                record.target.themeName = newName;
+                changed += 1;
+            }
+        });
+        if (!changed) return 0;
+        state = ensureMutableState(data);
+        changed = 0;
         if (state.manualTarget && state.manualTarget.kind === 'theme' && state.manualTarget.themeName === oldName) {
             state.manualTarget.themeName = newName;
             state.manualTheme = newName;
@@ -271,6 +306,22 @@
                 }
             });
         });
+        if (!changed) return 0;
+        state = ensureMutableState(data);
+        changed = 0;
+        if (state.manualTarget && state.manualTarget.kind === 'theme' && state.manualTarget.themeName === themeName) {
+            state.manualTarget = null;
+            state.manualTheme = '';
+            changed += 1;
+        }
+        ['characters', 'chats'].forEach(function (scope) {
+            Object.keys(state[scope]).forEach(function (key) {
+                if (getThemeName(state[scope][key]) === themeName) {
+                    delete state[scope][key];
+                    changed += 1;
+                }
+            });
+        });
         return changed;
     }
 
@@ -278,8 +329,8 @@
         oldKey = String(oldKey || '').trim();
         newKey = String(newKey || '').trim();
         if (!oldKey || !newKey || oldKey === newKey) return false;
-        var state = ensureState(data);
-        if (!state.characters[oldKey]) return false;
+        if (!ensureState(data).characters[oldKey]) return false;
+        var state = ensureMutableState(data);
         state.characters[newKey] = state.characters[oldKey];
         delete state.characters[oldKey];
         return true;
@@ -288,8 +339,8 @@
     function removeCharacterBinding(data, characterKey) {
         characterKey = String(characterKey || '').trim();
         if (!characterKey) return false;
-        var state = ensureState(data);
-        if (!state.characters[characterKey]) return false;
+        if (!ensureState(data).characters[characterKey]) return false;
+        var state = ensureMutableState(data);
         delete state.characters[characterKey];
         return true;
     }
@@ -335,6 +386,8 @@
             ? state.characters
             : (scope === 'chat' || scope === 'chats' ? state.chats : null);
         if (!map || !map[key] || !targetsEqual(getTarget(map[key]), target)) return false;
+        state = ensureMutableState(data);
+        map = scope === 'character' || scope === 'characters' ? state.characters : state.chats;
         delete map[key];
         return true;
     }
@@ -344,6 +397,16 @@
         if (!target) return 0;
         var state = ensureState(data);
         var removed = 0;
+        ['characters', 'chats'].forEach(function (scope) {
+            Object.keys(state[scope]).forEach(function (key) {
+                if (!targetsEqual(getTarget(state[scope][key]), target)) return;
+                delete state[scope][key];
+                removed += 1;
+            });
+        });
+        if (!removed) return 0;
+        state = ensureMutableState(data);
+        removed = 0;
         ['characters', 'chats'].forEach(function (scope) {
             Object.keys(state[scope]).forEach(function (key) {
                 if (!targetsEqual(getTarget(state[scope][key]), target)) return;
@@ -383,6 +446,22 @@
                 changed += 1;
             });
         });
+        if (!changed) return 0;
+        state = ensureMutableState(data);
+        changed = 0;
+        replaceTarget(state, 'manualTarget');
+        state.manualTheme = state.manualTarget && state.manualTarget.kind === 'theme'
+            ? state.manualTarget.themeName
+            : '';
+        ['characters', 'chats'].forEach(function (scope) {
+            Object.keys(state[scope]).forEach(function (key) {
+                var record = state[scope][key];
+                if (!record || !targetsEqual(record.target, { kind: 'day-night', pairId: pairId })) return;
+                if (replacement) record.target = replacement;
+                else delete state[scope][key];
+                changed += 1;
+            });
+        });
         return changed;
     }
 
@@ -397,6 +476,20 @@
         var target = { kind: 'day-night', pairId: pairId };
         var state = ensureState(data);
         var changed = 0;
+        if (state.manualTarget && state.manualTarget.kind === 'theme' && names[state.manualTarget.themeName]) {
+            state.manualTarget = target;
+            state.manualTheme = '';
+            changed += 1;
+        }
+        visitRecords(state, function (record) {
+            if (record.target.kind === 'theme' && names[record.target.themeName]) {
+                record.target = { kind: 'day-night', pairId: pairId };
+                changed += 1;
+            }
+        });
+        if (!changed) return 0;
+        state = ensureMutableState(data);
+        changed = 0;
         if (state.manualTarget && state.manualTarget.kind === 'theme' && names[state.manualTarget.themeName]) {
             state.manualTarget = target;
             state.manualTheme = '';
@@ -503,7 +596,8 @@
         function commitManualTarget(data, target) {
             var state = ensureManualRuntime(data);
             target = normalizeTarget(target);
-            var changed = writeManualTarget(state, target);
+            var changed = !targetsEqual(state.manualTarget, target);
+            if (changed) writeManualTarget(ensureRawState(data), target);
             verifiedManualTarget = normalizeTarget(target);
             manualIntentTarget = normalizeTarget(target);
             manualIntentUnverified = false;
@@ -590,7 +684,7 @@
             manualIntentTarget = normalizeTarget(target);
             verifiedManualTarget = normalizeTarget(target);
             manualIntentUnverified = false;
-            persistedChanged = writeManualTarget(state, target);
+            if (persistedChanged) writeManualTarget(ensureRawState(data), target);
             if (persistedChanged) save(data);
             return runtimeChanged || persistedChanged;
         }
@@ -672,17 +766,13 @@
             var data = load();
             var state = ensureState(data);
             var currentTheme = currentThemeSafe();
-            if (!state.manualTarget && currentTheme) {
-                state.manualTarget = targetForTheme(currentTheme);
-                state.manualTheme = state.manualTarget && state.manualTarget.kind === 'theme'
-                    ? state.manualTarget.themeName
-                    : '';
-            }
+            var initialManualTarget = !state.manualTarget && currentTheme ? targetForTheme(currentTheme) : null;
             var result = setBinding(data, scope, contextSafe(), targetInput);
             if (!result.ok) {
                 if (callback) callback(false, result);
                 return result;
             }
+            if (initialManualTarget) writeManualTarget(ensureRawState(data), initialManualTarget);
             save(data);
             reconcile(function (ok, outcome) {
                 if (callback) callback(ok, outcome);
@@ -752,10 +842,13 @@
             avatar = String(avatar || '').trim();
             name = String(name || '').trim();
             if (!avatar || !name) return false;
-            var state = ensureState(data);
-            var record = state.characters[avatar];
+            var state = isObject(data) && isObject(data.bindings) ? data.bindings : null;
+            var map = state && isObject(state.characters) ? state.characters : null;
+            var rawRecord = map ? map[avatar] : null;
+            var record = normalizeRecord(rawRecord);
             if (!record || record.label === name) return false;
-            record.label = name;
+            if (isObject(rawRecord)) rawRecord.label = name;
+            else map[avatar] = { label: name, target: record.target };
             return true;
         }
 
@@ -763,16 +856,15 @@
             context = context || contextSafe();
             var info = getContextInfo(context);
             var data = load();
-            var state = ensureState(data);
             var changed = false;
-            if (!info.isGroup && info.characterKey && state.characters[info.characterKey] &&
-                info.characterLabel && state.characters[info.characterKey].label !== info.characterLabel) {
-                state.characters[info.characterKey].label = info.characterLabel;
-                changed = true;
-            }
-            if (info.chatKey && state.chats[info.chatKey] &&
-                info.chatLabel && state.chats[info.chatKey].label !== info.chatLabel) {
-                state.chats[info.chatKey].label = info.chatLabel;
+            if (!info.isGroup && refreshCharacterBindingLabel(data, info.characterKey, info.characterLabel)) changed = true;
+            var bindingState = isObject(data) && isObject(data.bindings) ? data.bindings : null;
+            var chatMap = bindingState && isObject(bindingState.chats) ? bindingState.chats : null;
+            var rawChat = chatMap && info.chatKey ? chatMap[info.chatKey] : null;
+            var chatRecord = normalizeRecord(rawChat);
+            if (chatRecord && info.chatLabel && chatRecord.label !== info.chatLabel) {
+                if (isObject(rawChat)) rawChat.label = info.chatLabel;
+                else chatMap[info.chatKey] = { label: info.chatLabel, target: chatRecord.target };
                 changed = true;
             }
             if (changed) save(data);
@@ -867,7 +959,12 @@
             var initial = resolveCurrent(data, context);
             var currentTheme = currentThemeSafe();
             var state = ensureState(data);
-            var shouldCaptureCurrent = currentTheme && (
+            var rawBindingState = isObject(data) && isObject(data.bindings) ? data.bindings : null;
+            var hasRawManualIdentity = !!(rawBindingState && (
+                Object.prototype.hasOwnProperty.call(rawBindingState, 'manualTarget') && rawBindingState.manualTarget !== null && rawBindingState.manualTarget !== undefined ||
+                typeof rawBindingState.manualTheme === 'string' && rawBindingState.manualTheme.trim()
+            ));
+            var shouldCaptureCurrent = currentTheme && !hasRawManualIdentity && (
                 !initial.scope ||
                 (!state.manualTarget && currentTheme !== initial.themeName)
             );
@@ -907,6 +1004,7 @@
         BINDING_VERSION: BINDING_VERSION,
         createState: createState,
         ensureState: ensureState,
+        ensureMutableState: ensureMutableState,
         inspectState: inspectState,
         makeThemeTarget: makeThemeTarget,
         normalizeTarget: normalizeTarget,

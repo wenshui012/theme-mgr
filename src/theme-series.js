@@ -70,9 +70,8 @@
         };
     }
 
-    function ensureState(data) {
-        if (!isObject(data)) return createState();
-        var source = isObject(data.series) ? data.series : createState();
+    function buildUsableState(data) {
+        var source = isObject(data) && isObject(data.series) ? data.series : createState();
         var groups = isObject(source.groups) ? source.groups : {};
         var normalized = {};
         var claimed = {};
@@ -88,10 +87,18 @@
             group.members.forEach(function (target) { claimed[targetKey(target)] = group.id; });
             normalized[group.id] = group;
         });
-        source.version = SERIES_VERSION;
-        source.groups = normalized;
-        data.series = source;
-        return source;
+        return { version: SERIES_VERSION, groups: normalized };
+    }
+
+    function ensureState(data) {
+        return buildUsableState(data);
+    }
+
+    function ensureMutableState(data) {
+        if (!isObject(data)) return createState();
+        var state = buildUsableState(data);
+        data.series = state;
+        return state;
     }
 
     function inspectState(data) {
@@ -197,6 +204,7 @@
             members: members,
         }, id);
         if (!group) return { ok: false, reason: 'invalid' };
+        state = ensureMutableState(data);
         state.groups[id] = group;
         return { ok: true, series: group };
     }
@@ -214,6 +222,10 @@
                 return { ok: false, reason: 'already-series', seriesId: existing.id, target: additions[i] };
             }
         }
+        state = ensureMutableState(data);
+        group = state.groups[String(seriesId || '').trim()];
+        own = {};
+        group.members.forEach(function (member) { own[targetKey(member)] = true; });
         var added = 0;
         additions.forEach(function (member) {
             var key = targetKey(member);
@@ -226,9 +238,10 @@
     }
 
     function renameSeries(data, seriesId, name) {
-        var group = getSeries(data, seriesId);
         name = String(name || '').trim();
+        var group = getSeries(data, seriesId);
         if (!group || !name) return false;
+        group = ensureMutableState(data).groups[String(seriesId || '').trim()];
         group.name = name;
         return true;
     }
@@ -236,14 +249,15 @@
     function setSeriesCategory(data, seriesId, category) {
         var group = getSeries(data, seriesId);
         if (!group) return false;
+        group = ensureMutableState(data).groups[String(seriesId || '').trim()];
         group.category = typeof category === 'string' ? category : '';
         return true;
     }
 
     function dissolveSeries(data, seriesId) {
-        var state = ensureState(data);
         seriesId = String(seriesId || '').trim();
-        if (!seriesId || !state.groups[seriesId]) return false;
+        if (!seriesId || !ensureState(data).groups[seriesId]) return false;
+        var state = ensureMutableState(data);
         delete state.groups[seriesId];
         return true;
     }
@@ -254,8 +268,11 @@
         var key = targetKey(targetInput);
         if (!group || !key) return { ok: false, reason: 'missing' };
         var before = group.members.length;
-        group.members = group.members.filter(function (member) { return targetKey(member) !== key; });
-        if (group.members.length === before) return { ok: false, reason: 'missing' };
+        var nextMembers = group.members.filter(function (member) { return targetKey(member) !== key; });
+        if (nextMembers.length === before) return { ok: false, reason: 'missing' };
+        state = ensureMutableState(data);
+        group = state.groups[String(seriesId || '').trim()];
+        group.members = nextMembers;
         if (group.members.length < 2) {
             delete state.groups[group.id];
             return { ok: true, removed: true, dissolved: true, seriesId: group.id };
@@ -281,6 +298,8 @@
                 return { ok: false, reason: 'replacement-in-series', seriesId: owner.id };
             }
         }
+        state = ensureMutableState(data);
+        group = state.groups[affected[0]];
         var next = [];
         var seen = {};
         var inserted = false;
@@ -345,6 +364,20 @@
             group.members = normalizeMembers(group.members);
             if (group.members.length < 2) delete state.groups[id];
         });
+        if (!changed) return 0;
+        state = ensureMutableState(data);
+        changed = 0;
+        Object.keys(state.groups).forEach(function (id) {
+            var group = state.groups[id];
+            group.members.forEach(function (member) {
+                if (member.kind === 'theme' && member.themeName === oldName) {
+                    member.themeName = newName;
+                    changed += 1;
+                }
+            });
+            group.members = normalizeMembers(group.members);
+            if (group.members.length < 2) delete state.groups[id];
+        });
         return changed;
     }
 
@@ -355,6 +388,13 @@
             if (name) removing[name] = true;
         });
         var state = ensureState(data);
+        var affected = Object.keys(state.groups).some(function (id) {
+            return state.groups[id].members.some(function (member) {
+                return member.kind === 'theme' && !!removing[member.themeName];
+            });
+        });
+        if (!affected) return 0;
+        state = ensureMutableState(data);
         var removed = 0;
         Object.keys(state.groups).forEach(function (id) {
             var group = state.groups[id];

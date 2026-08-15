@@ -3425,7 +3425,7 @@ test('pair member conflicts are diagnosed without replacing the existing relatio
     assert.equal(pairs.getPair(target, 'incoming'), null);
 });
 
-test('pair ensureState diagnostics expose records that normalization would discard', () => {
+test('pair ensureState diagnostics expose conflicts without discarding raw records', () => {
     const data = { dayNight: { pairs: {
         first: { id: 'first', name: 'First', dayTheme: 'A', nightTheme: 'B' },
         second: { id: 'second', name: 'Second', dayTheme: 'A', nightTheme: 'C' },
@@ -3435,8 +3435,9 @@ test('pair ensureState diagnostics expose records that normalization would disca
     assert.equal(diagnostics.length, 1);
     assert.equal(diagnostics[0].reason, 'member-conflict');
     assert.equal(Object.keys(data.dayNight.pairs).length, 2);
-    pairs.ensureState(data);
-    assert.deepEqual(Object.keys(data.dayNight.pairs), ['first']);
+    const usable = pairs.ensureState(data);
+    assert.deepEqual(Object.keys(usable.pairs), ['first']);
+    assert.deepEqual(Object.keys(data.dayNight.pairs), ['first', 'second']);
 });
 
 test('series groups ordinary and day-night logical items without changing their theme data', () => {
@@ -3591,7 +3592,7 @@ test('series member conflicts are diagnosed without replacing a legal local grou
     assert.equal(series.getSeries(target, 'incoming-series'), null);
 });
 
-test('series ensureState diagnostics expose overlapping records before normalization', () => {
+test('series ensureState diagnostics expose overlapping records without mutating raw state', () => {
     const data = { series: { groups: {
         first: { id: 'first', name: 'First', members: [{ kind: 'theme', themeName: 'A' }, { kind: 'theme', themeName: 'B' }] },
         second: { id: 'second', name: 'Second', members: [{ kind: 'theme', themeName: 'A' }, { kind: 'theme', themeName: 'C' }] },
@@ -3601,9 +3602,121 @@ test('series ensureState diagnostics expose overlapping records before normaliza
     assert.equal(diagnostics.length, 1);
     assert.equal(diagnostics[0].reason, 'member-conflict');
     assert.equal(Object.keys(data.series.groups).length, 2);
-    series.ensureState(data);
+    const usable = series.ensureState(data);
+    assert.deepEqual(Object.keys(usable.groups), ['first']);
+    assert.deepEqual(Object.keys(data.series.groups), ['first', 'second']);
     assert.equal(series.getSeries(data, 'first').members.length, 2);
     assert.equal(series.getSeries(data, 'second'), null);
+});
+
+test('pair startup browse export and unrelated saves preserve malformed conflicting raw records', () => {
+    const data = {
+        dayNight: {
+            version: 9,
+            futureState: { keep: true },
+            pairs: {
+                valid: {
+                    id: 'valid',
+                    name: 'Valid',
+                    dayTheme: 'A',
+                    nightTheme: 'B',
+                    futurePairField: { keep: 'pair' },
+                },
+                conflict: { id: 'conflict', name: 'Conflict', dayTheme: 'A', nightTheme: 'C' },
+                malformed: { id: 'malformed', name: 'Malformed', dayTheme: 'Only' },
+            },
+        },
+        themeMeta: {},
+        showBall: true,
+    };
+    const rawBefore = clone(data.dayNight);
+
+    assert.equal(pairs.inspectState(data).length, 2);
+    assert.deepEqual(Object.keys(pairs.ensureState(data).pairs), ['valid']);
+    pairs.buildLogicalItems(data, ['A', 'B', 'C']);
+    pairs.exportPairs(data, ['A', 'B', 'C']);
+    data.showBall = false;
+    const persisted = clone(data);
+
+    assert.deepEqual(data.dayNight, rawBefore);
+    assert.deepEqual(persisted.dayNight, rawBefore);
+    assert.equal(Object.keys(data.dayNight.pairs).length, 3);
+    assert.deepEqual(data.dayNight.pairs.valid.futurePairField, { keep: 'pair' });
+});
+
+test('series startup list export and unrelated saves preserve malformed short and conflicting raw groups', () => {
+    const data = {
+        series: {
+            version: 7,
+            futureState: 'keep-series',
+            groups: {
+                valid: {
+                    id: 'valid',
+                    name: 'Valid',
+                    members: [{ kind: 'theme', themeName: 'A' }, { kind: 'theme', themeName: 'B' }],
+                    futureGroupField: { keep: true },
+                },
+                conflict: {
+                    id: 'conflict',
+                    name: 'Conflict',
+                    members: [{ kind: 'theme', themeName: 'A' }, { kind: 'theme', themeName: 'C' }],
+                },
+                short: { id: 'short', name: 'Short', members: [{ kind: 'theme', themeName: 'D' }] },
+                malformed: { id: 'malformed', members: 'not-an-array' },
+            },
+        },
+        sortMode: 'name',
+    };
+    const rawBefore = clone(data.series);
+
+    assert.equal(series.inspectState(data).length, 3);
+    assert.deepEqual(series.listSeries(data).map((group) => group.id), ['valid']);
+    series.exportSeries(data, ['A', 'B', 'C', 'D'], []);
+    data.sortMode = 'recent';
+    const persisted = clone(data);
+
+    assert.deepEqual(data.series, rawBefore);
+    assert.deepEqual(persisted.series, rawBefore);
+    assert.equal(Object.keys(data.series.groups).length, 4);
+    assert.deepEqual(data.series.groups.valid.futureGroupField, { keep: true });
+});
+
+test('binding startup reads and unrelated saves retain invalid and future raw records', () => {
+    const data = {
+        bindings: {
+            version: 8,
+            futureState: { keep: 'bindings' },
+            characters: {
+                'valid.png': { label: 'Valid', target: { kind: 'theme', themeName: 'A' }, futureRecordField: 42 },
+                'invalid.png': { target: { kind: 'future-target', value: 'raw' } },
+            },
+            chats: { 'invalid-chat': { target: null, raw: 'keep' } },
+            manualTarget: { kind: 'future-target', value: 'manual-raw' },
+        },
+        showFreq: true,
+    };
+    const rawBefore = clone(data.bindings);
+    let saves = 0;
+    const controller = bindings.createController({
+        load() { return data; },
+        save() { saves += 1; },
+        getContext() { return {}; },
+        getCurrentThemeName() { return 'A'; },
+        applyTheme() {},
+    });
+
+    assert.equal(bindings.inspectState(data).length, 3);
+    assert.equal(bindings.ensureState(data).characters['invalid.png'], undefined);
+    assert.equal(bindings.countBindings(data), 1);
+    controller.start();
+    controller.stop();
+    data.showFreq = false;
+    const persisted = clone(data);
+
+    assert.equal(saves, 0);
+    assert.deepEqual(data.bindings, rawBefore);
+    assert.deepEqual(persisted.bindings, rawBefore);
+    assert.equal(data.bindings.characters['valid.png'].futureRecordField, 42);
 });
 
 test('mixed category pair and series data survive an export-import round trip', () => {
@@ -3957,7 +4070,7 @@ test('color-scheme watcher detects mobile WebView changes even when the original
 test('creating and dissolving a day-night item migrates character chat and manual targets safely', () => {
     const data = { themeMeta: {} };
     const context = makeBindingContext();
-    const state = bindings.ensureState(data);
+    const state = bindings.ensureMutableState(data);
     state.manualTheme = 'Day';
     bindings.setBinding(data, 'character', context, 'Night');
     bindings.setBinding(data, 'chat', context, 'Day');
@@ -4092,7 +4205,7 @@ test('binding state normalizes legacy strings and drops malformed records', () =
     assert.equal(state.manualTheme, '');
 });
 
-test('binding diagnostics expose malformed records before normalization drops them', () => {
+test('binding diagnostics expose malformed records while raw records remain intact', () => {
     const data = {
         bindings: {
             characters: { 'valid.png': 'Rose', 'broken.png': { target: { kind: 'pair', themeName: 'Future' } } },
@@ -4105,14 +4218,15 @@ test('binding diagnostics expose malformed records before normalization drops th
     assert.equal(diagnostics.length, 3);
     assert.deepEqual(diagnostics.map((item) => item.scope).sort(), ['characters', 'chats', 'manual']);
     assert.equal(Object.keys(data.bindings.characters).length, 2);
-    bindings.ensureState(data);
-    assert.equal(data.bindings.characters['broken.png'], undefined);
+    const usable = bindings.ensureState(data);
+    assert.equal(usable.characters['broken.png'], undefined);
+    assert.deepEqual(data.bindings.characters['broken.png'], { target: { kind: 'pair', themeName: 'Future' } });
 });
 
 test('chat binding overrides character binding and both fall back to the manual theme', () => {
     const data = {};
     const context = makeBindingContext();
-    bindings.ensureState(data).manualTheme = 'Manual';
+    bindings.ensureMutableState(data).manualTheme = 'Manual';
 
     assert.equal(bindings.setBinding(data, 'character', context, 'Character Theme').ok, true);
     assert.equal(bindings.setBinding(data, 'chat', context, 'Chat Theme').ok, true);
@@ -4166,7 +4280,7 @@ test('group chats use only their chat binding and never inherit a transient memb
         chatId: 'Group Chat',
         chatMetadata: { integrity: 'group-chat-uuid' },
     });
-    bindings.ensureState(data).manualTheme = 'Manual';
+    bindings.ensureMutableState(data).manualTheme = 'Manual';
     bindings.setBinding(data, 'character', direct, 'Character Theme');
 
     assert.deepEqual(
@@ -4188,17 +4302,17 @@ test('theme rename and deletion update every binding reference atomically in plu
         chatId: 'Chat Two',
         chatMetadata: { integrity: 'chat-uuid-2' },
     });
-    const state = bindings.ensureState(data);
+    const state = bindings.ensureMutableState(data);
     state.manualTheme = 'Old';
     bindings.setBinding(data, 'character', first, 'Old');
     bindings.setBinding(data, 'chat', first, 'Old');
     bindings.setBinding(data, 'chat', second, 'Keep');
 
     assert.equal(bindings.renameThemeReferences(data, 'Old', 'New'), 3);
-    assert.equal(state.manualTheme, 'New');
+    assert.equal(bindings.ensureState(data).manualTheme, 'New');
     assert.equal(bindings.countThemeReferences(data, 'New'), 2);
     assert.equal(bindings.removeThemeReferences(data, 'New'), 3);
-    assert.equal(state.manualTheme, '');
+    assert.equal(bindings.ensureState(data).manualTheme, '');
     assert.equal(bindings.countThemeReferences(data, 'New'), 0);
     assert.equal(bindings.countThemeReferences(data, 'Keep'), 1);
 });
@@ -4236,7 +4350,7 @@ test('binding overview removal can clear one matching reference or every referen
         chatMetadata: { integrity: 'chat-uuid-2' },
     });
     const pairTarget = { kind: 'day-night', pairId: 'pair-overview' };
-    bindings.ensureState(data).manualTarget = pairTarget;
+    bindings.ensureMutableState(data).manualTarget = pairTarget;
     bindings.setBinding(data, 'character', first, pairTarget);
     bindings.setBinding(data, 'chat', first, pairTarget);
     bindings.setBinding(data, 'character', second, pairTarget);
@@ -4286,7 +4400,7 @@ test('live character image replacement migrates its binding from the previous av
         CHARACTER_PAGE_LOADED: 'character-page-loaded',
     };
     const data = {};
-    bindings.ensureState(data).manualTheme = 'Rose';
+    bindings.ensureMutableState(data).manualTheme = 'Rose';
     bindings.setBinding(data, 'character', context, 'Rose');
     let saveCount = 0;
     const controller = bindings.createController({
@@ -4319,7 +4433,7 @@ test('rapid context changes cancel an obsolete binding apply even when the resto
         chatId: '',
         chatMetadata: {},
     });
-    bindings.ensureState(data).manualTheme = 'Manual';
+    bindings.ensureMutableState(data).manualTheme = 'Manual';
     bindings.setBinding(data, 'chat', boundContext, 'Bound');
 
     let context = boundContext;
@@ -4355,7 +4469,7 @@ test('rapid context changes cancel an obsolete binding apply even when the resto
 test('duplicate chat events do not cancel the still-desired automatic apply after its native change fires', () => {
     const data = {};
     const context = makeBindingContext();
-    bindings.ensureState(data).manualTheme = 'Manual';
+    bindings.ensureMutableState(data).manualTheme = 'Manual';
     bindings.setBinding(data, 'chat', context, 'Bound');
 
     let currentTheme = 'Manual';
@@ -4385,8 +4499,8 @@ test('CHAT_CHANGED during a pending manual B intent never restores persisted man
     context.eventSource = events;
     context.eventTypes = { CHAT_CHANGED: 'chat-changed', CHAT_LOADED: 'chat-loaded' };
     const data = {};
-    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'A' };
-    bindings.ensureState(data).manualTheme = 'A';
+    bindings.ensureMutableState(data).manualTarget = { kind: 'theme', themeName: 'A' };
+    bindings.ensureMutableState(data).manualTheme = 'A';
     let currentTheme = 'A';
     const applied = [];
     const controller = bindings.createController({
@@ -4411,8 +4525,8 @@ test('CHAT_CHANGED during a pending manual B intent never restores persisted man
 
 test('late B completion cannot overwrite newer manual C intent and genuine current failure rolls back safely', () => {
     const data = {};
-    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'A' };
-    bindings.ensureState(data).manualTheme = 'A';
+    bindings.ensureMutableState(data).manualTarget = { kind: 'theme', themeName: 'A' };
+    bindings.ensureMutableState(data).manualTheme = 'A';
     const controller = bindings.createController({
         load() { return data; },
         save() {},
@@ -4439,8 +4553,8 @@ test('late B completion cannot overwrite newer manual C intent and genuine curre
 test('chat and character bindings keep priority over the latest manual intent', () => {
     const data = {};
     const context = makeBindingContext();
-    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'A' };
-    bindings.ensureState(data).manualTheme = 'A';
+    bindings.ensureMutableState(data).manualTarget = { kind: 'theme', themeName: 'A' };
+    bindings.ensureMutableState(data).manualTheme = 'A';
     bindings.setBinding(data, 'character', context, 'Character');
     bindings.setBinding(data, 'chat', context, 'Chat');
     let currentTheme = 'A';
@@ -4483,8 +4597,8 @@ test('CHAT_CHANGED with no binding does not reapply an already-current manual th
     context.eventSource = events;
     context.eventTypes = { CHAT_CHANGED: 'chat-changed', CHAT_LOADED: 'chat-loaded' };
     const data = {};
-    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'B' };
-    bindings.ensureState(data).manualTheme = 'B';
+    bindings.ensureMutableState(data).manualTarget = { kind: 'theme', themeName: 'B' };
+    bindings.ensureMutableState(data).manualTheme = 'B';
     let applyCount = 0;
     const controller = bindings.createController({
         load() { return data; },
@@ -4509,8 +4623,8 @@ test('day-night reconciliation resolves the latest manual pair intent instead of
         dayTheme: 'Day',
         nightTheme: 'Night',
     });
-    bindings.ensureState(data).manualTarget = { kind: 'theme', themeName: 'Old' };
-    bindings.ensureState(data).manualTheme = 'Old';
+    bindings.ensureMutableState(data).manualTarget = { kind: 'theme', themeName: 'Old' };
+    bindings.ensureMutableState(data).manualTheme = 'Old';
     let variant = 'day';
     const pending = [];
     const controller = bindings.createController({

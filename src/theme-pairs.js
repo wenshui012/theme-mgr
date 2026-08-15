@@ -57,9 +57,8 @@
         };
     }
 
-    function ensureState(data) {
-        if (!isObject(data)) return createState();
-        var source = isObject(data.dayNight) ? data.dayNight : createState();
+    function buildUsableState(data) {
+        var source = isObject(data) && isObject(data.dayNight) ? data.dayNight : createState();
         var normalizedPairs = {};
         var claimedThemes = {};
         var pairs = isObject(source.pairs) ? source.pairs : {};
@@ -70,10 +69,18 @@
             claimedThemes[pair.nightTheme] = pair.id;
             normalizedPairs[pair.id] = pair;
         });
-        source.version = PAIR_VERSION;
-        source.pairs = normalizedPairs;
-        data.dayNight = source;
-        return source;
+        return { version: PAIR_VERSION, pairs: normalizedPairs };
+    }
+
+    function ensureState(data) {
+        return buildUsableState(data);
+    }
+
+    function ensureMutableState(data) {
+        if (!isObject(data)) return createState();
+        var state = buildUsableState(data);
+        data.dayNight = state;
+        return state;
     }
 
     function inspectState(data) {
@@ -177,6 +184,7 @@
             meta: input.meta || mergeInitialMeta(data, dayTheme, nightTheme),
         }, id);
         if (!pair) return { ok: false, reason: 'invalid' };
+        state = ensureMutableState(data);
         state.pairs[id] = pair;
         return { ok: true, pair: pair };
     }
@@ -218,9 +226,10 @@
     }
 
     function dissolvePair(data, pairId) {
-        var state = ensureState(data);
-        var pair = state.pairs[pairId];
+        var pair = ensureState(data).pairs[pairId];
         if (!pair) return null;
+        var state = ensureMutableState(data);
+        pair = state.pairs[pairId];
         copySharedMetaToTheme(data, pair.dayTheme, pair.meta);
         copySharedMetaToTheme(data, pair.nightTheme, pair.meta);
         delete state.pairs[pairId];
@@ -228,9 +237,10 @@
     }
 
     function renamePair(data, pairId, name) {
-        var pair = getPair(data, pairId);
         name = String(name || '').trim();
+        var pair = getPair(data, pairId);
         if (!pair || !name) return false;
+        pair = ensureMutableState(data).pairs[String(pairId || '').trim()];
         pair.name = name;
         return true;
     }
@@ -252,6 +262,20 @@
                 changed += 1;
             }
         });
+        if (!changed) return 0;
+        state = ensureMutableState(data);
+        changed = 0;
+        Object.keys(state.pairs).forEach(function (id) {
+            var pair = state.pairs[id];
+            if (pair.dayTheme === oldName) {
+                pair.dayTheme = newName;
+                changed += 1;
+            }
+            if (pair.nightTheme === oldName) {
+                pair.nightTheme = newName;
+                changed += 1;
+            }
+        });
         return changed;
     }
 
@@ -262,8 +286,14 @@
             if (name) removed[name] = true;
         });
         var state = ensureState(data);
+        var affectedIds = Object.keys(state.pairs).filter(function (id) {
+            var pair = state.pairs[id];
+            return !!removed[pair.dayTheme] || !!removed[pair.nightTheme];
+        });
+        if (affectedIds.length === 0) return [];
+        state = ensureMutableState(data);
         var migrations = [];
-        Object.keys(state.pairs).forEach(function (id) {
+        affectedIds.forEach(function (id) {
             var pair = state.pairs[id];
             var dayRemoved = !!removed[pair.dayTheme];
             var nightRemoved = !!removed[pair.nightTheme];

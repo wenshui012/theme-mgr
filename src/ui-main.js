@@ -5520,7 +5520,7 @@
         if (bindingsApi && imported.bindings && typeof imported.bindings === 'object') {
             var importedBindingData = { bindings: cloneJson(imported.bindings) };
             var sourceBindings = bindingsApi.ensureState(importedBindingData);
-            var targetBindings = bindingsApi.ensureState(dd);
+            var targetBindings = bindingsApi.ensureMutableState(dd);
             ['characters', 'chats'].forEach(function (scope) {
                 Object.keys(sourceBindings[scope]).forEach(function (key) {
                     var record = sourceBindings[scope][key];
