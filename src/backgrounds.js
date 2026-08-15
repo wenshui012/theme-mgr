@@ -59,12 +59,12 @@
         function syncRenamedBackground(oldName, newName, cb) {
             var data = load();
             var changed = false;
-            for (var themeName in data.themeMeta) {
+            Object.keys(data.themeMeta || {}).forEach(function (themeName) {
                 if (data.themeMeta[themeName] && data.themeMeta[themeName].backgroundName === oldName) {
                     data.themeMeta[themeName].backgroundName = newName;
                     changed = true;
                 }
-            }
+            });
             if (changed) save(data);
             Promise.all([import('/scripts/backgrounds.js'), import('/script.js')])
                 .then(function (mods) {

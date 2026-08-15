@@ -25,6 +25,21 @@
         return !!value && typeof value === 'object' && !Array.isArray(value);
     }
 
+    function createDictionary(source) {
+        var dictionary = Object.create(null);
+        if (!isObject(source)) return dictionary;
+        Object.keys(source).forEach(function (key) { dictionary[key] = source[key]; });
+        return dictionary;
+    }
+
+    function ensureThemeMetaDictionary(data) {
+        if (!isObject(data)) throw new TypeError('metadata data must be an object');
+        if (!isObject(data.themeMeta) || Object.getPrototypeOf(data.themeMeta) !== null) {
+            data.themeMeta = createDictionary(data.themeMeta);
+        }
+        return data.themeMeta;
+    }
+
     function createMeta() {
         return {
             category: '',
@@ -43,7 +58,8 @@
 
     function peekMeta(data, name) {
         var themeMeta = isObject(data) && isObject(data.themeMeta) ? data.themeMeta : null;
-        var meta = themeMeta ? themeMeta[String(name || '')] : null;
+        var key = String(name || '');
+        var meta = themeMeta && Object.prototype.hasOwnProperty.call(themeMeta, key) ? themeMeta[key] : null;
         return isObject(meta) ? meta : DEFAULT_META;
     }
 
@@ -51,9 +67,9 @@
         if (!isObject(data)) throw new TypeError('metadata data must be an object');
         name = String(name || '').trim();
         if (!name) throw new TypeError('metadata theme name is required');
-        if (!isObject(data.themeMeta)) data.themeMeta = {};
-        if (!isObject(data.themeMeta[name])) data.themeMeta[name] = createMeta();
-        var meta = data.themeMeta[name];
+        var themeMeta = ensureThemeMetaDictionary(data);
+        if (!Object.prototype.hasOwnProperty.call(themeMeta, name) || !isObject(themeMeta[name])) themeMeta[name] = createMeta();
+        var meta = themeMeta[name];
         if (!Array.isArray(meta.tags)) meta.tags = [];
         if (meta.backgroundName === undefined) meta.backgroundName = '';
         if (meta.thumbData === undefined) meta.thumbData = null;
@@ -79,7 +95,7 @@
     function inspect(themeNames, themeMeta) {
         var inventoryNames = Array.isArray(themeNames) ? themeNames : [];
         var metadata = isObject(themeMeta) ? themeMeta : {};
-        var counts = {};
+        var counts = Object.create(null);
         var order = [];
         inventoryNames.forEach(function (rawName) {
             var name = String(rawName || '').trim();
@@ -87,7 +103,7 @@
             if (counts[name] === undefined) order.push(name);
             counts[name] = (counts[name] || 0) + 1;
         });
-        var inventorySet = {};
+        var inventorySet = Object.create(null);
         order.forEach(function (name) { inventorySet[name] = true; });
         var inventoryDuplicateNames = order.filter(function (name) { return counts[name] > 1; }).map(function (name) {
             return { name: name, count: counts[name] };
@@ -102,7 +118,7 @@
             if (!meaningful) emptyMetadata.push(name);
         });
         var inventoryWithoutMetadata = order.filter(function (name) {
-            return !isObject(metadata[name]);
+            return !Object.prototype.hasOwnProperty.call(metadata, name) || !isObject(metadata[name]);
         });
         return {
             inventoryDuplicateNames: inventoryDuplicateNames,
@@ -230,7 +246,7 @@
         var merged = 0;
         (themeNames || []).forEach(function (rawName) {
             var name = String(rawName || '').trim();
-            var incoming = isObject(metaByName) && isObject(metaByName[name]) ? metaByName[name] : null;
+            var incoming = isObject(metaByName) && Object.prototype.hasOwnProperty.call(metaByName, name) && isObject(metaByName[name]) ? metaByName[name] : null;
             if (!name || !incoming) return;
             var target = ensureMeta(data, name);
             if (options.forceCategory && Object.prototype.hasOwnProperty.call(incoming, 'category')) target.category = incoming.category || '';
@@ -254,6 +270,8 @@
     ns.themeMetadata = {
         DEFAULT_META: DEFAULT_META,
         createMeta: createMeta,
+        createDictionary: createDictionary,
+        ensureThemeMetaDictionary: ensureThemeMetaDictionary,
         peekMeta: peekMeta,
         ensureMeta: ensureMeta,
         hasMeaningfulAnnotation: hasMeaningfulAnnotation,

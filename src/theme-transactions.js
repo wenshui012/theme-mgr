@@ -466,7 +466,7 @@
 
         function deleteThemesVerified(themeNames, options) {
             options = options || {};
-            var seen = {};
+            var seen = Object.create(null);
             var names = (themeNames || []).map(function (name) {
                 return String(name || '').trim();
             }).filter(function (name) {
@@ -480,8 +480,8 @@
 
             var initialInventory = null;
             var headers = null;
-            var requestErrors = {};
-            var nativeRefs = {};
+            var requestErrors = Object.create(null);
+            var nativeRefs = Object.create(null);
 
             return freshInventory(options.readReason || 'theme-manager-delete-batch-read')
                 .catch(function (err) {
@@ -556,7 +556,7 @@
         }
 
         function collectThemeNames(themes, extraNames) {
-            var seen = {};
+            var seen = Object.create(null);
             var names = [];
             (themes || []).forEach(function (theme) {
                 var name = theme && theme.name;

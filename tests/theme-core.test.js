@@ -566,7 +566,7 @@ test('backend GET error blocks image batch requests until server data authority 
         harness.storage.batchResolveImages([url], resolve);
     });
 
-    assert.deepEqual(images, { [url]: url });
+    assert.deepEqual(clone(images), { [url]: url });
     assert.equal(harness.imageBatchPosts.length, 0);
 });
 
@@ -1283,7 +1283,7 @@ test('missing preview merge copies the complete incoming preview atomically into
 });
 
 function makeRuntimeForTransfer(inventory, resolveOverride) {
-    const cache = {};
+    const cache = Object.create(null);
     return {
         invalidate() {},
         getInventory() { return Promise.resolve(clone(inventory)); },
@@ -1311,10 +1311,10 @@ function makeRuntimeForTransfer(inventory, resolveOverride) {
 
 function makeTransactionHarness(initialThemes, hooks) {
     hooks = hooks || {};
-    const store = {};
+    const store = Object.create(null);
     (initialThemes || []).forEach((theme) => { store[theme.name] = clone(theme); });
     const calls = [];
-    const remembered = {};
+    const remembered = Object.create(null);
     let saveCount = 0;
     let deleteCount = 0;
     let inventoryCount = 0;
@@ -1375,12 +1375,14 @@ function makeTransactionHarness(initialThemes, hooks) {
                 : remembered[name];
             return cached ? clone(cached) : null;
         },
+        hydrate() { return true; },
     };
 
     return {
         store,
         calls,
         remembered,
+        runtime,
         getInventoryCount() { return inventoryCount; },
         getHeaderCount() { return headerCount; },
         transactions: modules.createThemeTransactions({ schema, api, runtime }),
@@ -2726,6 +2728,145 @@ test('empty and special-character category definitions survive metadata round tr
     assert.equal(target.themeMeta.A.category, '夜/日 ✨');
 });
 
+test('dangerous literal names remain own metadata and category identities without prototype mutation', () => {
+    const names = ['__proto__', 'constructor', 'prototype', 'toString', 'hasOwnProperty'];
+    const prototypeKeysBefore = Object.getOwnPropertyNames(Object.prototype);
+    const incoming = Object.create(null);
+    names.forEach((name, index) => {
+        incoming[name] = { category: name, description: `literal-${index}`, tags: [name] };
+    });
+    const data = { categories: [], themeMeta: {} };
+
+    const merged = metadata.mergeImported(data, names, incoming, names, { forceCategory: true });
+
+    assert.equal(merged.merged, names.length);
+    assert.equal(Object.getPrototypeOf(data.themeMeta), null);
+    names.forEach((name, index) => {
+        assert.equal(Object.prototype.hasOwnProperty.call(data.themeMeta, name), true, name);
+        assert.equal(metadata.peekMeta(data, name).description, `literal-${index}`, name);
+        assert.equal(data.themeMeta[name].category, name, name);
+    });
+    assert.deepEqual(metadata.inspect(names, data.themeMeta).inventoryWithoutMetadata, []);
+
+    const categoryData = {
+        categories: ['Base'],
+        themeMeta: { Theme: { category: 'Base' } },
+        dayNight: { pairs: { Pair: { id: 'Pair', meta: { category: 'Base' } } } },
+        series: { groups: { Series: { id: 'Series', category: 'Base', members: [] } } },
+    };
+    assert.equal(metadata.renameCategory(categoryData, 'Base', '__proto__').ok, true);
+    assert.deepEqual(categoryData.categories, ['__proto__']);
+    assert.equal(categoryData.themeMeta.Theme.category, '__proto__');
+    assert.equal(categoryData.dayNight.pairs.Pair.meta.category, '__proto__');
+    assert.equal(categoryData.series.groups.Series.category, '__proto__');
+    assert.deepEqual(Object.getOwnPropertyNames(Object.prototype), prototypeKeysBefore);
+});
+
+test('dangerous literal relationship ids keys and theme references remain addressable', () => {
+    const prototypeKeysBefore = Object.getOwnPropertyNames(Object.prototype);
+    const data = { themeMeta: {} };
+    ['__proto__', 'constructor', 'prototype', 'toString', 'hasOwnProperty'].forEach((name) => {
+        metadata.ensureMeta(data, name).description = name;
+    });
+
+    const pairResult = pairs.createPair(data, {
+        id: '__proto__',
+        name: 'Literal pair',
+        dayTheme: '__proto__',
+        nightTheme: 'constructor',
+    });
+    assert.equal(pairResult.ok, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(data.dayNight.pairs, '__proto__'), true);
+    assert.equal(pairs.getPair(data, '__proto__').nightTheme, 'constructor');
+
+    const seriesResult = series.createSeries(data, {
+        id: 'constructor',
+        name: 'Literal series',
+        members: [
+            { kind: 'day-night', pairId: '__proto__' },
+            { kind: 'theme', themeName: 'prototype' },
+        ],
+    });
+    assert.equal(seriesResult.ok, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(data.series.groups, 'constructor'), true);
+
+    const context = {
+        characters: [{ avatar: '__proto__', name: 'Literal character' }],
+        characterId: 0,
+        chatMetadata: { integrity: 'constructor' },
+        chatId: 'literal-chat',
+    };
+    assert.equal(bindings.setBinding(data, 'character', context, bindings.makeThemeTarget('toString')).ok, true);
+    assert.equal(bindings.setBinding(data, 'chat', context, bindings.makeThemeTarget('hasOwnProperty')).ok, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(data.bindings.characters, '__proto__'), true);
+    assert.equal(Object.prototype.hasOwnProperty.call(data.bindings.chats, 'constructor'), true);
+
+    assert.equal(pairs.exportPairs(data, ['__proto__', 'constructor']).length, 1);
+    assert.equal(series.exportSeries(data, ['prototype'], ['__proto__']).length, 1);
+    assert.equal(pairs.renameThemeReferences(data, '__proto__', 'toString'), 1);
+    assert.equal(series.renameThemeReferences(data, 'prototype', 'hasOwnProperty'), 1);
+    assert.equal(bindings.renameThemeReferences(data, 'toString', 'prototype'), 1);
+    assert.equal(pairs.getPair(data, '__proto__').dayTheme, 'toString');
+    assert.equal(series.getSeries(data, 'constructor').members[1].themeName, 'hasOwnProperty');
+
+    assert.equal(pairs.removeThemeReferences(data, 'constructor').length, 1);
+    assert.equal(series.removeThemeReferences(data, 'hasOwnProperty'), 1);
+    assert.equal(bindings.removeThemeReferences(data, 'prototype'), 1);
+    assert.equal(bindings.removeThemeReferences(data, 'hasOwnProperty'), 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(data.dayNight.pairs, '__proto__'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(data.series.groups, 'constructor'), false);
+    assert.deepEqual(Object.getOwnPropertyNames(Object.prototype), prototypeKeysBefore);
+});
+
+test('dangerous literal theme names survive import export dedupe rename and delete transactions', async () => {
+    const names = ['__proto__', 'constructor', 'prototype', 'toString', 'hasOwnProperty'];
+    const prototypeKeysBefore = Object.getOwnPropertyNames(Object.prototype);
+    const themes = names.map((name) => completeTheme(name));
+    const harness = makeTransactionHarness([]);
+    const transfer = modules.createThemeTransfer({
+        schema,
+        runtime: harness.runtime,
+        transactions: harness.transactions,
+        metadata,
+        captureBaseline() { return Promise.resolve(completeBaseline()); },
+    });
+
+    const validation = transfer.validateImportThemes(themes);
+    assert.equal(validation.valid.length, names.length);
+    assert.equal(validation.invalid.length, 0);
+    const imported = await transfer.importVerified(themes);
+    assert.equal(imported.results.length, names.length);
+    names.forEach((name) => {
+        assert.equal(Object.prototype.hasOwnProperty.call(harness.store, name), true, name);
+        assert.equal(Object.prototype.hasOwnProperty.call(harness.remembered, name), true, name);
+    });
+
+    const exported = await transfer.prepareExport(names);
+    assert.deepEqual(exported.themes.map((theme) => theme.name), names);
+    await assert.rejects(
+        transfer.prepareExport(['__proto__', '__proto__']),
+        (error) => error.code === 'export-duplicate-name',
+    );
+
+    const renamed = await harness.transactions.renameTheme('__proto__', 'literal-renamed', {
+        destinationIdentityConflicts: [],
+    });
+    assert.equal(renamed.newName, 'literal-renamed');
+    assert.equal(Object.prototype.hasOwnProperty.call(harness.store, '__proto__'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(harness.store, 'literal-renamed'), true);
+
+    await harness.transactions.deleteThemeVerified('constructor');
+    const deleted = await harness.transactions.deleteThemesVerified([
+        'prototype',
+        'toString',
+        'hasOwnProperty',
+        'literal-renamed',
+    ]);
+    assert.equal(deleted.results.every((item) => item.ok), true);
+    assert.deepEqual(Object.keys(harness.store), []);
+    assert.deepEqual(Object.getOwnPropertyNames(Object.prototype), prototypeKeysBefore);
+});
+
 test('import rejects marker and name-only inputs before capturing a baseline or saving', async () => {
     let baselineCalls = 0;
     let saveCalls = 0;
@@ -4053,19 +4194,19 @@ test('series import is idempotent for an already imported group', () => {
     const afterFirst = clone(data.series);
     const second = series.importSeries(data, raw, options);
 
-    assert.deepEqual(first, {
+    assert.deepEqual(clone(first), {
         imported: 1,
         skipped: 0,
         idMap: { 'series-idempotent': 'series-idempotent' },
         diagnostics: [],
     });
-    assert.deepEqual(second, {
+    assert.deepEqual(clone(second), {
         imported: 0,
         skipped: 1,
         idMap: { 'series-idempotent': 'series-idempotent' },
         diagnostics: [{ type: 'series', id: 'series-idempotent', name: 'Idempotent', reason: 'already-present', severity: 'info', mappedId: 'series-idempotent' }],
     });
-    assert.deepEqual(data.series, afterFirst);
+    assert.deepEqual(clone(data.series), afterFirst);
     assert.equal(series.listSeries(data).length, 1);
 });
 
@@ -4101,7 +4242,7 @@ test('series target replacement across two groups is rejected without mutation',
     assert.equal(outcome.ok, false);
     assert.equal(outcome.reason, 'multiple-series');
     assert.deepEqual(outcome.seriesIds, ['series-left', 'series-right']);
-    assert.deepEqual(data.series, before);
+    assert.deepEqual(clone(data.series), before);
 });
 
 test('series ensureState does not leak claims from a rejected overlapping group', () => {

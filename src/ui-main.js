@@ -58,7 +58,7 @@
     var managerAppearanceTimer = null;
     var managerAppearanceSettleTimer = null;
     var lastBindingWarningKey = '';
-    var pendingVerifiedManualThemes = {};
+    var pendingVerifiedManualThemes = Object.create(null);
     var colorSchemeWatcher = null;
     var temporaryPairOverride = null;
     var frameAssetAnalysisCache = Object.create(null);
@@ -273,7 +273,8 @@
         var dd = def();
         if (!d) return dd;
         for (var k in dd) { if (d[k] === undefined) d[k] = dd[k]; }
-        if (typeof d.themeMeta !== 'object' || !d.themeMeta) d.themeMeta = {};
+        if (metadataApi && typeof metadataApi.ensureThemeMetaDictionary === 'function') metadataApi.ensureThemeMetaDictionary(d);
+        else if (typeof d.themeMeta !== 'object' || !d.themeMeta) d.themeMeta = Object.create(null);
         if (!Array.isArray(d.categories)) d.categories = [];
         if (typeof d.sortMode !== 'string') d.sortMode = 'name';
         if (typeof d.followThemeAppearance !== 'boolean') d.followThemeAppearance = false;
@@ -309,18 +310,18 @@
         if (typeof d.gridCardSize !== 'number') d.gridCardSize = 108;
         d.gridCardSize = Math.max(84, Math.min(220, d.gridCardSize));
         if (!d.fabPos || typeof d.fabPos.top !== 'number' || typeof d.fabPos.left !== 'number') d.fabPos = null;
-        for (var name in d.themeMeta) {
+        Object.keys(d.themeMeta).forEach(function (name) {
             if (!d.themeMeta[name] || typeof d.themeMeta[name] !== 'object') d.themeMeta[name] = {};
             if (d.themeMeta[name].thumbData === undefined) d.themeMeta[name].thumbData = null;
             if (d.themeMeta[name].crop === undefined) d.themeMeta[name].crop = null;
             if (d.themeMeta[name].backgroundName === undefined) d.themeMeta[name].backgroundName = '';
-        }
+        });
         return d;
     }
 
     function def() {
         return {
-            themeMeta: {},
+            themeMeta: Object.create(null),
             categories: [],
             showBall: true,
             showFreq: true,
@@ -335,9 +336,9 @@
             followThemePreviewShape: false,
             simplifyGridText: false,
             autoHideHeader: false,
-            dayNight: { version: 1, pairs: {} },
-            series: { version: 1, groups: {} },
-            bindings: { version: 2, characters: {}, chats: {}, manualTheme: '', manualTarget: null }
+            dayNight: { version: 1, pairs: Object.create(null) },
+            series: { version: 1, groups: Object.create(null) },
+            bindings: { version: 2, characters: Object.create(null), chats: Object.create(null), manualTheme: '', manualTarget: null }
         };
     }
 
@@ -876,12 +877,12 @@
                 var powerUserModule = mods[0];
                 var scriptModule = mods[1];
                 if (powerUserModule.power_user) {
-                    for (var key in theme) {
-                        if (key === 'name') continue;
+                    Object.keys(theme).forEach(function (key) {
+                        if (key === 'name') return;
                         if (Object.prototype.hasOwnProperty.call(powerUserModule.power_user, key)) {
                             powerUserModule.power_user[key] = theme[key];
                         }
-                    }
+                    });
                     powerUserModule.power_user.theme = theme.name;
                 }
                 applyThemeVisuals(theme);
@@ -1234,7 +1235,7 @@
 
     function collectServerImageUrls(data) {
         var urls = [];
-        var seen = {};
+        var seen = Object.create(null);
         collectImageFields(data).forEach(function (ref) {
             if (isServerImage(ref.value) && !seen[ref.value]) {
                 seen[ref.value] = true;
@@ -1254,14 +1255,14 @@
         }
         toast('正在打包图片…');
         batchResolveImages(urls, function (imageMap) {
-            var assets = {};
-            for (var url in imageMap) {
+            var assets = Object.create(null);
+            Object.keys(imageMap || {}).forEach(function (url) {
                 var dataUrl = imageMap[url];
                 if (isDataImage(dataUrl)) {
                     var name = url.replace(SERVER_IMAGE_PREFIX, '');
                     if (name) assets[name] = dataUrl;
                 }
-            }
+            });
             if (Object.keys(assets).length > 0) exportData._assets = assets;
             downloadJsonBlob(filename, exportData);
             if (cb) cb(Object.keys(assets).length);
@@ -1295,7 +1296,7 @@
         if (names.length === 0) { delete imported._assets; if (cb) cb(); return; }
 
         if (!getServerMode()) {
-            var fallbackMap = {};
+            var fallbackMap = Object.create(null);
             names.forEach(function (name) { fallbackMap[name] = assets[name]; });
             replaceAssetUrlsInData(imported, fallbackMap);
             delete imported._assets;
@@ -1303,7 +1304,7 @@
             return;
         }
 
-        var urlMap = {};
+        var urlMap = Object.create(null);
         var done = 0;
         toast('正在导入图片（0/' + names.length + '）…');
         names.forEach(function (name) {
@@ -1336,7 +1337,7 @@
 
     function buildThemeMetaForBundle(themes) {
         var d = load();
-        var meta = {};
+        var meta = Object.create(null);
         themes.forEach(function (theme) {
             if (!theme || !theme.name) return;
             var m = d.themeMeta[theme.name];
@@ -1372,7 +1373,7 @@
 
     function countSeriesForItems(data, items) {
         if (!seriesApi) return 0;
-        var ids = {};
+        var ids = Object.create(null);
         (items || []).forEach(function (item) {
             var group = getSeriesForItem(data, item);
             if (group) ids[group.id] = true;
@@ -1399,7 +1400,7 @@
 
     function extractThemeImportPayload(parsed, sourceName) {
         var themes = extractThemeObjects(parsed, sourceName);
-        var metaSrc = {};
+        var metaSrc = Object.create(null);
         var cats = [];
         var dayNightPairs = [];
         var seriesGroups = [];
@@ -1427,9 +1428,9 @@
             else if (Array.isArray(manifest.series)) seriesGroups = manifest.series.slice();
         }
 
-        var metaByName = {};
+        var metaByName = Object.create(null);
         themes.forEach(function (theme) {
-            var m = metaSrc[theme.name];
+            var m = Object.prototype.hasOwnProperty.call(metaSrc, theme.name) ? metaSrc[theme.name] : null;
             if (m) metaByName[theme.name] = cleanThemeMetaForBundle(m);
         });
 
@@ -1445,7 +1446,7 @@
 
     function mergeThemePayload(target, payload) {
         payload.themes.forEach(function (theme) { target.themes.push(theme); });
-        for (var name in payload.themeMeta) target.themeMeta[name] = payload.themeMeta[name];
+        Object.keys(payload.themeMeta || {}).forEach(function (name) { target.themeMeta[name] = payload.themeMeta[name]; });
         payload.categories.forEach(function (cat) {
             if (cat && target.categories.indexOf(cat) === -1) target.categories.push(cat);
         });
@@ -1457,10 +1458,13 @@
     }
 
     function getPayloadThemeCategory(payload, themeName) {
-        var category = payload.themeMeta[themeName] && payload.themeMeta[themeName].category
-            ? String(payload.themeMeta[themeName].category)
+        var ownMeta = payload && payload.themeMeta && Object.prototype.hasOwnProperty.call(payload.themeMeta, themeName)
+            ? payload.themeMeta[themeName]
+            : null;
+        var category = ownMeta && ownMeta.category
+            ? String(ownMeta.category)
             : '';
-        var pairById = {};
+        var pairById = Object.create(null);
         (payload.dayNightPairs || []).forEach(function (pair) {
             if (pair && pair.id) pairById[String(pair.id)] = pair;
         });
@@ -1481,8 +1485,8 @@
     }
 
     function filterImportedSeriesGroups(groups, selectedThemeNames, selectedPairIds, forcedCategory) {
-        var themes = {};
-        var pairs = {};
+        var themes = Object.create(null);
+        var pairs = Object.create(null);
         (selectedThemeNames || []).forEach(function (name) { themes[name] = true; });
         (selectedPairIds || []).forEach(function (id) { pairs[id] = true; });
         return (groups || []).map(function (raw) {
@@ -1501,8 +1505,8 @@
     }
 
     function countPartiallySelectedSeriesGroups(groups, selectedThemeNames, selectedPairIds) {
-        var themes = {};
-        var pairs = {};
+        var themes = Object.create(null);
+        var pairs = Object.create(null);
         (selectedThemeNames || []).forEach(function (name) { themes[name] = true; });
         (selectedPairIds || []).forEach(function (id) { pairs[id] = true; });
         return (groups || []).filter(function (group) {
@@ -1517,8 +1521,8 @@
     }
 
     function collectSelectionRelationshipDiagnostics(payload, selectedThemeNames, selectedPairIds) {
-        var themes = {};
-        var pairIds = {};
+        var themes = Object.create(null);
+        var pairIds = Object.create(null);
         (selectedThemeNames || []).forEach(function (name) { themes[name] = true; });
         (selectedPairIds || []).forEach(function (id) { pairIds[id] = true; });
         var diagnostics = [];
@@ -1557,7 +1561,7 @@
 
     function getThemeImportCategoryInfo(payload) {
         var order = [];
-        var counts = {};
+        var counts = Object.create(null);
         var uncatCount = 0;
         function addCat(cat) {
             if (!cat || order.indexOf(cat) !== -1) return;
@@ -1637,7 +1641,7 @@
         });
         sheet.querySelector('#tm-import-cat-cancel').addEventListener('click', function () { closeSheet(sheet); });
         sheet.querySelector('#tm-import-cat-ok').addEventListener('click', function () {
-            var selected = {};
+            var selected = Object.create(null);
             var selectedCats = [];
             sheet.querySelectorAll('.tm-import-cat-check').forEach(function (chk) {
                 if (chk.checked) { selected[chk.dataset.cat] = true; selectedCats.push(chk.dataset.cat); }
@@ -1648,15 +1652,18 @@
             if (targetCat === '__new__') {
                 targetCat = sheet.querySelector('#tm-import-new-cat').value.trim();
                 if (!targetCat) { toast('请输入新分类名称', true); return; }
+                if (metadataApi.isReservedCategoryName(targetCat)) { toast('该名称为内部保留名称，请使用其他分类名', true); return; }
             }
             var selectedThemes = [];
-            var selectedMeta = {};
+            var selectedMeta = Object.create(null);
             payload.themes.forEach(function (theme) {
                 var cat = getPayloadThemeCategory(payload, theme.name);
                 var shouldImport = info.categories.length === 0 || (cat && selected[cat]) || (!cat && includeUncat);
                 if (shouldImport) {
                     selectedThemes.push(theme);
-                    selectedMeta[theme.name] = payload.themeMeta[theme.name] ? Object.assign({}, payload.themeMeta[theme.name]) : {};
+                    selectedMeta[theme.name] = payload.themeMeta && Object.prototype.hasOwnProperty.call(payload.themeMeta, theme.name)
+                        ? cloneJson(payload.themeMeta[theme.name])
+                        : {};
                     if (targetCat !== '__keep__') selectedMeta[theme.name].category = targetCat;
                 }
             });
@@ -1691,10 +1698,10 @@
         opts = opts || {};
         if (!themes || themes.length === 0) { toast('没有可导入的美化', true); return; }
 
-        var byName = {};
+        var byName = Object.create(null);
         var dupInImport = [];
         themes.forEach(function (theme) {
-            if (byName[theme.name]) dupInImport.push(theme.name);
+            if (Object.prototype.hasOwnProperty.call(byName, theme.name)) dupInImport.push(theme.name);
             byName[theme.name] = theme;
         });
         var finalThemes = Object.keys(byName).map(function (name) { return byName[name]; });
@@ -2021,7 +2028,7 @@
     var sortOpen = false;
     var gridSizeSaveTimer = null;
     var expandedSeriesId = '';
-    var seriesScrollPositions = {};
+    var seriesScrollPositions = Object.create(null);
     var seriesResizeBound = false;
     var seriesResizeTimer = null;
     var seriesGridResizeObserver = null;
@@ -3333,7 +3340,7 @@
         cancelSearchDebounce();
         searchComposing = false;
         batchMode = false; batchSelected.clear(); batchDeleting = false; searchQuery = ''; searchOpen = false; sortOpen = false;
-        expandedSeriesId = ''; seriesScrollPositions = {}; lastSeriesColumnCount = 0;
+        expandedSeriesId = ''; seriesScrollPositions = Object.create(null); lastSeriesColumnCount = 0;
 
         var ov = document.createElement('div');
         ov.className = 'tm-overlay ' + (darkMode ? 'tm-dark' : 'tm-light');
@@ -3641,7 +3648,7 @@
         view = view || buildLibraryView(d);
         var groups = view.seriesGroups;
         var membership = view.seriesMembership;
-        var unitBySeries = {};
+        var unitBySeries = Object.create(null);
         var rawUnits = [];
 
         sortedItems.forEach(function (item) {
@@ -4140,7 +4147,7 @@
                 var selectedItems = getBatchSelectedKeys().map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
                 var selectedKeys = new Set();
                 selectedItems.forEach(function (item) { selectedKeys.add(item.key); });
-                var selectedGroups = {};
+                var selectedGroups = Object.create(null);
                 selectedItems.forEach(function (item) {
                     var group = getSeriesForItem(dd, item);
                     if (group) selectedGroups[group.id] = group;
@@ -5110,7 +5117,7 @@
         var selectedVariant = pair
             ? (pair.nightTheme === getCurrentThemeName() ? 'night' : (pair.dayTheme === getCurrentThemeName() ? 'day' : getPreferredPairVariant(pair.id)))
             : 'day';
-        var variantDrafts = {};
+        var variantDrafts = Object.create(null);
         if (pair) {
             ['day', 'night'].forEach(function (variant) {
                 var name = variant === 'night' ? pair.nightTheme : pair.dayTheme;
@@ -5393,7 +5400,7 @@
             }
 
             var draftKeys = pair ? ['day', 'night'] : ['day'];
-            var uploaded = {};
+            var uploaded = Object.create(null);
             var remaining = draftKeys.length;
             var uploadFailed = false;
             draftKeys.forEach(function (variant) {
@@ -5483,19 +5490,20 @@
 
     function mergeImportedAnnotations(imported) {
         var dd = load();
+        metadataApi.ensureThemeMetaDictionary(dd);
         var importedCount = 0;
         var importedBindingCount = 0;
         var importedPairCount = 0;
         var importedSeriesCount = 0;
         var skippedImportedSeriesCount = 0;
-        var importedPairIdMap = {};
-        var skippedImportedPairIds = {};
+        var importedPairIdMap = Object.create(null);
+        var skippedImportedPairIds = Object.create(null);
         var relationshipDiagnostics = [];
 
         if (imported.categories) imported.categories.forEach(function (c) { if (dd.categories.indexOf(c) === -1) dd.categories.push(c); });
-        for (var k in imported.themeMeta) {
+        Object.keys(imported.themeMeta || {}).forEach(function (k) {
             var imp = imported.themeMeta[k] || {};
-            if (!dd.themeMeta[k]) {
+            if (!Object.prototype.hasOwnProperty.call(dd.themeMeta, k)) {
                 dd.themeMeta[k] = imp;
                 if (!Array.isArray(dd.themeMeta[k].tags)) dd.themeMeta[k].tags = [];
                 if (dd.themeMeta[k].thumbData === undefined) dd.themeMeta[k].thumbData = null;
@@ -5511,7 +5519,7 @@
                 if (!existing.description && imp.description) existing.description = imp.description;
             }
             importedCount++;
-        }
+        });
         if (pairsApi && imported.dayNight) {
             var rawPairs = imported.dayNight.pairs || imported.dayNight;
             var pairOutcome = pairsApi.importPairs(dd, rawPairs, stThemeList);
@@ -5651,7 +5659,7 @@
         var metaCount = metadataDiagnostics.annotatedCount;
         var orphanMetaCount = metadataDiagnostics.orphanMetadata.length;
         var imgCount = 0;
-        for (var k in d.themeMeta) { if (d.themeMeta[k].imageData) imgCount++; }
+        Object.keys(d.themeMeta).forEach(function (key) { if (d.themeMeta[key].imageData) imgCount++; });
 
         var sheet = createSheet([
             '<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>',
@@ -5867,7 +5875,7 @@
                         })
                         .catch(function (err) { return { file: file, error: err }; });
                 })).then(function (results) {
-                    var payload = { themes: [], themeMeta: {}, categories: [], dayNightPairs: [], seriesGroups: [] };
+                    var payload = { themes: [], themeMeta: Object.create(null), categories: [], dayNightPairs: [], seriesGroups: [] };
                     var errors = [];
                     results.forEach(function (res) {
                         if (res.error) { errors.push(res.error.message); return; }
@@ -5922,7 +5930,7 @@
         sheet.querySelector('#tm-exp-theme-cat').addEventListener('click', function () { openCategoryExportSheet(); });
         sheet.querySelector('#tm-clear').addEventListener('click', function () {
             if (!confirm('确定清空所有标注数据（分类、标签、截图）？\n主题文件本身不受影响。')) return;
-            var dd = load(); dd.themeMeta = {}; dd.categories = []; curCat = '__all__';
+            var dd = load(); dd.themeMeta = Object.create(null); dd.categories = []; curCat = '__all__';
             if (pairsApi) {
                 var pairState = pairsApi.ensureMutableState(dd);
                 Object.keys(pairState.pairs).forEach(function (id) {

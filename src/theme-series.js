@@ -11,10 +11,17 @@
         return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
     }
 
+    function createDictionary(source) {
+        var dictionary = Object.create(null);
+        if (!isObject(source)) return dictionary;
+        Object.keys(source).forEach(function (key) { dictionary[key] = source[key]; });
+        return dictionary;
+    }
+
     function createState() {
         return {
             version: SERIES_VERSION,
-            groups: {},
+            groups: Object.create(null),
         };
     }
 
@@ -44,7 +51,7 @@
     }
 
     function normalizeMembers(members) {
-        var seen = {};
+        var seen = Object.create(null);
         var result = [];
         (Array.isArray(members) ? members : []).forEach(function (member) {
             var target = normalizeTarget(member);
@@ -73,8 +80,8 @@
     function buildUsableState(data) {
         var source = isObject(data) && isObject(data.series) ? data.series : createState();
         var groups = isObject(source.groups) ? source.groups : {};
-        var normalized = {};
-        var claimed = {};
+        var normalized = Object.create(null);
+        var claimed = Object.create(null);
         Object.keys(groups).forEach(function (key) {
             var group = normalizeGroup(groups[key], key);
             if (!group) return;
@@ -105,8 +112,8 @@
         var groups = isObject(data) && isObject(data.series) && isObject(data.series.groups)
             ? data.series.groups
             : {};
-        var claimedTargets = {};
-        var claimedIds = {};
+        var claimedTargets = Object.create(null);
+        var claimedIds = Object.create(null);
         var diagnostics = [];
         Object.keys(groups).forEach(function (key) {
             var group = normalizeGroup(groups[key], key);
@@ -178,7 +185,7 @@
     }
 
     function getMembershipMap(data) {
-        var result = {};
+        var result = Object.create(null);
         listSeries(data).forEach(function (group) {
             group.members.forEach(function (member) {
                 result[targetKey(member)] = group.id;
@@ -214,7 +221,7 @@
         var group = state.groups[String(seriesId || '').trim()];
         if (!group) return { ok: false, reason: 'missing-series' };
         var additions = normalizeMembers(membersInput);
-        var own = {};
+        var own = Object.create(null);
         group.members.forEach(function (member) { own[targetKey(member)] = true; });
         for (var i = 0; i < additions.length; i++) {
             var existing = findSeriesByTargetInState(state, additions[i]);
@@ -224,7 +231,7 @@
         }
         state = ensureMutableState(data);
         group = state.groups[String(seriesId || '').trim()];
-        own = {};
+        own = Object.create(null);
         group.members.forEach(function (member) { own[targetKey(member)] = true; });
         var added = 0;
         additions.forEach(function (member) {
@@ -282,7 +289,7 @@
 
     function replaceTargets(data, oldTargetsInput, replacementsInput) {
         var state = ensureState(data);
-        var oldKeys = {};
+        var oldKeys = Object.create(null);
         normalizeMembers(oldTargetsInput).forEach(function (target) { oldKeys[targetKey(target)] = true; });
         var replacements = normalizeMembers(replacementsInput);
         var affected = [];
@@ -301,7 +308,7 @@
         state = ensureMutableState(data);
         group = state.groups[affected[0]];
         var next = [];
-        var seen = {};
+        var seen = Object.create(null);
         var inserted = false;
         group.members.forEach(function (member) {
             var key = targetKey(member);
@@ -382,7 +389,7 @@
     }
 
     function removeThemeReferences(data, themeNames) {
-        var removing = {};
+        var removing = Object.create(null);
         (Array.isArray(themeNames) ? themeNames : [themeNames]).forEach(function (name) {
             name = String(name || '').trim();
             if (name) removing[name] = true;
@@ -418,8 +425,8 @@
     }
 
     function exportSeries(data, themeNames, pairIds) {
-        var themes = {};
-        var pairs = {};
+        var themes = Object.create(null);
+        var pairs = Object.create(null);
         (themeNames || []).forEach(function (name) { themes[name] = true; });
         (pairIds || []).forEach(function (id) { pairs[id] = true; });
         return listSeries(data).map(function (group) {
@@ -439,7 +446,7 @@
     }
 
     function uniqueImportedName(state, name) {
-        var used = {};
+        var used = Object.create(null);
         Object.keys(state.groups).forEach(function (id) { used[state.groups[id].name] = true; });
         if (!used[name]) return name;
         var base = name + '（导入）';
@@ -451,12 +458,12 @@
 
     function importSeries(data, rawGroups, options) {
         options = options || {};
-        var availableThemes = {};
-        var availablePairs = {};
-        var skippedPairs = {};
-        var pairedThemes = {};
+        var availableThemes = Object.create(null);
+        var availablePairs = Object.create(null);
+        var skippedPairs = Object.create(null);
+        var pairedThemes = Object.create(null);
         var requirePairIdMap = options.requirePairIdMap === true;
-        var pairIdMap = isObject(options.pairIdMap) ? options.pairIdMap : {};
+        var pairIdMap = createDictionary(options.pairIdMap);
         (options.availableThemeNames || []).forEach(function (name) { availableThemes[name] = true; });
         (options.availablePairIds || []).forEach(function (id) { availablePairs[id] = true; });
         (options.skippedPairIds || []).forEach(function (id) { skippedPairs[id] = true; });
@@ -479,7 +486,7 @@
         var state = ensureState(data);
         var imported = 0;
         var skipped = 0;
-        var idMap = {};
+        var idMap = Object.create(null);
         var diagnostics = [];
         list.forEach(function (raw) {
             state = ensureState(data);

@@ -663,10 +663,10 @@
         }
 
         function batchResolveImages(urls, cb) {
-            var result = {};
+            var result = Object.create(null);
             if (!Array.isArray(urls) || urls.length === 0) { cb(result); return; }
             var serverUrls = [];
-            var seen = {};
+            var seen = Object.create(null);
             urls.forEach(function (url) {
                 if (!url || typeof url !== 'string') return;
                 if (isDataImage(url)) result[url] = url;
@@ -692,7 +692,7 @@
                 .then(function (r) { return r && r.ok ? r.json() : null; })
                 .then(function (j) {
                     if (j && j.ok && j.images) {
-                        for (var url in j.images) result[url] = j.images[url];
+                        Object.keys(j.images).forEach(function (url) { result[url] = j.images[url]; });
                     }
                     serverUrls.forEach(function (url) { if (!result[url]) result[url] = url; });
                     cb(result);
@@ -710,12 +710,11 @@
                 root.forEach(function (item) { collectImageFields(item, refs); });
                 return refs;
             }
-            for (var key in root) {
-                if (!Object.prototype.hasOwnProperty.call(root, key)) continue;
+            Object.keys(root).forEach(function (key) {
                 var val = root[key];
                 if (IMAGE_FIELD_KEYS[key] && typeof val === 'string' && val) refs.push({ obj: root, key: key, value: val });
                 else if (val && typeof val === 'object') collectImageFields(val, refs);
-            }
+            });
             return refs;
         }
 

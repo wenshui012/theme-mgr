@@ -20,10 +20,17 @@
         return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
     }
 
+    function createDictionary(source) {
+        var dictionary = Object.create(null);
+        if (!isObject(source)) return dictionary;
+        Object.keys(source).forEach(function (key) { dictionary[key] = source[key]; });
+        return dictionary;
+    }
+
     function createState() {
         return {
             version: PAIR_VERSION,
-            pairs: {},
+            pairs: Object.create(null),
         };
     }
 
@@ -59,8 +66,8 @@
 
     function buildUsableState(data) {
         var source = isObject(data) && isObject(data.dayNight) ? data.dayNight : createState();
-        var normalizedPairs = {};
-        var claimedThemes = {};
+        var normalizedPairs = Object.create(null);
+        var claimedThemes = Object.create(null);
         var pairs = isObject(source.pairs) ? source.pairs : {};
         Object.keys(pairs).forEach(function (key) {
             var pair = normalizePair(pairs[key], key);
@@ -87,8 +94,8 @@
         var source = isObject(data) && isObject(data.dayNight) && isObject(data.dayNight.pairs)
             ? data.dayNight.pairs
             : {};
-        var claimedThemes = {};
-        var claimedIds = {};
+        var claimedThemes = Object.create(null);
+        var claimedIds = Object.create(null);
         var diagnostics = [];
         Object.keys(source).forEach(function (key) {
             var pair = normalizePair(source[key], key);
@@ -141,8 +148,8 @@
     }
 
     function mergeInitialMeta(data, dayTheme, nightTheme) {
-        var day = isObject(data.themeMeta) && isObject(data.themeMeta[dayTheme]) ? data.themeMeta[dayTheme] : {};
-        var night = isObject(data.themeMeta) && isObject(data.themeMeta[nightTheme]) ? data.themeMeta[nightTheme] : {};
+        var day = isObject(data.themeMeta) && Object.prototype.hasOwnProperty.call(data.themeMeta, dayTheme) && isObject(data.themeMeta[dayTheme]) ? data.themeMeta[dayTheme] : {};
+        var night = isObject(data.themeMeta) && Object.prototype.hasOwnProperty.call(data.themeMeta, nightTheme) && isObject(data.themeMeta[nightTheme]) ? data.themeMeta[nightTheme] : {};
         var tags = [];
         [day.tags, night.tags].forEach(function (list) {
             if (!Array.isArray(list)) return;
@@ -224,8 +231,8 @@
 
     function copySharedMetaToTheme(data, themeName, meta) {
         if (!themeName) return;
-        if (!isObject(data.themeMeta)) data.themeMeta = {};
-        if (!isObject(data.themeMeta[themeName])) data.themeMeta[themeName] = {};
+        if (!isObject(data.themeMeta) || Object.getPrototypeOf(data.themeMeta) !== null) data.themeMeta = createDictionary(data.themeMeta);
+        if (!Object.prototype.hasOwnProperty.call(data.themeMeta, themeName) || !isObject(data.themeMeta[themeName])) data.themeMeta[themeName] = {};
         SHARED_META_KEYS.forEach(function (key) {
             data.themeMeta[themeName][key] = clone(meta[key]);
         });
@@ -286,7 +293,7 @@
     }
 
     function removeThemeReferences(data, themeNames) {
-        var removed = {};
+        var removed = Object.create(null);
         (Array.isArray(themeNames) ? themeNames : [themeNames]).forEach(function (name) {
             name = String(name || '').trim();
             if (name) removed[name] = true;
@@ -324,12 +331,12 @@
 
     function buildLogicalItems(data, themeNames) {
         var state = ensureState(data);
-        var present = {};
+        var present = Object.create(null);
         (themeNames || []).forEach(function (name) {
             name = String(name || '').trim();
             if (name) present[name] = true;
         });
-        var claimed = {};
+        var claimed = Object.create(null);
         var items = [];
         Object.keys(state.pairs).forEach(function (id) {
             var pair = state.pairs[id];
@@ -359,7 +366,7 @@
                 name: name,
                 themeName: name,
                 themeNames: [name],
-                meta: isObject(data.themeMeta) && isObject(data.themeMeta[name]) ? data.themeMeta[name] : {},
+                meta: isObject(data.themeMeta) && Object.prototype.hasOwnProperty.call(data.themeMeta, name) && isObject(data.themeMeta[name]) ? data.themeMeta[name] : {},
             });
         });
         return items;
@@ -406,7 +413,7 @@
     }
 
     function exportPairs(data, themeNames) {
-        var included = {};
+        var included = Object.create(null);
         (themeNames || []).forEach(function (name) { included[name] = true; });
         var state = ensureState(data);
         return Object.keys(state.pairs).map(function (id) { return state.pairs[id]; })
@@ -415,11 +422,11 @@
     }
 
     function importPairs(data, rawPairs, availableThemeNames) {
-        var available = {};
+        var available = Object.create(null);
         (availableThemeNames || []).forEach(function (name) { available[name] = true; });
         var imported = 0;
         var skipped = 0;
-        var idMap = {};
+        var idMap = Object.create(null);
         var skippedIds = [];
         var diagnostics = [];
         var list = Array.isArray(rawPairs)

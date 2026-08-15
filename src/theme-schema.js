@@ -134,7 +134,7 @@
             return value.map(function (item) { return canonicalize(item, options, ''); });
         }
         if (isPlainObject(value)) {
-            var out = {};
+            var out = Object.create(null);
             Object.keys(value).sort().forEach(function (childKey) {
                 var child = canonicalize(value[childKey], options, childKey);
                 if (child !== undefined) out[childKey] = child;

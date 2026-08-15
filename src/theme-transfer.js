@@ -26,7 +26,7 @@
         }
 
         function uniqueNames(names) {
-            var seen = {};
+            var seen = Object.create(null);
             var out = [];
             (names || []).forEach(function (name) {
                 name = String(name || '').trim();
@@ -38,7 +38,7 @@
         }
 
         function inspectFingerprints(themes) {
-            var groups = {};
+            var groups = Object.create(null);
             (themes || []).forEach(function (theme) {
                 var fingerprint = schema.fingerprint(theme, {
                     excludeName: true,
@@ -64,7 +64,7 @@
             var metadataDiagnostics = metadata && typeof metadata.inspect === 'function'
                 ? metadata.inspect(names, themeMeta)
                 : { inventoryDuplicateNames: [], orphanMetadata: [], inventoryWithoutMetadata: [], emptyMetadata: [], annotatedNames: [], annotatedCount: 0 };
-            var filenames = {};
+            var filenames = Object.create(null);
             var sanitizedFilenameCollisions = [];
             var invalidThemeObjects = [];
             var fingerprintThemes = [];
@@ -110,7 +110,7 @@
             var failures = [];
             var inventorySnapshot = [];
 
-            var requestedCounts = {};
+            var requestedCounts = Object.create(null);
             requestedNames.forEach(function (name) { requestedCounts[name] = (requestedCounts[name] || 0) + 1; });
             var duplicateRequests = Object.keys(requestedCounts).filter(function (name) { return requestedCounts[name] > 1; });
             if (duplicateRequests.length > 0) {
@@ -179,7 +179,7 @@
             var valid = [];
             var invalid = [];
             var legacyPartials = [];
-            var filenames = {};
+            var filenames = Object.create(null);
 
             (themes || []).forEach(function (input, index) {
                 var theme = schema.cloneValue(input);

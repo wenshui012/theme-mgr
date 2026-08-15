@@ -5,9 +5,9 @@
         opts = opts || {};
         var schema = opts.schema || ns.themeSchema;
         var api = opts.api;
-        var fullThemeCache = {};
-        var staleThemeCache = {};
-        var confirmedSavedPatches = {};
+        var fullThemeCache = Object.create(null);
+        var staleThemeCache = Object.create(null);
+        var confirmedSavedPatches = Object.create(null);
         var confirmedSavedRevision = 0;
         var nativeThemeSaveRequestSequence = 0;
         var applyRequestId = 0;

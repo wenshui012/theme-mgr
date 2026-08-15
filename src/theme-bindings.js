@@ -6,8 +6,8 @@
     function createState() {
         return {
             version: BINDING_VERSION,
-            characters: {},
-            chats: {},
+            characters: Object.create(null),
+            chats: Object.create(null),
             manualTheme: '',
             manualTarget: null,
         };
@@ -57,7 +57,7 @@
     }
 
     function normalizeMap(map) {
-        var normalized = {};
+        var normalized = Object.create(null);
         if (!isObject(map)) return normalized;
         Object.keys(map).forEach(function (key) {
             var cleanKey = String(key || '').trim();
@@ -466,7 +466,7 @@
     }
 
     function mergeThemeReferencesIntoPair(data, themeNames, pairId) {
-        var names = {};
+        var names = Object.create(null);
         (themeNames || []).forEach(function (name) {
             name = String(name || '').trim();
             if (name) names[name] = true;
@@ -524,9 +524,9 @@
         var beforeAutomaticReconcile = options.beforeAutomaticReconcile;
         var started = false;
         var sequence = 0;
-        var pendingThemes = {};
+        var pendingThemes = Object.create(null);
         var listeners = [];
-        var characterSnapshots = {};
+        var characterSnapshots = Object.create(null);
         var manualRuntimeInitialized = false;
         var manualIntentTarget = null;
         var verifiedManualTarget = null;
@@ -827,7 +827,7 @@
         function captureCharacterSnapshots(context) {
             context = context || contextSafe();
             var characters = Array.isArray(context.characters) ? context.characters : [];
-            var next = {};
+            var next = Object.create(null);
             characters.forEach(function (character, index) {
                 if (!character || typeof character.avatar !== 'string' || !character.avatar.trim()) return;
                 next[String(index)] = {

@@ -8,7 +8,7 @@
     function stableValue(value) {
         if (Array.isArray(value)) return value.map(stableValue);
         if (!value || typeof value !== 'object') return value;
-        var out = {};
+        var out = Object.create(null);
         Object.keys(value).sort().forEach(function (key) {
             if (value[key] !== undefined) out[key] = stableValue(value[key]);
         });
