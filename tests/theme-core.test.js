@@ -112,7 +112,7 @@ function createStorageTestHarness(options) {
         }
         throw new Error(`unexpected fetch: ${method} ${url}`);
     };
-    const storage = modules.createStorage({
+    const storageOptions = {
         DB_NAME: 'test',
         DB_VERSION: 1,
         STORE_NAME: 'test',
@@ -123,7 +123,12 @@ function createStorageTestHarness(options) {
         ensureDefaults(value) { return Object.assign({ value: 'default' }, value || {}); },
         getPostHeaders() { return Promise.resolve({ 'Content-Type': 'application/json' }); },
         fetch,
-        localStore: {
+        serverDebounceMs: config.serverDebounceMs === undefined ? 0 : config.serverDebounceMs,
+        serverRetryDelays: config.serverRetryDelays || [0, 0, 0],
+        serverReadTimeoutMs: config.serverReadTimeoutMs,
+    };
+    if (!config.useIndexedDB) {
+        storageOptions.localStore = {
             read() {
                 if (config.localReadError) throw config.localReadError;
                 if (Object.prototype.hasOwnProperty.call(config, 'localReadResult')) {
@@ -146,11 +151,9 @@ function createStorageTestHarness(options) {
                 shared.data = clone(data);
                 shared.sync = clone(sync);
             },
-        },
-        serverDebounceMs: config.serverDebounceMs === undefined ? 0 : config.serverDebounceMs,
-        serverRetryDelays: config.serverRetryDelays || [0, 0, 0],
-        serverReadTimeoutMs: config.serverReadTimeoutMs,
-    });
+        };
+    }
+    const storage = modules.createStorage(storageOptions);
     return {
         storage,
         shared,
@@ -172,6 +175,84 @@ function createMemoryLocalStorage(initial) {
         has(key) { return values.has(key); },
         value(key) { return values.get(key); },
         removed,
+    };
+}
+
+function createFakeIndexedDB(mode, shared, counters) {
+    const state = shared || { data: null, sync: null };
+    const stats = counters || { readTransactions: 0, writeTransactions: 0 };
+    const db = {
+        objectStoreNames: { contains() { return true; } },
+        transaction(_storeName, accessMode) {
+            const isWrite = accessMode === 'readwrite';
+            if (!isWrite) stats.readTransactions += 1;
+            else stats.writeTransactions += 1;
+            if (mode === 'transaction-throw' && !isWrite) throw new Error('IndexedDB transaction failed');
+            const requests = [];
+            const pendingWrites = [];
+            const tx = {
+                error: null,
+                objectStore() {
+                    return {
+                        get(key) {
+                            const request = { result: undefined, error: null };
+                            requests.push({ key, request });
+                            return request;
+                        },
+                        put(value, key) {
+                            pendingWrites.push({ key, value: clone(value) });
+                        },
+                    };
+                },
+            };
+            queueMicrotask(() => {
+                if (isWrite) {
+                    pendingWrites.forEach(({ key, value }) => {
+                        if (key === 'data') state.data = value;
+                        if (key === 'data:sync-state') state.sync = value;
+                    });
+                    if (typeof tx.oncomplete === 'function') tx.oncomplete();
+                    return;
+                }
+                if (mode === 'transaction-error') {
+                    tx.error = new Error('IndexedDB transaction failed');
+                    if (typeof tx.onerror === 'function') tx.onerror();
+                    return;
+                }
+                if (mode === 'transaction-abort') {
+                    tx.error = new Error('IndexedDB transaction aborted');
+                    if (typeof tx.onabort === 'function') tx.onabort();
+                    return;
+                }
+                if (mode === 'request-error') {
+                    requests[0].request.error = new Error('IndexedDB request failed');
+                    if (typeof requests[0].request.onerror === 'function') requests[0].request.onerror();
+                    if (typeof tx.onabort === 'function') tx.onabort();
+                    return;
+                }
+                requests.forEach(({ key, request }) => {
+                    request.result = key === 'data' ? clone(state.data) : clone(state.sync);
+                    if (typeof request.onsuccess === 'function') request.onsuccess();
+                });
+                if (typeof tx.oncomplete === 'function') tx.oncomplete();
+            });
+            return tx;
+        },
+    };
+    return {
+        stats,
+        open() {
+            const request = { error: null };
+            queueMicrotask(() => {
+                if (mode === 'open-error') {
+                    request.error = new Error('IndexedDB open failed');
+                    if (typeof request.onerror === 'function') request.onerror();
+                    return;
+                }
+                if (typeof request.onsuccess === 'function') request.onsuccess({ target: { result: db } });
+            });
+            return request;
+        },
     };
 }
 
@@ -698,7 +779,7 @@ test('authoritative pending legacy data survives a present stale server and sync
     assert.equal(memory.has('theme_mgr_v2'), false);
 });
 
-test('legacy data never inherits an orphan pending sync record from the absent current store', async (t) => {
+test('orphan current sync record fails closed without promoting legacy or overwriting from server', async (t) => {
     const previousLocalStorage = global.localStorage;
     const memory = createMemoryLocalStorage({
         theme_mgr_v2: JSON.stringify({ value: 'legacy-not-pending' }),
@@ -724,7 +805,8 @@ test('legacy data never inherits an orphan pending sync record from the absent c
 
     await initTestStorage(harness.storage);
 
-    assert.equal(harness.storage.load().value, 'server-authoritative');
+    assert.equal(harness.storage.load().value, 'default');
+    assert.equal(harness.localWriteCount(), 0);
     assert.equal(harness.puts.length, 0);
     assert.equal(memory.has('theme_mgr_v2'), true);
 });
@@ -844,6 +926,161 @@ test('legacy source is removed only after the migration destination resolves dur
 
     assert.equal(memory.has('theme_mgr_v2'), false);
     assert.equal(memory.has('theme_mgr_v2:sync-state'), false);
+});
+
+test('IndexedDB open error keeps legacy data session-only and performs zero writes', async (t) => {
+    const previousIndexedDB = global.indexedDB;
+    const previousLocalStorage = global.localStorage;
+    const legacyRaw = JSON.stringify({ value: 'legacy-open-recovery' });
+    const memory = createMemoryLocalStorage({ theme_mgr_v2: legacyRaw });
+    const fake = createFakeIndexedDB('open-error');
+    global.indexedDB = fake;
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousIndexedDB === undefined) delete global.indexedDB;
+        else global.indexedDB = previousIndexedDB;
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+
+    const harness = createStorageTestHarness({ useIndexedDB: true, serverData: null });
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.load().value, 'legacy-open-recovery');
+    assert.equal(fake.stats.writeTransactions, 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.value('theme_mgr_v2'), legacyRaw);
+    assert.deepEqual(memory.removed, []);
+});
+
+for (const [mode, label] of [
+    ['transaction-error', 'transaction error'],
+    ['transaction-abort', 'transaction abort'],
+    ['request-error', 'request error'],
+]) {
+    test(`IndexedDB ${label} is not treated as empty storage`, async (t) => {
+        const previousIndexedDB = global.indexedDB;
+        const previousLocalStorage = global.localStorage;
+        const legacyRaw = JSON.stringify({ value: `legacy-${mode}` });
+        const memory = createMemoryLocalStorage({ theme_mgr_v2: legacyRaw });
+        const fake = createFakeIndexedDB(mode);
+        global.indexedDB = fake;
+        global.localStorage = memory;
+        t.after(() => {
+            if (previousIndexedDB === undefined) delete global.indexedDB;
+            else global.indexedDB = previousIndexedDB;
+            if (previousLocalStorage === undefined) delete global.localStorage;
+            else global.localStorage = previousLocalStorage;
+        });
+
+        const harness = createStorageTestHarness({ useIndexedDB: true, serverData: null });
+        await initTestStorage(harness.storage);
+
+        assert.equal(harness.storage.load().value, `legacy-${mode}`);
+        assert.equal(fake.stats.writeTransactions, 0);
+        assert.equal(harness.puts.length, 0);
+        assert.equal(memory.value('theme_mgr_v2'), legacyRaw);
+        assert.deepEqual(memory.removed, []);
+    });
+}
+
+test('truly absent IndexedDB state follows safe first initialization', async (t) => {
+    const previousIndexedDB = global.indexedDB;
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage();
+    const shared = { data: null, sync: null };
+    const fake = createFakeIndexedDB('success', shared);
+    global.indexedDB = fake;
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousIndexedDB === undefined) delete global.indexedDB;
+        else global.indexedDB = previousIndexedDB;
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+
+    const harness = createStorageTestHarness({ useIndexedDB: true, server: false });
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.load().value, 'default');
+    assert.equal(shared.data.value, 'default');
+    assert.equal(fake.stats.writeTransactions, 1);
+    assert.equal(harness.puts.length, 0);
+});
+
+test('malformed legacy JSON cannot turn an absent IndexedDB into default persistence', async (t) => {
+    const previousIndexedDB = global.indexedDB;
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage({ theme_mgr_v2: '' });
+    const fake = createFakeIndexedDB('success', { data: null, sync: null });
+    global.indexedDB = fake;
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousIndexedDB === undefined) delete global.indexedDB;
+        else global.indexedDB = previousIndexedDB;
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+
+    const harness = createStorageTestHarness({ useIndexedDB: true, serverData: null });
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.load().value, 'default');
+    assert.equal(fake.stats.writeTransactions, 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(memory.value('theme_mgr_v2'), '');
+    assert.deepEqual(memory.removed, []);
+});
+
+test('orphan current sync metadata is an error instead of proof that current data is absent', async (t) => {
+    const previousIndexedDB = global.indexedDB;
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage();
+    const fake = createFakeIndexedDB('success', {
+        data: null,
+        sync: { version: 1, localRevision: 4, lastAckRevision: 3, pendingServerSync: true, localUpdatedAt: 1 },
+    });
+    global.indexedDB = fake;
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousIndexedDB === undefined) delete global.indexedDB;
+        else global.indexedDB = previousIndexedDB;
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+
+    const harness = createStorageTestHarness({ useIndexedDB: true, serverData: null });
+    await initTestStorage(harness.storage);
+
+    assert.equal(fake.stats.writeTransactions, 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(harness.storage.getSyncState().pendingServerSync, false);
+});
+
+test('invalid current sync revisions retain current data read-only and perform zero writes', async (t) => {
+    const previousIndexedDB = global.indexedDB;
+    const previousLocalStorage = global.localStorage;
+    const memory = createMemoryLocalStorage();
+    const shared = {
+        data: { value: 'current-safe-copy' },
+        sync: { version: 1, localRevision: 1, lastAckRevision: 2, pendingServerSync: false, localUpdatedAt: 1 },
+    };
+    const fake = createFakeIndexedDB('success', shared);
+    global.indexedDB = fake;
+    global.localStorage = memory;
+    t.after(() => {
+        if (previousIndexedDB === undefined) delete global.indexedDB;
+        else global.indexedDB = previousIndexedDB;
+        if (previousLocalStorage === undefined) delete global.localStorage;
+        else global.localStorage = previousLocalStorage;
+    });
+
+    const harness = createStorageTestHarness({ useIndexedDB: true, serverData: null });
+    await initTestStorage(harness.storage);
+
+    assert.equal(harness.storage.load().value, 'current-safe-copy');
+    assert.equal(fake.stats.writeTransactions, 0);
+    assert.equal(harness.puts.length, 0);
 });
 
 test('FAB stays absent while storage readiness is delayed beyond the former 1.5 second injection', async () => {

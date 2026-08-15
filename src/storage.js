@@ -78,25 +78,57 @@
         }
 
         function openDB(cb) {
-            if (dbInstance) { cb(dbInstance); return; }
-            var req = indexedDB.open(DB_NAME, DB_VERSION);
+            if (dbInstance) { cb(dbInstance, null); return; }
+            var req;
+            try {
+                req = indexedDB.open(DB_NAME, DB_VERSION);
+            } catch (error) {
+                cb(null, error);
+                return;
+            }
             req.onupgradeneeded = function (e) {
                 var db = e.target.result;
                 if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
             };
-            req.onsuccess = function (e) { dbInstance = e.target.result; cb(dbInstance); };
-            req.onerror = function () { cb(null); };
+            req.onsuccess = function (e) { dbInstance = e.target.result; cb(dbInstance, null); };
+            req.onerror = function () { cb(null, req.error || new Error('IndexedDB open failed')); };
         }
 
         function isDataObject(value) {
             return Boolean(value && typeof value === 'object' && !Array.isArray(value));
         }
 
+        function hasOwn(value, key) {
+            return Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
+        }
+
+        function validatePersistedSyncState(value) {
+            if (!isDataObject(value)) return new Error('sync metadata is not an object');
+            if (hasOwn(value, 'version') && value.version !== 1) return new Error('sync metadata version is unsupported');
+            var numberFields = ['localRevision', 'lastAckRevision', 'localUpdatedAt'];
+            for (var i = 0; i < numberFields.length; i++) {
+                var key = numberFields[i];
+                if (!hasOwn(value, key)) continue;
+                var numberValue = Number(value[key]);
+                if (!Number.isFinite(numberValue) || numberValue < 0 || (key !== 'localUpdatedAt' && Math.floor(numberValue) !== numberValue)) {
+                    return new Error('sync metadata field is invalid: ' + key);
+                }
+            }
+            if (hasOwn(value, 'pendingServerSync') && typeof value.pendingServerSync !== 'boolean') {
+                return new Error('sync metadata pending flag is invalid');
+            }
+            if (hasOwn(value, 'localRevision') && hasOwn(value, 'lastAckRevision')
+                && Number(value.lastAckRevision) > Number(value.localRevision)) {
+                return new Error('sync metadata revisions do not correspond');
+            }
+            return null;
+        }
+
         function readLegacyState() {
             try {
                 if (typeof localStorage === 'undefined') return { status: 'absent', data: null };
                 var raw = localStorage.getItem(LS_KEY);
-                if (!raw) return { status: 'absent', data: null };
+                if (raw === null) return { status: 'absent', data: null };
                 var parsed = JSON.parse(raw);
                 if (!isDataObject(parsed)) {
                     return { status: 'error', data: null, error: new Error('legacy settings are not an object') };
@@ -112,20 +144,49 @@
             return legacy.status === 'present' ? legacy.data : null;
         }
 
+        function readLegacySyncState() {
+            try {
+                if (typeof localStorage === 'undefined') return { status: 'absent', data: null };
+                var raw = localStorage.getItem(LS_SYNC_KEY);
+                if (raw === null) return { status: 'absent', data: null };
+                var parsed = JSON.parse(raw);
+                var validationError = validatePersistedSyncState(parsed);
+                if (validationError) return { status: 'error', data: null, error: validationError };
+                return { status: 'present', data: parsed };
+            } catch (error) {
+                return { status: 'error', data: null, error: error };
+            }
+        }
+
         function loadSyncFromLS() {
-            try { var r = localStorage.getItem(LS_SYNC_KEY); return r ? JSON.parse(r) : null; } catch (e) { return null; }
+            var legacySync = readLegacySyncState();
+            return legacySync.status === 'present' ? legacySync.data : null;
         }
 
         function readLocalState() {
             function fromCurrentResult(result) {
                 result = result || {};
                 var legacy = readLegacyState();
+                var legacySync = readLegacySyncState();
                 var explicitStatus = result.status;
                 var currentStatus = explicitStatus === 'present' || explicitStatus === 'absent' || explicitStatus === 'error'
                     ? explicitStatus
                     : (result.hasData === true || isDataObject(result.data) ? 'present' : 'absent');
 
                 if (currentStatus === 'present' && isDataObject(result.data)) {
+                    if (result.sync !== undefined && result.sync !== null) {
+                        var currentSyncError = validatePersistedSyncState(result.sync);
+                        if (currentSyncError) {
+                            return {
+                                data: result.data,
+                                sync: createSyncState(),
+                                hasData: true,
+                                status: 'error',
+                                source: 'current',
+                                error: currentSyncError,
+                            };
+                        }
+                    }
                     return {
                         data: result.data,
                         sync: normalizeSyncState(result.sync),
@@ -135,23 +196,43 @@
                     };
                 }
                 if (currentStatus === 'absent') {
+                    if ((result.data !== undefined && result.data !== null) || result.sync !== undefined && result.sync !== null) {
+                        return {
+                            data: isDataObject(result.data) ? result.data : null,
+                            sync: createSyncState(),
+                            hasData: isDataObject(result.data),
+                            status: 'error',
+                            source: isDataObject(result.data) ? 'current' : 'none',
+                            error: new Error('local data and sync metadata do not correspond'),
+                        };
+                    }
                     if (legacy.status === 'present') {
+                        if (legacySync.status === 'error') {
+                            return {
+                                data: legacy.data,
+                                sync: createSyncState(),
+                                hasData: true,
+                                status: 'error',
+                                source: 'legacy',
+                                error: legacySync.error,
+                            };
+                        }
                         return {
                             data: legacy.data,
-                            sync: normalizeSyncState(loadSyncFromLS()),
+                            sync: normalizeSyncState(legacySync.data),
                             hasData: true,
                             status: 'absent',
                             source: 'legacy',
                         };
                     }
-                    if (legacy.status === 'error') {
+                    if (legacy.status === 'error' || legacySync.status !== 'absent') {
                         return {
                             data: null,
                             sync: normalizeSyncState(result.sync),
                             hasData: false,
                             status: 'error',
                             source: 'legacy',
-                            error: legacy.error,
+                            error: legacy.error || legacySync.error || new Error('legacy data and sync metadata do not correspond'),
                         };
                     }
                     return {
@@ -164,7 +245,7 @@
                 }
                 return {
                     data: legacy.status === 'present' ? legacy.data : null,
-                    sync: normalizeSyncState(loadSyncFromLS()),
+                    sync: normalizeSyncState(legacySync.data),
                     hasData: legacy.status === 'present',
                     status: 'error',
                     source: legacy.status === 'present' ? 'legacy' : 'none',
@@ -180,20 +261,39 @@
                     });
             }
             return new Promise(function (resolve) {
-                openDB(function (db) {
+                openDB(function (db, openError) {
                     if (!db) {
-                        resolve(fromCurrentResult({ status: 'error', error: new Error('IndexedDB open failed') }));
+                        resolve(fromCurrentResult({ status: 'error', error: openError || new Error('IndexedDB open failed') }));
                         return;
                     }
-                    var tx = db.transaction(STORE_NAME, 'readonly');
-                    var store = tx.objectStore(STORE_NAME);
-                    var dataReq = store.get(DATA_KEY);
-                    var syncReq = store.get(SYNC_KEY);
+                    var tx;
+                    var store;
+                    var dataReq;
+                    var syncReq;
+                    try {
+                        tx = db.transaction(STORE_NAME, 'readonly');
+                        store = tx.objectStore(STORE_NAME);
+                        dataReq = store.get(DATA_KEY);
+                        syncReq = store.get(SYNC_KEY);
+                    } catch (error) {
+                        resolve(fromCurrentResult({ status: 'error', error: error }));
+                        return;
+                    }
+                    var settled = false;
                     var dataResult;
                     var syncResult;
+                    function failRead(error) {
+                        if (settled) return;
+                        settled = true;
+                        resolve(fromCurrentResult({ status: 'error', error: error || new Error('IndexedDB read failed') }));
+                    }
                     dataReq.onsuccess = function () { dataResult = dataReq.result; };
                     syncReq.onsuccess = function () { syncResult = syncReq.result; };
+                    dataReq.onerror = function () { failRead(dataReq.error || new Error('IndexedDB settings read failed')); };
+                    syncReq.onerror = function () { failRead(syncReq.error || new Error('IndexedDB sync read failed')); };
                     tx.oncomplete = function () {
+                        if (settled) return;
+                        settled = true;
                         if (dataResult !== undefined && dataResult !== null && !isDataObject(dataResult)) {
                             resolve(fromCurrentResult({ status: 'error', error: new Error('IndexedDB settings are invalid') }));
                             return;
@@ -205,8 +305,9 @@
                         }));
                     };
                     tx.onerror = function () {
-                        resolve(fromCurrentResult({ status: 'error', error: tx.error || new Error('IndexedDB read failed') }));
+                        failRead(tx.error || new Error('IndexedDB read failed'));
                     };
+                    tx.onabort = function () { failRead(tx.error || new Error('IndexedDB read aborted')); };
                 });
             });
         }
