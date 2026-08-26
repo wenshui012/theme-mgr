@@ -5,6 +5,37 @@
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
+    var PERSIST_ERROR_CODES = {
+        LOCAL_STATE_NOT_AUTHORITATIVE: true,
+        LOCAL_MAIN_INVALID: true,
+        SYNC_STATE_INVALID: true,
+        SYNC_REVISION_INVALID: true,
+        IDB_OPEN_FAILED: true,
+        IDB_READ_FAILED: true,
+        IDB_TRANSACTION_FAILED: true,
+        IDB_WRITE_FAILED: true,
+        IDB_ABORTED: true,
+        STORAGE_QUOTA_EXCEEDED: true,
+        LOCALSTORAGE_SERIALIZE_FAILED: true,
+        LOCALSTORAGE_WRITE_FAILED: true,
+        INITIALIZATION_FAILED: true,
+        UNKNOWN_LOCAL_PERSIST_FAILURE: true,
+    };
+
+    ns.persistFailureUi = {
+        getErrorCode: function (error) {
+            return error && typeof error.code === 'string' && PERSIST_ERROR_CODES[error.code]
+                ? error.code
+                : 'UNKNOWN_LOCAL_PERSIST_FAILURE';
+        },
+        formatMessage: function (error) {
+            return '保存失败，草稿已保留\n错误码：' + this.getErrorCode(error);
+        },
+        formatDiagnostic: function (diagnostic) {
+            return JSON.stringify(diagnostic || {}, null, 2);
+        },
+    };
+
     ns.createUiMain = function (options) {
     options = options || {};
     var modules = options.modules || ns;
@@ -210,6 +241,7 @@
                 ensureDefaults: ensureDefaults,
                 getPostHeaders: getPostHeaders,
                 LS_KEY: 'theme_mgr_v2',
+                version: TM_VERSION,
             });
             imageToolsApi = modules.imageTools;
             styleApi = modules.injectStyles;
@@ -1829,7 +1861,7 @@
             })
             .catch(function (err) {
                 console.warn('[美化管理] 切换美化失败:', err);
-                if (cb) cb(false, err && err.code ? err.code : 'load-failed');
+                if (cb) cb(false, err && err.code ? err.code : 'load-failed', err);
             });
     }
 
@@ -1842,7 +1874,7 @@
             ? bindingController.beginManualIntent(themeName)
             : null;
         pendingVerifiedManualThemes[themeName] = (pendingVerifiedManualThemes[themeName] || 0) + 1;
-        applyTheme(themeName, function (ok, reason) {
+        applyTheme(themeName, function (ok, reason, error) {
             pendingVerifiedManualThemes[themeName] -= 1;
             if (pendingVerifiedManualThemes[themeName] <= 0) delete pendingVerifiedManualThemes[themeName];
             if (intentToken && bindingController && typeof bindingController.finishManualIntent === 'function') {
@@ -1850,7 +1882,7 @@
             } else if (ok) {
                 recordManualTheme(themeName);
             }
-            if (cb) cb(ok, reason);
+            if (cb) cb(ok, reason, error);
         });
     }
 
@@ -1995,6 +2027,27 @@
         img.src = dataUrl;
     }
 
+    function copyTextToClipboard(text) {
+        var value = String(text || '');
+        if (!value) return Promise.resolve(false);
+        if (global.navigator && global.navigator.clipboard && typeof global.navigator.clipboard.writeText === 'function') {
+            return global.navigator.clipboard.writeText(value).then(function () { return true; }, function () { return false; });
+        }
+        try {
+            var textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.setAttribute('readonly', 'readonly');
+            textarea.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+            document.body.appendChild(textarea);
+            textarea.select();
+            var copied = typeof document.execCommand === 'function' && document.execCommand('copy');
+            document.body.removeChild(textarea);
+            return Promise.resolve(Boolean(copied));
+        } catch (error) {
+            return Promise.resolve(false);
+        }
+    }
+
     // ── Toast ─────────────────────────────────────────────────
     function toast(msg, isErr) {
         var el = document.createElement('div');
@@ -2006,6 +2059,11 @@
             'font-size:13px !important;font-weight:600 !important;z-index:2147483649 !important;' +
             'box-shadow:0 4px 16px rgba(0,0,0,.4) !important;white-space:nowrap !important;' +
             'pointer-events:none !important;opacity:0 !important;transition:all .22s !important;';
+        if (String(msg || '').indexOf('\n') !== -1) {
+            el.style.setProperty('white-space', 'pre-line', 'important');
+            el.style.setProperty('max-width', 'calc(100vw - 32px)', 'important');
+            el.style.setProperty('text-align', 'center', 'important');
+        }
         getPopupLayer().appendChild(el);
         setTimeout(function () {
             el.style.setProperty('opacity', '1', 'important');
@@ -5186,7 +5244,7 @@
             '<div class="tm-imgarea" id="tm-dimgarea">' + (editPreviewData ? '<img src="' + esc(editPreviewData) + '" />' : '<div class="tm-imgph"><i class="fa-regular fa-image"></i><span>点击或拖拽上传截图</span></div>') + '</div>' +
             '<input type="file" id="tm-dfile" accept="image/*" style="display:none" />' +
             '<div class="tm-img-actions"></div></div>',
-            '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-dcancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-dsave">保存</button></div>',
+            '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-dcopy-diagnostic" style="display:none">复制诊断</button><button class="tm-btn tm-btn-outline" id="tm-dcancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-dsave">保存</button></div>',
         ].join(''));
 
         function renderBackgroundBind() {
@@ -5349,12 +5407,42 @@
         });
 
         var editorSession = editorDraftApi.createSession(captureEditSnapshot());
+        var persistFailureUi = modules.persistFailureUi || ns.persistFailureUi;
+        var diagnosticButton = sheet.querySelector('#tm-dcopy-diagnostic');
+        var lastSaveDiagnosticText = '';
+        var diagnosticRequestId = 0;
+
+        diagnosticButton.addEventListener('click', function () {
+            copyTextToClipboard(lastSaveDiagnosticText).then(function (copied) {
+                toast(copied ? '诊断信息已复制' : '无法复制诊断信息，请查看控制台', !copied);
+            });
+        });
+
         function setEditorSaving(saving) {
             sheet.querySelectorAll('input,select,textarea,button').forEach(function (control) {
                 if (control.id !== 'tm-dcancel') control.disabled = saving;
             });
             var button = sheet.querySelector('#tm-dsave');
             if (button) button.textContent = saving ? '保存中...' : '保存';
+        }
+
+        function handlePersistFailure(token, error) {
+            if (!editorSession.failSave(token)) return;
+            setEditorSaving(false);
+            var normalized = storageApi && typeof storageApi.normalizePersistError === 'function'
+                ? storageApi.normalizePersistError(error)
+                : error;
+            console.warn('[美化管理] metadata 保存失败，草稿已保留:', normalized || error);
+            toast(persistFailureUi.formatMessage(normalized), true);
+            lastSaveDiagnosticText = '';
+            diagnosticButton.style.display = 'none';
+            var requestId = ++diagnosticRequestId;
+            if (!storageApi || typeof storageApi.collectDiagnostics !== 'function') return;
+            storageApi.collectDiagnostics(normalized).then(function (diagnostic) {
+                if (requestId !== diagnosticRequestId || !editorSession.isActive() || !diagnosticButton.parentNode) return;
+                lastSaveDiagnosticText = persistFailureUi.formatDiagnostic(diagnostic);
+                diagnosticButton.style.display = '';
+            });
         }
         uiSheetsApi.setBeforeClose(sheet, function () {
             var dirty = editorSession.isDirty(captureEditSnapshot());
@@ -5385,6 +5473,9 @@
             }
             var saveTicket = editorSession.beginSave(snapshot);
             if (!saveTicket) return;
+            diagnosticRequestId += 1;
+            lastSaveDiagnosticText = '';
+            diagnosticButton.style.display = 'none';
             setEditorSaving(true);
 
             function uploadDraft(draft, callback) {
@@ -5459,9 +5550,7 @@
                 try {
                     persist = save(dd);
                 } catch (err) {
-                    editorSession.failSave(saveTicket.token);
-                    setEditorSaving(false);
-                    toast('保存失败，草稿仍保留，请重试', true);
+                    handlePersistFailure(saveTicket.token, err);
                     return;
                 }
                 Promise.resolve(persist).then(function () {
@@ -5483,10 +5572,8 @@
                         toast('✨ 已保存');
                         renderCatbar(); refreshSingleItemCard(item.key, editEffects);
                     }
-                }).catch(function () {
-                    if (!editorSession.failSave(saveTicket.token)) return;
-                    setEditorSaving(false);
-                    toast('保存失败，草稿仍保留，请重试', true);
+                }).catch(function (err) {
+                    handlePersistFailure(saveTicket.token, err);
                 });
             }
         });

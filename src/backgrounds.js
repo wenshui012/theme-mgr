@@ -13,6 +13,9 @@
         var renderGrid = opts.renderGrid;
         var setControlValue = opts.setControlValue;
         var themeRuntime = opts.themeRuntime;
+        var loadBoundBackgroundModules = typeof opts.loadBackgroundModules === 'function'
+            ? opts.loadBackgroundModules
+            : function () { return Promise.all([import('/scripts/backgrounds.js'), import('/script.js')]); };
         var backgroundListCache = null;
 
         function getBackgroundCssUrl(backgroundName) {
@@ -218,15 +221,16 @@
             var data = load();
             var meta = data.themeMeta[themeName];
             var backgroundName = meta && meta.backgroundName ? meta.backgroundName : '';
-            var targetName = backgroundName || '__transparent.png';
-            var url = getBackgroundCssUrl(targetName);
-            Promise.all([import('/scripts/backgrounds.js'), import('/script.js')])
+            if (!backgroundName) { if (cb) cb(true); return; }
+
+            var url = getBackgroundCssUrl(backgroundName);
+            loadBoundBackgroundModules()
                 .then(function (mods) {
                     if (isCurrent && !isCurrent()) { if (cb) cb(false, 'superseded'); return; }
                     var bgMod = mods[0];
                     var scriptMod = mods[1];
                     if (bgMod.background_settings) {
-                        bgMod.background_settings.name = targetName;
+                        bgMod.background_settings.name = backgroundName;
                         bgMod.background_settings.url = url;
                     }
                     var bg = global.document.getElementById('bg1');

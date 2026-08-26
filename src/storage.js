@@ -19,6 +19,31 @@
         var clearTimeoutFn = typeof opts.clearTimeout === 'function' ? opts.clearTimeout : global.clearTimeout.bind(global);
         var nowFn = typeof opts.now === 'function' ? opts.now : Date.now;
         var localStore = opts.localStore || null;
+        var pluginVersion = opts.version || '';
+        var estimateStorageFn = typeof opts.estimateStorage === 'function'
+            ? opts.estimateStorage
+            : function () {
+                var storage = global.navigator && global.navigator.storage;
+                if (!storage || typeof storage.estimate !== 'function') return Promise.resolve(null);
+                return storage.estimate();
+            };
+
+        var STORAGE_ERROR_CODES = {
+            LOCAL_STATE_NOT_AUTHORITATIVE: true,
+            LOCAL_MAIN_INVALID: true,
+            SYNC_STATE_INVALID: true,
+            SYNC_REVISION_INVALID: true,
+            IDB_OPEN_FAILED: true,
+            IDB_READ_FAILED: true,
+            IDB_TRANSACTION_FAILED: true,
+            IDB_WRITE_FAILED: true,
+            IDB_ABORTED: true,
+            STORAGE_QUOTA_EXCEEDED: true,
+            LOCALSTORAGE_SERIALIZE_FAILED: true,
+            LOCALSTORAGE_WRITE_FAILED: true,
+            INITIALIZATION_FAILED: true,
+            UNKNOWN_LOCAL_PERSIST_FAILURE: true,
+        };
 
         var dbInstance = null;
         var dataCache = null;
@@ -48,6 +73,173 @@
         var lastLocalWrite = Promise.resolve(true);
         var flushWaiters = [];
         var syncState = createSyncState();
+        var lastLocalReadSummary = {
+            status: 'uninitialized',
+            source: 'none',
+            hasMain: false,
+            hasSyncState: false,
+            mainType: 'absent',
+            syncStateType: 'absent',
+        };
+        var lastLocalAuthorityError = null;
+        var localRevalidationPromise = null;
+        var lastLocalRevalidationSummary = {
+            attempted: false,
+            succeeded: false,
+            errorCode: null,
+        };
+
+        function storageErrorMessage(code) {
+            var messages = {
+                LOCAL_STATE_NOT_AUTHORITATIVE: 'local settings state is not authoritative enough to overwrite',
+                LOCAL_MAIN_INVALID: 'local settings main data is invalid',
+                SYNC_STATE_INVALID: 'local sync metadata is invalid',
+                SYNC_REVISION_INVALID: 'local sync revisions are invalid',
+                IDB_OPEN_FAILED: 'IndexedDB open failed',
+                IDB_READ_FAILED: 'IndexedDB read failed',
+                IDB_TRANSACTION_FAILED: 'IndexedDB transaction failed',
+                IDB_WRITE_FAILED: 'IndexedDB write failed',
+                IDB_ABORTED: 'IndexedDB transaction aborted',
+                STORAGE_QUOTA_EXCEEDED: 'local storage quota was exceeded',
+                LOCALSTORAGE_SERIALIZE_FAILED: 'localStorage serialization failed',
+                LOCALSTORAGE_WRITE_FAILED: 'localStorage write failed',
+                INITIALIZATION_FAILED: 'storage initialization failed',
+                UNKNOWN_LOCAL_PERSIST_FAILURE: 'unknown local persistence failure',
+            };
+            return messages[code] || messages.UNKNOWN_LOCAL_PERSIST_FAILURE;
+        }
+
+        function makeStorageError(code, cause, details) {
+            var stableCode = STORAGE_ERROR_CODES[code] ? code : 'UNKNOWN_LOCAL_PERSIST_FAILURE';
+            var error = new Error(storageErrorMessage(stableCode));
+            error.name = 'ThemeManagerStorageError';
+            error.code = stableCode;
+            if (cause !== undefined && cause !== null) error.cause = cause;
+            if (details !== undefined) error.details = details;
+            return error;
+        }
+
+        function errorName(error) {
+            return error && typeof error.name === 'string' ? error.name : '';
+        }
+
+        function normalizeStorageError(error, fallbackCode, details) {
+            if (error && typeof error.code === 'string' && STORAGE_ERROR_CODES[error.code]) return error;
+            var name = errorName(error);
+            var message = error && typeof error.message === 'string' ? error.message : '';
+            var code = STORAGE_ERROR_CODES[fallbackCode] ? fallbackCode : 'UNKNOWN_LOCAL_PERSIST_FAILURE';
+            var normalizedDetails = Object.assign({}, details || {});
+            if (name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED' || /quota/i.test(message)) {
+                code = 'STORAGE_QUOTA_EXCEEDED';
+            } else if (name === 'AbortError') {
+                code = 'IDB_ABORTED';
+            } else if (name === 'DataCloneError') {
+                code = 'IDB_WRITE_FAILED';
+                normalizedDetails.reason = 'DataCloneError';
+            } else if (name === 'TransactionInactiveError' || name === 'InvalidStateError') {
+                code = 'IDB_TRANSACTION_FAILED';
+                normalizedDetails.reason = name;
+            }
+            if (name) normalizedDetails.causeName = name;
+            return makeStorageError(code, error, normalizedDetails);
+        }
+
+        function valueType(value) {
+            if (value === undefined || value === null) return 'absent';
+            if (Array.isArray(value)) return 'array';
+            return typeof value;
+        }
+
+        function finiteDiagnosticNumber(value) {
+            var number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        }
+
+        function safeErrorDetails(error) {
+            var details = error && error.details;
+            if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
+            var allowed = ['stage', 'reason', 'backend', 'field', 'operation', 'authorityCode', 'localStateStatus', 'causeName', 'revalidationAttempted'];
+            var result = {};
+            allowed.forEach(function (key) {
+                var value = details[key];
+                if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') result[key] = value;
+            });
+            return Object.keys(result).length ? result : null;
+        }
+
+        function detectPlatform() {
+            var nav = global.navigator || {};
+            var userAgent = typeof nav.userAgent === 'string' ? nav.userAgent : '';
+            return global.__TAURITAVERN_MOBILE_RUNTIME_COMPAT__ || global.__TAURI_INTERNALS__ || /Tauri/i.test(userAgent)
+                ? 'Tauri'
+                : 'Browser';
+        }
+
+        function collectDiagnostics(error) {
+            var normalized = normalizeStorageError(error, 'UNKNOWN_LOCAL_PERSIST_FAILURE');
+            var cause = normalized.cause || error;
+            var diagnostic = {
+                schemaVersion: 1,
+                themeManagerVersion: pluginVersion,
+                platform: detectPlatform(),
+                errorCode: normalized.code,
+                errorMessage: normalized.message,
+                causeName: errorName(cause) || null,
+                details: safeErrorDetails(normalized),
+                localWritesAuthorized: localWritesAuthorized,
+                localState: cloneValue(lastLocalReadSummary),
+                revalidation: cloneValue(lastLocalRevalidationSummary),
+                localRevision: finiteDiagnosticNumber(syncState.localRevision),
+                lastAckRevision: finiteDiagnosticNumber(syncState.lastAckRevision),
+                pendingServerSync: syncState.pendingServerSync === true,
+                storageEstimate: { supported: false },
+            };
+            return Promise.resolve()
+                .then(function () { return estimateStorageFn(); })
+                .then(function (estimate) {
+                    if (!estimate || typeof estimate !== 'object') return diagnostic;
+                    var usage = finiteDiagnosticNumber(estimate.usage);
+                    var quota = finiteDiagnosticNumber(estimate.quota);
+                    diagnostic.storageEstimate = {
+                        supported: true,
+                        usage: usage,
+                        quota: quota,
+                        ratio: usage !== null && quota !== null && quota > 0 ? usage / quota : null,
+                    };
+                    return diagnostic;
+                })
+                .catch(function (estimateError) {
+                    diagnostic.storageEstimate = {
+                        supported: true,
+                        errorName: errorName(estimateError) || 'Error',
+                    };
+                    return diagnostic;
+                });
+        }
+
+        function recordLocalRead(local, stage) {
+            lastLocalReadSummary = cloneValue(local && local.diagnostics ? local.diagnostics : {
+                status: local && local.status ? local.status : 'error',
+                source: local && local.source ? local.source : 'none',
+                hasMain: Boolean(local && local.hasData),
+                hasSyncState: false,
+                mainType: valueType(local && local.data),
+                syncStateType: valueType(local && local.sync),
+            });
+            if (local && local.status === 'error') {
+                lastLocalAuthorityError = normalizeStorageError(local.error, 'LOCAL_STATE_NOT_AUTHORITATIVE', {
+                    reason: 'local-read-not-authoritative',
+                    stage: stage || 'initialization',
+                });
+            } else {
+                lastLocalAuthorityError = null;
+            }
+        }
+
+        function blockLocalWrites(cause, details) {
+            localWritesAuthorized = false;
+            lastLocalAuthorityError = normalizeStorageError(cause, 'LOCAL_STATE_NOT_AUTHORITATIVE', details);
+        }
 
         function createSyncState() {
             return {
@@ -83,7 +275,7 @@
             try {
                 req = indexedDB.open(DB_NAME, DB_VERSION);
             } catch (error) {
-                cb(null, error);
+                cb(null, normalizeStorageError(error, 'IDB_OPEN_FAILED', { stage: 'open' }));
                 return;
             }
             req.onupgradeneeded = function (e) {
@@ -91,7 +283,9 @@
                 if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
             };
             req.onsuccess = function (e) { dbInstance = e.target.result; cb(dbInstance, null); };
-            req.onerror = function () { cb(null, req.error || new Error('IndexedDB open failed')); };
+            req.onerror = function () {
+                cb(null, normalizeStorageError(req.error || new Error('IndexedDB open failed'), 'IDB_OPEN_FAILED', { stage: 'open' }));
+            };
         }
 
         function isDataObject(value) {
@@ -103,23 +297,71 @@
         }
 
         function validatePersistedSyncState(value) {
-            if (!isDataObject(value)) return new Error('sync metadata is not an object');
-            if (hasOwn(value, 'version') && value.version !== 1) return new Error('sync metadata version is unsupported');
+            if (!isDataObject(value)) {
+                return makeStorageError('SYNC_STATE_INVALID', null, { reason: 'not-object', stage: 'sync-validation' });
+            }
+            if (hasOwn(value, 'version') && value.version !== 1) {
+                return makeStorageError('SYNC_STATE_INVALID', null, { reason: 'unsupported-version', stage: 'sync-validation' });
+            }
             var numberFields = ['localRevision', 'lastAckRevision', 'localUpdatedAt'];
             for (var i = 0; i < numberFields.length; i++) {
                 var key = numberFields[i];
                 if (!hasOwn(value, key)) continue;
                 var numberValue = Number(value[key]);
                 if (!Number.isFinite(numberValue) || numberValue < 0 || (key !== 'localUpdatedAt' && Math.floor(numberValue) !== numberValue)) {
-                    return new Error('sync metadata field is invalid: ' + key);
+                    return makeStorageError(
+                        key === 'localRevision' || key === 'lastAckRevision' ? 'SYNC_REVISION_INVALID' : 'SYNC_STATE_INVALID',
+                        null,
+                        { reason: 'invalid-field', field: key, stage: 'sync-validation' },
+                    );
                 }
             }
             if (hasOwn(value, 'pendingServerSync') && typeof value.pendingServerSync !== 'boolean') {
-                return new Error('sync metadata pending flag is invalid');
+                return makeStorageError('SYNC_STATE_INVALID', null, {
+                    reason: 'invalid-pending-flag',
+                    field: 'pendingServerSync',
+                    stage: 'sync-validation',
+                });
             }
             if (hasOwn(value, 'localRevision') && hasOwn(value, 'lastAckRevision')
                 && Number(value.lastAckRevision) > Number(value.localRevision)) {
-                return new Error('sync metadata revisions do not correspond');
+                return makeStorageError('SYNC_REVISION_INVALID', null, {
+                    reason: 'ack-ahead-of-local',
+                    stage: 'sync-validation',
+                });
+            }
+            return null;
+        }
+
+        function validateRevalidationSyncState(value) {
+            var validationError = validatePersistedSyncState(value);
+            if (validationError) return validationError;
+            if (!hasOwn(value, 'version')) {
+                return makeStorageError('SYNC_STATE_INVALID', null, {
+                    reason: 'missing-field',
+                    field: 'version',
+                    stage: 'sync-revalidation',
+                });
+            }
+            var revisionFields = ['localRevision', 'lastAckRevision'];
+            for (var i = 0; i < revisionFields.length; i++) {
+                if (!hasOwn(value, revisionFields[i])) {
+                    return makeStorageError('SYNC_REVISION_INVALID', null, {
+                        reason: 'missing-field',
+                        field: revisionFields[i],
+                        stage: 'sync-revalidation',
+                    });
+                }
+            }
+            var stateFields = ['pendingServerSync', 'localUpdatedAt'];
+            for (var j = 0; j < stateFields.length; j++) {
+                if (!hasOwn(value, stateFields[j])) {
+                    return makeStorageError('SYNC_STATE_INVALID', null, {
+                        reason: 'missing-field',
+                        field: stateFields[j],
+                        stage: 'sync-revalidation',
+                    });
+                }
             }
             return null;
         }
@@ -131,11 +373,25 @@
                 if (raw === null) return { status: 'absent', data: null };
                 var parsed = JSON.parse(raw);
                 if (!isDataObject(parsed)) {
-                    return { status: 'error', data: null, error: new Error('legacy settings are not an object') };
+                    return {
+                        status: 'error',
+                        data: null,
+                        error: makeStorageError('LOCAL_STATE_NOT_AUTHORITATIVE', null, {
+                            reason: 'legacy-main-not-object',
+                            stage: 'legacy-read',
+                        }),
+                    };
                 }
                 return { status: 'present', data: parsed };
             } catch (error) {
-                return { status: 'error', data: null, error: error };
+                return {
+                    status: 'error',
+                    data: null,
+                    error: makeStorageError('LOCAL_STATE_NOT_AUTHORITATIVE', error, {
+                        reason: 'legacy-main-read-failed',
+                        stage: 'legacy-read',
+                    }),
+                };
             }
         }
 
@@ -154,7 +410,14 @@
                 if (validationError) return { status: 'error', data: null, error: validationError };
                 return { status: 'present', data: parsed };
             } catch (error) {
-                return { status: 'error', data: null, error: error };
+                return {
+                    status: 'error',
+                    data: null,
+                    error: makeStorageError('SYNC_STATE_INVALID', error, {
+                        reason: 'legacy-sync-read-failed',
+                        stage: 'legacy-sync-read',
+                    }),
+                };
             }
         }
 
@@ -168,6 +431,20 @@
                 result = result || {};
                 var legacy = readLegacyState();
                 var legacySync = readLegacySyncState();
+                function finish(local, rawData, rawSync, hasSyncState) {
+                    local.persistedSync = rawSync;
+                    local.diagnostics = {
+                        status: local.status,
+                        source: local.source,
+                        hasMain: rawData !== undefined && rawData !== null,
+                        hasSyncState: hasSyncState === undefined
+                            ? rawSync !== undefined && rawSync !== null
+                            : hasSyncState,
+                        mainType: valueType(rawData),
+                        syncStateType: valueType(rawSync),
+                    };
+                    return local;
+                }
                 var explicitStatus = result.status;
                 var currentStatus = explicitStatus === 'present' || explicitStatus === 'absent' || explicitStatus === 'error'
                     ? explicitStatus
@@ -177,87 +454,125 @@
                     if (result.sync !== undefined && result.sync !== null) {
                         var currentSyncError = validatePersistedSyncState(result.sync);
                         if (currentSyncError) {
-                            return {
+                            return finish({
                                 data: result.data,
                                 sync: createSyncState(),
                                 hasData: true,
                                 status: 'error',
                                 source: 'current',
                                 error: currentSyncError,
-                            };
+                            }, result.data, result.sync);
                         }
                     }
-                    return {
+                    return finish({
                         data: result.data,
                         sync: normalizeSyncState(result.sync),
                         hasData: true,
                         status: 'present',
                         source: 'current',
-                    };
+                    }, result.data, result.sync);
+                }
+                if (currentStatus === 'present') {
+                    return finish({
+                        data: null,
+                        sync: createSyncState(),
+                        hasData: false,
+                        status: 'error',
+                        source: 'current',
+                        error: makeStorageError('LOCAL_MAIN_INVALID', null, {
+                            reason: 'main-not-object',
+                            stage: 'read-validation',
+                        }),
+                    }, result.data, result.sync);
                 }
                 if (currentStatus === 'absent') {
                     if ((result.data !== undefined && result.data !== null) || result.sync !== undefined && result.sync !== null) {
-                        return {
+                        var mainMissingOrInvalid = !isDataObject(result.data);
+                        return finish({
                             data: isDataObject(result.data) ? result.data : null,
                             sync: createSyncState(),
                             hasData: isDataObject(result.data),
                             status: 'error',
                             source: isDataObject(result.data) ? 'current' : 'none',
-                            error: new Error('local data and sync metadata do not correspond'),
-                        };
+                            error: makeStorageError(mainMissingOrInvalid ? 'LOCAL_MAIN_INVALID' : 'LOCAL_STATE_NOT_AUTHORITATIVE', null, {
+                                reason: mainMissingOrInvalid ? 'main-missing-or-invalid' : 'main-sync-mismatch',
+                                stage: 'local-read',
+                            }),
+                        }, result.data, result.sync);
                     }
                     if (legacy.status === 'present') {
                         if (legacySync.status === 'error') {
-                            return {
+                            return finish({
                                 data: legacy.data,
                                 sync: createSyncState(),
                                 hasData: true,
                                 status: 'error',
                                 source: 'legacy',
                                 error: legacySync.error,
-                            };
+                            }, legacy.data, legacySync.data, true);
                         }
-                        return {
+                        return finish({
                             data: legacy.data,
                             sync: normalizeSyncState(legacySync.data),
                             hasData: true,
                             status: 'absent',
                             source: 'legacy',
-                        };
+                        }, legacy.data, legacySync.data, legacySync.status === 'present');
                     }
                     if (legacy.status === 'error' || legacySync.status !== 'absent') {
-                        return {
+                        return finish({
                             data: null,
                             sync: normalizeSyncState(result.sync),
                             hasData: false,
                             status: 'error',
                             source: 'legacy',
-                            error: legacy.error || legacySync.error || new Error('legacy data and sync metadata do not correspond'),
-                        };
+                            error: legacy.error || legacySync.error || makeStorageError('LOCAL_STATE_NOT_AUTHORITATIVE', null, {
+                                reason: 'legacy-main-sync-mismatch',
+                                stage: 'legacy-read',
+                            }),
+                        }, legacy.data, legacySync.data, legacySync.status !== 'absent');
                     }
-                    return {
+                    return finish({
                         data: null,
                         sync: normalizeSyncState(result.sync),
                         hasData: false,
                         status: 'absent',
                         source: 'none',
-                    };
+                    }, null, null, false);
                 }
-                return {
+                var readError = result.error || legacy.error || makeStorageError('LOCAL_STATE_NOT_AUTHORITATIVE', null, {
+                    reason: 'local-state-unknown',
+                    stage: 'local-read',
+                });
+                var fallbackData = legacy.status === 'present' ? legacy.data : null;
+                var fallbackSync = legacySync.status === 'present' ? legacySync.data : null;
+                var failedCurrentStatePresent = (result.data !== undefined && result.data !== null)
+                    || (result.sync !== undefined && result.sync !== null);
+                return finish({
                     data: legacy.status === 'present' ? legacy.data : null,
                     sync: normalizeSyncState(legacySync.data),
                     hasData: legacy.status === 'present',
                     status: 'error',
-                    source: legacy.status === 'present' ? 'legacy' : 'none',
-                    error: result.error || legacy.error || new Error('local settings state is unknown'),
-                };
+                    source: failedCurrentStatePresent ? 'current' : (legacy.status === 'present' ? 'legacy' : 'none'),
+                    error: normalizeStorageError(readError, 'LOCAL_STATE_NOT_AUTHORITATIVE', {
+                        reason: 'local-state-unknown',
+                        stage: 'local-read',
+                    }),
+                }, failedCurrentStatePresent ? result.data : fallbackData,
+                failedCurrentStatePresent ? result.sync : fallbackSync,
+                failedCurrentStatePresent
+                    ? result.sync !== undefined && result.sync !== null
+                    : legacySync.status === 'present');
             }
 
             if (localStore && typeof localStore.read === 'function') {
                 return Promise.resolve()
                     .then(function () { return localStore.read(); })
                     .then(fromCurrentResult, function (readError) {
-                        return fromCurrentResult({ status: 'error', error: readError });
+                        return fromCurrentResult({
+                            status: 'error',
+                            error: normalizeStorageError(readError, 'IDB_READ_FAILED', { stage: 'local-read' }),
+                        });
                     });
             }
             return new Promise(function (resolve) {
@@ -276,7 +591,13 @@
                         dataReq = store.get(DATA_KEY);
                         syncReq = store.get(SYNC_KEY);
                     } catch (error) {
-                        resolve(fromCurrentResult({ status: 'error', error: error }));
+                        resolve(fromCurrentResult({
+                            status: 'error',
+                            error: normalizeStorageError(error, 'IDB_TRANSACTION_FAILED', {
+                                stage: 'read-transaction',
+                                operation: 'read',
+                            }),
+                        }));
                         return;
                     }
                     var settled = false;
@@ -285,7 +606,13 @@
                     function failRead(error) {
                         if (settled) return;
                         settled = true;
-                        resolve(fromCurrentResult({ status: 'error', error: error || new Error('IndexedDB read failed') }));
+                        resolve(fromCurrentResult({
+                            status: 'error',
+                            error: normalizeStorageError(error || new Error('IndexedDB read failed'), 'IDB_READ_FAILED', {
+                                stage: 'read',
+                                operation: 'read',
+                            }),
+                        }));
                     }
                     dataReq.onsuccess = function () { dataResult = dataReq.result; };
                     syncReq.onsuccess = function () { syncResult = syncReq.result; };
@@ -295,7 +622,15 @@
                         if (settled) return;
                         settled = true;
                         if (dataResult !== undefined && dataResult !== null && !isDataObject(dataResult)) {
-                            resolve(fromCurrentResult({ status: 'error', error: new Error('IndexedDB settings are invalid') }));
+                            resolve(fromCurrentResult({
+                                status: 'error',
+                                data: dataResult,
+                                sync: syncResult,
+                                error: makeStorageError('LOCAL_MAIN_INVALID', null, {
+                                    reason: 'main-not-object',
+                                    stage: 'read-validation',
+                                }),
+                            }));
                             return;
                         }
                         resolve(fromCurrentResult({
@@ -305,9 +640,17 @@
                         }));
                     };
                     tx.onerror = function () {
-                        failRead(tx.error || new Error('IndexedDB read failed'));
+                        failRead(normalizeStorageError(tx.error || new Error('IndexedDB read failed'), 'IDB_TRANSACTION_FAILED', {
+                            stage: 'read-transaction',
+                            operation: 'read',
+                        }));
                     };
-                    tx.onabort = function () { failRead(tx.error || new Error('IndexedDB read aborted')); };
+                    tx.onabort = function () {
+                        failRead(normalizeStorageError(tx.error || new Error('IndexedDB read aborted'), 'IDB_ABORTED', {
+                            stage: 'read-transaction',
+                            operation: 'read',
+                        }));
+                    };
                 });
             });
         }
@@ -323,9 +666,113 @@
             }
         }
 
+        function makeRevalidationError(error, local, details) {
+            var normalized = normalizeStorageError(error, 'LOCAL_STATE_NOT_AUTHORITATIVE', {
+                reason: 'save-revalidation-failed',
+                stage: 'save-revalidation',
+            });
+            var combinedDetails = Object.assign({}, normalized.details || {}, details || {}, {
+                authorityCode: normalized.code,
+                localStateStatus: local && local.status ? local.status : lastLocalReadSummary.status,
+                revalidationAttempted: true,
+                stage: 'save-revalidation',
+            });
+            return makeStorageError(normalized.code, normalized.cause || normalized, combinedDetails);
+        }
+
+        function revalidateLocalWriteAuthority() {
+            if (localWritesAuthorized) return Promise.resolve(true);
+            if (localRevalidationPromise) return localRevalidationPromise;
+
+            lastLocalRevalidationSummary = {
+                attempted: true,
+                succeeded: false,
+                errorCode: null,
+            };
+            var pending = Promise.resolve().then(function () {
+                return readLocalState();
+            }).then(function (local) {
+                recordLocalRead(local, 'save-revalidation');
+                if (!local || local.status === 'error') {
+                    throw makeRevalidationError(local && local.error, local);
+                }
+                if (local.status !== 'present' || local.source !== 'current' || !isDataObject(local.data)) {
+                    throw makeRevalidationError(makeStorageError('LOCAL_MAIN_INVALID', null, {
+                        reason: local && local.source === 'legacy' ? 'current-main-missing-legacy-only' : 'current-main-missing-or-invalid',
+                        stage: 'save-revalidation',
+                    }), local);
+                }
+                if (!local.diagnostics || local.diagnostics.hasSyncState !== true) {
+                    throw makeRevalidationError(makeStorageError('SYNC_STATE_INVALID', null, {
+                        reason: 'sync-state-missing',
+                        stage: 'save-revalidation',
+                    }), local);
+                }
+                var syncValidationError = validateRevalidationSyncState(local.persistedSync);
+                if (syncValidationError) throw makeRevalidationError(syncValidationError, local);
+
+                var recoveredData;
+                try {
+                    recoveredData = ensureDefaults(cloneValue(local.data));
+                } catch (mainError) {
+                    throw makeRevalidationError(makeStorageError('LOCAL_MAIN_INVALID', mainError, {
+                        reason: 'main-default-validation-failed',
+                        stage: 'save-revalidation',
+                    }), local);
+                }
+                dataCache = recoveredData;
+                syncState = normalizeSyncState(local.sync);
+                legacyMigrationPending = false;
+                localWritesAuthorized = true;
+                lastLocalAuthorityError = null;
+                lastLocalRevalidationSummary = {
+                    attempted: true,
+                    succeeded: true,
+                    errorCode: null,
+                };
+                return true;
+            }).catch(function (error) {
+                var revalidationError = error && error.details && error.details.revalidationAttempted === true
+                    ? error
+                    : makeRevalidationError(error, null);
+                blockLocalWrites(revalidationError, {
+                    authorityCode: revalidationError.code,
+                    localStateStatus: lastLocalReadSummary.status,
+                    revalidationAttempted: true,
+                    stage: 'save-revalidation',
+                });
+                lastLocalRevalidationSummary = {
+                    attempted: true,
+                    succeeded: false,
+                    errorCode: revalidationError.code,
+                };
+                throw revalidationError;
+            });
+
+            localRevalidationPromise = pending.then(function (result) {
+                localRevalidationPromise = null;
+                return result;
+            }, function (error) {
+                localRevalidationPromise = null;
+                throw error;
+            });
+            return localRevalidationPromise;
+        }
+
         function persistLocalState(data, state) {
             if (!localWritesAuthorized) {
-                return Promise.reject(new Error('local settings state is not authoritative enough to overwrite'));
+                var authorityCode = lastLocalAuthorityError && lastLocalAuthorityError.code && STORAGE_ERROR_CODES[lastLocalAuthorityError.code]
+                    ? lastLocalAuthorityError.code
+                    : 'LOCAL_STATE_NOT_AUTHORITATIVE';
+                return Promise.reject(makeStorageError(
+                    authorityCode,
+                    lastLocalAuthorityError,
+                    {
+                        authorityCode: authorityCode,
+                        localStateStatus: lastLocalReadSummary.status,
+                        stage: 'persist-authorization',
+                    },
+                ));
             }
             var dataSnapshot = cloneValue(data);
             var syncSnapshot = cloneValue(normalizeSyncState(state));
@@ -333,31 +780,117 @@
                 return Promise.resolve()
                     .then(function () { return localStore.write(dataSnapshot, syncSnapshot); })
                     .then(function (result) {
-                        if (result === false) throw new Error('local settings write was not confirmed');
+                        if (result === false) {
+                            throw makeStorageError('IDB_WRITE_FAILED', null, {
+                                reason: 'write-not-confirmed',
+                                stage: 'write',
+                                backend: 'injected-local-store',
+                            });
+                        }
                         completeLegacyMigration();
                         return true;
+                    })
+                    .catch(function (error) {
+                        throw normalizeStorageError(error, 'IDB_WRITE_FAILED', {
+                            stage: 'write',
+                            backend: 'injected-local-store',
+                        });
                     });
             }
             return new Promise(function (resolve, reject) {
-                openDB(function (db) {
+                openDB(function (db, openError) {
                     if (!db) {
+                        var serializedData;
+                        var serializedSync;
                         try {
-                            localStorage.setItem(LS_KEY, JSON.stringify(dataSnapshot));
-                            localStorage.setItem(LS_SYNC_KEY, JSON.stringify(syncSnapshot));
+                            serializedData = JSON.stringify(dataSnapshot);
+                        } catch (serializeError) {
+                            reject(normalizeStorageError(serializeError, 'LOCALSTORAGE_SERIALIZE_FAILED', {
+                                stage: 'serialize',
+                                backend: 'localStorage',
+                                field: 'main',
+                                authorityCode: openError && openError.code ? openError.code : '',
+                            }));
+                            return;
+                        }
+                        try {
+                            localStorage.setItem(LS_KEY, serializedData);
+                        } catch (writeError) {
+                            reject(normalizeStorageError(writeError, 'LOCALSTORAGE_WRITE_FAILED', {
+                                stage: 'write',
+                                backend: 'localStorage',
+                                field: 'main',
+                                authorityCode: openError && openError.code ? openError.code : '',
+                            }));
+                            return;
+                        }
+                        try {
+                            serializedSync = JSON.stringify(syncSnapshot);
+                        } catch (serializeError) {
+                            reject(normalizeStorageError(serializeError, 'LOCALSTORAGE_SERIALIZE_FAILED', {
+                                stage: 'serialize',
+                                backend: 'localStorage',
+                                field: 'sync-state',
+                                authorityCode: openError && openError.code ? openError.code : '',
+                            }));
+                            return;
+                        }
+                        try {
+                            localStorage.setItem(LS_SYNC_KEY, serializedSync);
                             resolve(true);
-                        } catch (err) { reject(err); }
+                        } catch (writeError) {
+                            reject(normalizeStorageError(writeError, 'LOCALSTORAGE_WRITE_FAILED', {
+                                stage: 'write',
+                                backend: 'localStorage',
+                                field: 'sync-state',
+                                authorityCode: openError && openError.code ? openError.code : '',
+                            }));
+                        }
                         return;
                     }
-                    var tx = db.transaction(STORE_NAME, 'readwrite');
-                    var store = tx.objectStore(STORE_NAME);
-                    store.put(dataSnapshot, DATA_KEY);
-                    store.put(syncSnapshot, SYNC_KEY);
+                    var tx;
+                    var store;
+                    var dataWrite;
+                    var syncWrite;
+                    try {
+                        tx = db.transaction(STORE_NAME, 'readwrite');
+                        store = tx.objectStore(STORE_NAME);
+                    } catch (transactionError) {
+                        reject(normalizeStorageError(transactionError, 'IDB_TRANSACTION_FAILED', {
+                            stage: 'write-transaction',
+                            operation: 'write',
+                        }));
+                        return;
+                    }
+                    try {
+                        dataWrite = store.put(dataSnapshot, DATA_KEY);
+                        syncWrite = store.put(syncSnapshot, SYNC_KEY);
+                    } catch (putError) {
+                        reject(normalizeStorageError(putError, 'IDB_WRITE_FAILED', {
+                            stage: 'write-request',
+                            operation: 'write',
+                        }));
+                        return;
+                    }
+                    var requestError = null;
+                    if (dataWrite) dataWrite.onerror = function () { requestError = dataWrite.error || new Error('IndexedDB data write failed'); };
+                    if (syncWrite) syncWrite.onerror = function () { requestError = syncWrite.error || new Error('IndexedDB sync write failed'); };
                     tx.oncomplete = function () {
                         completeLegacyMigration();
                         resolve(true);
                     };
-                    tx.onerror = function () { reject(tx.error || new Error('IndexedDB write failed')); };
-                    tx.onabort = function () { reject(tx.error || new Error('IndexedDB write aborted')); };
+                    tx.onerror = function () {
+                        reject(normalizeStorageError(requestError || tx.error || new Error('IndexedDB write failed'), requestError ? 'IDB_WRITE_FAILED' : 'IDB_TRANSACTION_FAILED', {
+                            stage: requestError ? 'write-request' : 'write-transaction',
+                            operation: 'write',
+                        }));
+                    };
+                    tx.onabort = function () {
+                        reject(normalizeStorageError(requestError || tx.error || new Error('IndexedDB write aborted'), 'IDB_ABORTED', {
+                            stage: 'write-transaction',
+                            operation: 'write',
+                        }));
+                    };
                 });
             });
         }
@@ -367,6 +900,8 @@
             var syncSnapshot = cloneValue(syncState);
             var write = localWriteTail.catch(function () { return false; }).then(function () {
                 return persistLocalState(dataSnapshot, syncSnapshot);
+            }).catch(function (error) {
+                throw normalizeStorageError(error, 'UNKNOWN_LOCAL_PERSIST_FAILURE', { stage: 'persist' });
             });
             localWriteTail = write;
             lastLocalWrite = write;
@@ -376,9 +911,18 @@
             return write;
         }
 
-        function saveToDB(d, cb) {
+        function saveToDBAuthorized(d, cb) {
             dataCache = ensureDefaults(d);
             var write = queueLocalPersist();
+            if (cb) write.then(function () { cb(true); }, function () { cb(false); });
+            return write;
+        }
+
+        function saveToDB(d, cb) {
+            if (localWritesAuthorized) return saveToDBAuthorized(d, cb);
+            var write = revalidateLocalWriteAuthority().then(function () {
+                return saveToDBAuthorized(d);
+            });
             if (cb) write.then(function () { cb(true); }, function () { cb(false); });
             return write;
         }
@@ -399,7 +943,7 @@
             return dataCache;
         }
 
-        function save(d) {
+        function saveAuthorized(d) {
             dataCache = ensureDefaults(d);
             syncState.localRevision += 1;
             syncState.localUpdatedAt = nowFn();
@@ -413,6 +957,13 @@
             var write = queueLocalPersist();
             scheduleServerPut();
             return write;
+        }
+
+        function save(d) {
+            if (localWritesAuthorized) return saveAuthorized(d);
+            return revalidateLocalWriteAuthority().then(function () {
+                return saveAuthorized(d);
+            });
         }
 
         function detectServer(cb) {
@@ -797,6 +1348,7 @@
             storageInitStarted = true;
 
             readLocalState().then(function (local) {
+                recordLocalRead(local);
                 localWritesAuthorized = local.status !== 'error';
                 legacyMigrationPending = local.status === 'absent' && local.source === 'legacy';
                 syncState = normalizeSyncState(local.sync);
@@ -806,7 +1358,12 @@
                     serverDataStatus = 'unknown';
                     serverWritesAuthorized = false;
                     if (statusResult.status === 'error') {
-                        if (local.status !== 'present') localWritesAuthorized = false;
+                        if (local.status !== 'present') {
+                            blockLocalWrites(statusResult.error, {
+                                reason: 'backend-status-read-failed-without-local-main',
+                                stage: 'initialization',
+                            });
+                        }
                         console.warn('[美化管理] 后端状态读取失败，本次会话禁止自动迁移或写入:', statusResult.error);
                         finishStorageInit();
                         return;
@@ -820,7 +1377,12 @@
                     serverGetData(function (result) {
                         serverDataStatus = result.status;
                         if (result.status === 'error') {
-                            if (local.status !== 'present') localWritesAuthorized = false;
+                            if (local.status !== 'present') {
+                                blockLocalWrites(result.error, {
+                                    reason: 'backend-data-read-failed-without-local-main',
+                                    stage: 'initialization',
+                                });
+                            }
                             console.warn('[美化管理] 后端设置读取失败，本次会话保留本地数据且禁止覆盖后端:', result.error);
                             finishStorageInit();
                             return;
@@ -865,7 +1427,18 @@
             }).catch(function (err) {
                 console.warn('[美化管理] 存储初始化失败，使用安全默认设置:', err);
                 legacyMigrationPending = false;
-                localWritesAuthorized = false;
+                lastLocalReadSummary = {
+                    status: 'error',
+                    source: 'none',
+                    hasMain: false,
+                    hasSyncState: false,
+                    mainType: 'absent',
+                    syncStateType: 'absent',
+                };
+                blockLocalWrites(makeStorageError('INITIALIZATION_FAILED', err, {
+                    reason: 'initialization-rejected',
+                    stage: 'initialization',
+                }));
                 dataCache = ensureDefaults(null);
                 syncState = createSyncState();
                 finishStorageInit();
@@ -889,6 +1462,10 @@
             isServerImage: isServerImage,
             getServerMode: function () { return serverMode && canWriteServerData(); },
             getSyncState: function () { return cloneValue(syncState); },
+            normalizePersistError: function (error) {
+                return normalizeStorageError(error, 'UNKNOWN_LOCAL_PERSIST_FAILURE', { stage: 'ui' });
+            },
+            collectDiagnostics: collectDiagnostics,
         };
     };
 })(window);

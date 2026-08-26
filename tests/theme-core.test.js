@@ -16,8 +16,10 @@ require('../src/theme-series.js');
 require('../src/theme-bindings.js');
 require('../src/theme-appearance.js');
 require('../src/storage.js');
+require('../src/backgrounds.js');
 require('../src/ui-sheets.js');
 require('../src/ui-events.js');
+require('../src/ui-main.js');
 
 const modules = global.ThemeMgrModules;
 const schema = modules.themeSchema;
@@ -49,6 +51,23 @@ function completeBaseline(overrides) {
     return Object.assign(baseline, overrides || {});
 }
 
+function createThemeApiInventoryHarness(t, initialBody) {
+    const previousFetch = global.fetch;
+    let settingsBody = initialBody;
+    t.after(() => { global.fetch = previousFetch; });
+    global.fetch = async (url) => {
+        if (url === '/csrf-token') return { ok: true, json: async () => ({ token: 'test' }) };
+        if (url === '/api/settings/get') {
+            return { ok: true, json: async () => clone(settingsBody) };
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+    };
+    return {
+        api: modules.createThemeApi({ schema }),
+        setBody(value) { settingsBody = value; },
+    };
+}
+
 function deferred() {
     let resolve;
     let reject;
@@ -57,6 +76,56 @@ function deferred() {
         reject = rej;
     });
     return { promise, resolve, reject };
+}
+
+function createBackgroundTestHarness(t, themeMeta, initialName) {
+    const previousDocument = global.document;
+    const background = { style: { backgroundImage: `url("backgrounds/${initialName}")` } };
+    const backgroundSettings = {
+        name: initialName,
+        url: `url("backgrounds/${initialName}")`,
+        fitting: 'cover',
+    };
+    const controlWrites = [];
+    let moduleLoads = 0;
+    let settingsSaves = 0;
+    global.document = {
+        getElementById(id) { return id === 'bg1' ? background : null; },
+    };
+    t.after(() => { global.document = previousDocument; });
+    const api = modules.createBackgrounds({
+        load() { return { themeMeta }; },
+        save() {},
+        getPostHeaders() { return Promise.resolve({}); },
+        esc(value) { return String(value); },
+        createSheet() {},
+        closeSheet() {},
+        toast() {},
+        renderGrid() {},
+        setControlValue(selector, value) { controlWrites.push({ selector, value }); },
+        themeRuntime: { isApplyCurrent() { return true; } },
+        loadBackgroundModules() {
+            moduleLoads += 1;
+            return Promise.resolve([
+                { background_settings: backgroundSettings },
+                { saveSettingsDebounced() { settingsSaves += 1; } },
+            ]);
+        },
+    });
+    return {
+        api,
+        background,
+        backgroundSettings,
+        controlWrites,
+        get moduleLoads() { return moduleLoads; },
+        get settingsSaves() { return settingsSaves; },
+    };
+}
+
+function applyTestBackground(api, themeName) {
+    return new Promise((resolve) => {
+        api.applyBoundBackground(themeName, (ok, reason) => resolve({ ok, reason }));
+    });
 }
 
 async function waitFor(predicate, message) {
@@ -74,6 +143,7 @@ function createStorageTestHarness(options) {
     const imagePosts = [];
     const imageBatchPosts = [];
     let getCount = 0;
+    let localReadCount = 0;
     let localWriteCount = 0;
     const putFactory = config.putFactory || (() => {
         const request = deferred();
@@ -126,10 +196,14 @@ function createStorageTestHarness(options) {
         serverDebounceMs: config.serverDebounceMs === undefined ? 0 : config.serverDebounceMs,
         serverRetryDelays: config.serverRetryDelays || [0, 0, 0],
         serverReadTimeoutMs: config.serverReadTimeoutMs,
+        version: 'test-version',
     };
+    if (typeof config.estimateStorage === 'function') storageOptions.estimateStorage = config.estimateStorage;
     if (!config.useIndexedDB) {
         storageOptions.localStore = {
             read() {
+                localReadCount += 1;
+                if (typeof config.localReadFactory === 'function') return config.localReadFactory();
                 if (config.localReadError) throw config.localReadError;
                 if (Object.prototype.hasOwnProperty.call(config, 'localReadResult')) {
                     return clone(config.localReadResult);
@@ -161,6 +235,7 @@ function createStorageTestHarness(options) {
         imagePosts,
         imageBatchPosts,
         getCount: () => getCount,
+        localReadCount: () => localReadCount,
         localWriteCount: () => localWriteCount,
     };
 }
@@ -200,13 +275,31 @@ function createFakeIndexedDB(mode, shared, counters) {
                             return request;
                         },
                         put(value, key) {
-                            pendingWrites.push({ key, value: clone(value) });
+                            const request = { error: null };
+                            pendingWrites.push({ key, value: clone(value), request });
+                            return request;
                         },
                     };
                 },
             };
             queueMicrotask(() => {
                 if (isWrite) {
+                    if (mode === 'write-error' || mode === 'write-quota') {
+                        const error = new Error(mode === 'write-quota' ? 'quota exceeded' : 'IndexedDB write failed');
+                        error.name = mode === 'write-quota' ? 'QuotaExceededError' : 'UnknownError';
+                        pendingWrites[0].request.error = error;
+                        if (typeof pendingWrites[0].request.onerror === 'function') pendingWrites[0].request.onerror();
+                        tx.error = error;
+                        if (typeof tx.onerror === 'function') tx.onerror();
+                        return;
+                    }
+                    if (mode === 'write-abort') {
+                        const error = new Error('IndexedDB write aborted');
+                        error.name = 'AbortError';
+                        tx.error = error;
+                        if (typeof tx.onabort === 'function') tx.onabort();
+                        return;
+                    }
                     pendingWrites.forEach(({ key, value }) => {
                         if (key === 'data') state.data = value;
                         if (key === 'data:sync-state') state.sync = value;
@@ -439,7 +532,8 @@ test('backend status error keeps an absent legacy migration source untouched', a
     await initTestStorage(harness.storage);
     await assert.rejects(
         harness.storage.save({ value: 'must-stay-session-only' }),
-        /not authoritative enough to overwrite/,
+        (error) => error.code === 'LOCAL_MAIN_INVALID' &&
+            error.details.revalidationAttempted === true,
     );
 
     assert.equal(harness.localWriteCount(), 0);
@@ -580,7 +674,8 @@ test('backend GET error cannot promote generated defaults into a later pending o
     await initTestStorage(first.storage);
     await assert.rejects(
         first.storage.save({ value: 'default-derived-session' }),
-        /not authoritative enough to overwrite/,
+        (error) => error.code === 'LOCAL_MAIN_INVALID' &&
+            error.details.revalidationAttempted === true,
     );
 
     assert.equal(shared.data, null);
@@ -690,7 +785,8 @@ test('current storage read error blocks later saves from overwriting the unknown
     await initTestStorage(harness.storage);
     await assert.rejects(
         harness.storage.save({ value: 'must-remain-session-only' }),
-        /not authoritative enough to overwrite/,
+        (error) => error.code === 'IDB_READ_FAILED' &&
+            error.details.revalidationAttempted === true,
     );
 
     assert.equal(harness.localWriteCount(), 0);
@@ -1081,6 +1177,385 @@ test('invalid current sync revisions retain current data read-only and perform z
     assert.equal(harness.storage.load().value, 'current-safe-copy');
     assert.equal(fake.stats.writeTransactions, 0);
     assert.equal(harness.puts.length, 0);
+});
+
+test('metadata save failure UI displays only a stable persistence error code', () => {
+    const coded = new Error('browser-specific details');
+    coded.code = 'IDB_WRITE_FAILED';
+    assert.equal(
+        modules.persistFailureUi.formatMessage(coded),
+        '保存失败，草稿已保留\n错误码：IDB_WRITE_FAILED',
+    );
+    assert.equal(
+        modules.persistFailureUi.getErrorCode(new Error('unclassified')),
+        'UNKNOWN_LOCAL_PERSIST_FAILURE',
+    );
+});
+
+test('a transient initial read failure is revalidated once and the same metadata save resumes safely', async () => {
+    let firstRead = true;
+    const harness = createStorageTestHarness({
+        serverData: null,
+        localReadFactory() {
+            if (firstRead) {
+                firstRead = false;
+                throw new Error('temporary IndexedDB read failure');
+            }
+            return {
+                status: 'present',
+                data: { value: 'recovered-authoritative' },
+                sync: { version: 1, localRevision: 3, lastAckRevision: 3, pendingServerSync: false, localUpdatedAt: 1 },
+            };
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    await harness.storage.save({ value: 'saved-after-revalidation' });
+
+    assert.equal(harness.localReadCount(), 2);
+    assert.equal(harness.localWriteCount(), 1);
+    assert.equal(harness.shared.data.value, 'saved-after-revalidation');
+    assert.equal(harness.shared.sync.localRevision, 4);
+    assert.equal(harness.shared.sync.lastAckRevision, 3);
+
+    await harness.storage.save({ value: 'second-save-needs-no-revalidation' });
+    assert.equal(harness.localReadCount(), 2);
+    assert.equal(harness.localWriteCount(), 2);
+    assert.equal(harness.shared.data.value, 'second-save-needs-no-revalidation');
+    assert.equal(harness.shared.sync.localRevision, 5);
+});
+
+test('a still-unreadable local store rejects revalidation with IDB_READ_FAILED and performs zero writes', async () => {
+    const harness = createStorageTestHarness({
+        serverData: null,
+        localReadFactory() { throw new Error('IndexedDB remains unreadable'); },
+    });
+    await initTestStorage(harness.storage);
+
+    let failure;
+    try {
+        await harness.storage.save({
+            value: 'draft-must-not-persist',
+            themeMeta: {
+                SecretTheme: {
+                    author: 'private revalidation author',
+                    description: 'private revalidation note',
+                    imageData: 'data:image/png;base64,PRIVATE_REVALIDATION_IMAGE',
+                },
+            },
+        });
+    } catch (error) {
+        failure = error;
+    }
+
+    assert.equal(failure.code, 'IDB_READ_FAILED');
+    assert.equal(failure.details.authorityCode, 'IDB_READ_FAILED');
+    assert.equal(failure.details.revalidationAttempted, true);
+    assert.equal(harness.localReadCount(), 2);
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.storage.load().value, 'default');
+
+    await assert.rejects(
+        harness.storage.save({ value: 'second-user-attempt' }),
+        (error) => error.code === 'IDB_READ_FAILED' && error.details.revalidationAttempted === true,
+    );
+    assert.equal(harness.localReadCount(), 3);
+    assert.equal(harness.localWriteCount(), 0);
+
+    const diagnostic = await harness.storage.collectDiagnostics(failure);
+    assert.equal(diagnostic.errorCode, 'IDB_READ_FAILED');
+    assert.equal(diagnostic.localWritesAuthorized, false);
+    assert.equal(diagnostic.localState.status, 'error');
+    assert.equal(diagnostic.localState.hasMain, false);
+    assert.equal(diagnostic.localState.hasSyncState, false);
+    assert.equal(diagnostic.details.authorityCode, 'IDB_READ_FAILED');
+    assert.equal(diagnostic.details.revalidationAttempted, true);
+    assert.deepEqual(diagnostic.revalidation, {
+        attempted: true,
+        succeeded: false,
+        errorCode: 'IDB_READ_FAILED',
+    });
+    const diagnosticText = modules.persistFailureUi.formatDiagnostic(diagnostic);
+    assert.equal(diagnosticText.includes('SecretTheme'), false);
+    assert.equal(diagnosticText.includes('private revalidation author'), false);
+    assert.equal(diagnosticText.includes('private revalidation note'), false);
+    assert.equal(diagnosticText.includes('PRIVATE_REVALIDATION_IMAGE'), false);
+});
+
+for (const [label, sync, authorityCode] of [
+    ['invalid sync structure', [], 'SYNC_STATE_INVALID'],
+    ['invalid sync revisions', { version: 1, localRevision: 1, lastAckRevision: 2, pendingServerSync: false, localUpdatedAt: 1 }, 'SYNC_REVISION_INVALID'],
+]) {
+    test(`${label} remains fail closed with its specific revalidation error code`, async () => {
+        const harness = createStorageTestHarness({
+            shared: { data: { value: 'safe-main' }, sync },
+            serverData: { value: 'server-must-not-overwrite' },
+        });
+
+        await initTestStorage(harness.storage);
+
+        await assert.rejects(
+            harness.storage.save({ value: 'blocked' }),
+            (error) => error.code === authorityCode &&
+                error.details.authorityCode === authorityCode &&
+                error.details.revalidationAttempted === true,
+        );
+        assert.equal(harness.localReadCount(), 2);
+        assert.equal(harness.localWriteCount(), 0);
+        assert.equal(harness.puts.length, 0);
+    });
+}
+
+for (const [label, recoveredResult] of [
+    ['missing current main', {
+        status: 'absent',
+        data: null,
+        sync: { version: 1, localRevision: 1, lastAckRevision: 1, pendingServerSync: false, localUpdatedAt: 1 },
+    }],
+    ['invalid current main', {
+        status: 'present',
+        data: [],
+        sync: { version: 1, localRevision: 1, lastAckRevision: 1, pendingServerSync: false, localUpdatedAt: 1 },
+    }],
+]) {
+    test(`${label} blocks save revalidation with LOCAL_MAIN_INVALID and zero writes`, async () => {
+        let firstRead = true;
+        const harness = createStorageTestHarness({
+            serverData: null,
+            localReadFactory() {
+                if (firstRead) {
+                    firstRead = false;
+                    throw new Error('initial read failure');
+                }
+                return recoveredResult;
+            },
+        });
+        await initTestStorage(harness.storage);
+
+        await assert.rejects(
+            harness.storage.save({ value: 'blocked' }),
+            (error) => error.code === 'LOCAL_MAIN_INVALID' &&
+                error.details.authorityCode === 'LOCAL_MAIN_INVALID' &&
+                error.details.revalidationAttempted === true,
+        );
+        assert.equal(harness.localReadCount(), 2);
+        assert.equal(harness.localWriteCount(), 0);
+        assert.equal(harness.storage.load().value, 'default');
+    });
+}
+
+test('a missing sync record blocks save revalidation with SYNC_STATE_INVALID and zero writes', async () => {
+    let firstRead = true;
+    const harness = createStorageTestHarness({
+        serverData: null,
+        localReadFactory() {
+            if (firstRead) {
+                firstRead = false;
+                throw new Error('initial read failure');
+            }
+            return { status: 'present', data: { value: 'default' }, sync: null };
+        },
+    });
+    await initTestStorage(harness.storage);
+
+    await assert.rejects(
+        harness.storage.save({ value: 'blocked' }),
+        (error) => error.code === 'SYNC_STATE_INVALID' &&
+            error.details.reason === 'sync-state-missing' &&
+            error.details.revalidationAttempted === true,
+    );
+    assert.equal(harness.localReadCount(), 2);
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.storage.load().value, 'default');
+});
+
+test('missing persisted revision fields cannot be normalized into revalidation authority', async () => {
+    let firstRead = true;
+    const harness = createStorageTestHarness({
+        serverData: null,
+        localReadFactory() {
+            if (firstRead) {
+                firstRead = false;
+                throw new Error('initial read failure');
+            }
+            return {
+                status: 'present',
+                data: { value: 'recovered-authoritative' },
+                sync: { version: 1, pendingServerSync: false, localUpdatedAt: 1 },
+            };
+        },
+    });
+    await initTestStorage(harness.storage);
+
+    await assert.rejects(
+        harness.storage.save({ value: 'blocked' }),
+        (error) => error.code === 'SYNC_REVISION_INVALID' &&
+            error.details.reason === 'missing-field' &&
+            error.details.field === 'localRevision',
+    );
+    assert.equal(harness.localReadCount(), 2);
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.storage.load().value, 'default');
+});
+
+test('concurrent unauthorized saves share one in-flight revalidation read', async () => {
+    let firstRead = true;
+    const recovered = deferred();
+    const harness = createStorageTestHarness({
+        serverData: null,
+        localReadFactory() {
+            if (firstRead) {
+                firstRead = false;
+                throw new Error('initial read failure');
+            }
+            return recovered.promise;
+        },
+    });
+    await initTestStorage(harness.storage);
+
+    const firstSave = harness.storage.save({ value: 'first' });
+    const secondSave = harness.storage.save({ value: 'second' });
+    await waitFor(() => harness.localReadCount() === 2, 'shared revalidation did not start');
+    recovered.resolve({
+        status: 'present',
+        data: { value: 'recovered-authoritative' },
+        sync: { version: 1, localRevision: 2, lastAckRevision: 2, pendingServerSync: false, localUpdatedAt: 1 },
+    });
+    await Promise.all([firstSave, secondSave]);
+
+    assert.equal(harness.localReadCount(), 2);
+    assert.equal(harness.localWriteCount(), 2);
+    assert.equal(harness.shared.data.value, 'second');
+    assert.equal(harness.shared.sync.localRevision, 4);
+});
+
+test('already-authorized metadata saves add no local revalidation reads', async () => {
+    const harness = createStorageTestHarness({
+        server: false,
+        shared: {
+            data: { value: 'before' },
+            sync: { version: 1, localRevision: 2, lastAckRevision: 2, pendingServerSync: false, localUpdatedAt: 1 },
+        },
+    });
+    await initTestStorage(harness.storage);
+    assert.equal(harness.localReadCount(), 1);
+
+    await harness.storage.save({ value: 'after' });
+
+    assert.equal(harness.localReadCount(), 1);
+    assert.equal(harness.shared.data.value, 'after');
+});
+
+for (const [mode, expectedCode] of [
+    ['write-error', 'IDB_WRITE_FAILED'],
+    ['write-quota', 'STORAGE_QUOTA_EXCEEDED'],
+    ['write-abort', 'IDB_ABORTED'],
+]) {
+    test(`IndexedDB ${mode} rejects metadata persistence with ${expectedCode} and preserves the old durable data`, async (t) => {
+        const previousIndexedDB = global.indexedDB;
+        const previousLocalStorage = global.localStorage;
+        const memory = createMemoryLocalStorage();
+        const shared = {
+            data: { value: 'durable-before' },
+            sync: { version: 1, localRevision: 2, lastAckRevision: 2, pendingServerSync: false, localUpdatedAt: 1 },
+        };
+        const fake = createFakeIndexedDB(mode, shared);
+        global.indexedDB = fake;
+        global.localStorage = memory;
+        t.after(() => {
+            if (previousIndexedDB === undefined) delete global.indexedDB;
+            else global.indexedDB = previousIndexedDB;
+            if (previousLocalStorage === undefined) delete global.localStorage;
+            else global.localStorage = previousLocalStorage;
+        });
+        const harness = createStorageTestHarness({ useIndexedDB: true, server: false });
+
+        await initTestStorage(harness.storage);
+        await assert.rejects(
+            harness.storage.save({ value: 'must-not-be-durable' }),
+            (error) => error.code === expectedCode &&
+                modules.persistFailureUi.getErrorCode(error) === expectedCode,
+        );
+
+        assert.equal(shared.data.value, 'durable-before');
+        assert.equal(fake.stats.writeTransactions, 2);
+    });
+}
+
+test('unclassified persistence errors normalize to UNKNOWN_LOCAL_PERSIST_FAILURE', async () => {
+    const harness = createStorageTestHarness({ server: false, shared: { data: { value: 'safe' }, sync: null } });
+    await initTestStorage(harness.storage);
+
+    const normalized = harness.storage.normalizePersistError(new Error('mystery failure'));
+
+    assert.equal(normalized.code, 'UNKNOWN_LOCAL_PERSIST_FAILURE');
+    assert.equal(normalized.cause.message, 'mystery failure');
+});
+
+test('save failure diagnostics include storage estimate and exclude theme metadata content', async () => {
+    let writes = 0;
+    const quotaError = new Error('quota exceeded');
+    quotaError.name = 'QuotaExceededError';
+    const harness = createStorageTestHarness({
+        server: false,
+        shared: { data: { value: 'safe' }, sync: null },
+        localWriteFactory() {
+            writes += 1;
+            if (writes > 1) throw quotaError;
+            return true;
+        },
+        estimateStorage() { return Promise.resolve({ usage: 75, quota: 100 }); },
+    });
+    await initTestStorage(harness.storage);
+    const secretData = {
+        themeMeta: {
+            SecretTheme: {
+                author: 'private author',
+                description: 'private note',
+                imageData: 'data:image/png;base64,PRIVATE',
+            },
+        },
+    };
+    let failure;
+    try {
+        await harness.storage.save(secretData);
+    } catch (error) {
+        failure = error;
+    }
+
+    assert.equal(failure.code, 'STORAGE_QUOTA_EXCEEDED');
+    const diagnostic = await harness.storage.collectDiagnostics(failure);
+    const text = modules.persistFailureUi.formatDiagnostic(diagnostic);
+    assert.equal(diagnostic.errorCode, 'STORAGE_QUOTA_EXCEEDED');
+    assert.deepEqual(diagnostic.storageEstimate, { supported: true, usage: 75, quota: 100, ratio: 0.75 });
+    assert.equal(text.includes('SecretTheme'), false);
+    assert.equal(text.includes('private author'), false);
+    assert.equal(text.includes('PRIVATE'), false);
+});
+
+test('normal metadata persistence durably saves author note tags background and preview fields', async () => {
+    const shared = {
+        data: { value: 'before', themeMeta: {} },
+        sync: { version: 1, localRevision: 2, lastAckRevision: 2, pendingServerSync: false, localUpdatedAt: 1 },
+    };
+    const harness = createStorageTestHarness({ server: false, shared });
+    await initTestStorage(harness.storage);
+    const themeMeta = {
+        Example: {
+            author: 'Author',
+            description: 'Note',
+            tags: ['one', 'two'],
+            backgroundName: 'bound.png',
+            imageData: 'preview.png',
+            thumbData: 'thumb.png',
+            crop: { x: 50, y: 40, zoom: 1.2 },
+        },
+    };
+
+    await harness.storage.save({ value: 'after', themeMeta });
+
+    assert.equal(shared.data.value, 'after');
+    assert.deepEqual(shared.data.themeMeta, themeMeta);
 });
 
 test('FAB stays absent while storage readiness is delayed beyond the former 1.5 second injection', async () => {
@@ -2302,6 +2777,78 @@ test('visual verifier errors are contained and never roll back a confirmed theme
     assert.equal(powerUser.theme, 'Applied');
 });
 
+test('an unbound theme preserves the current manual SillyTavern background without loading background modules', async (t) => {
+    const harness = createBackgroundTestHarness(t, { Unbound: { backgroundName: '' } }, 'manual-pink.png');
+    const beforeSettings = clone(harness.backgroundSettings);
+    const beforeDom = harness.background.style.backgroundImage;
+
+    const result = await applyTestBackground(harness.api, 'Unbound');
+
+    assert.deepEqual(result, { ok: true, reason: undefined });
+    assert.deepEqual(harness.backgroundSettings, beforeSettings);
+    assert.equal(harness.background.style.backgroundImage, beforeDom);
+    assert.equal(harness.moduleLoads, 0);
+    assert.equal(harness.settingsSaves, 0);
+    assert.deepEqual(harness.controlWrites, []);
+    assert.equal(JSON.stringify(harness.backgroundSettings).includes('__transparent.png'), false);
+});
+
+test('switching between two unbound themes never changes the current background', async (t) => {
+    const harness = createBackgroundTestHarness(t, {
+        UnboundA: {},
+        UnboundB: { backgroundName: null },
+    }, 'manual-pink.png');
+    const beforeSettings = clone(harness.backgroundSettings);
+    const beforeDom = harness.background.style.backgroundImage;
+
+    assert.equal((await applyTestBackground(harness.api, 'UnboundA')).ok, true);
+    assert.equal((await applyTestBackground(harness.api, 'UnboundB')).ok, true);
+
+    assert.deepEqual(harness.backgroundSettings, beforeSettings);
+    assert.equal(harness.background.style.backgroundImage, beforeDom);
+    assert.equal(harness.moduleLoads, 0);
+    assert.equal(harness.settingsSaves, 0);
+});
+
+test('bound backgrounds still replace a manual background and switch from A to B', async (t) => {
+    const harness = createBackgroundTestHarness(t, {
+        BoundA: { backgroundName: 'bound-a.png' },
+        BoundB: { backgroundName: 'bound b.png' },
+    }, 'manual-pink.png');
+
+    assert.equal((await applyTestBackground(harness.api, 'BoundA')).ok, true);
+    assert.equal(harness.backgroundSettings.name, 'bound-a.png');
+    assert.equal(harness.backgroundSettings.url, 'url("backgrounds/bound-a.png")');
+    assert.equal(harness.background.style.backgroundImage, 'url("backgrounds/bound-a.png")');
+
+    assert.equal((await applyTestBackground(harness.api, 'BoundB')).ok, true);
+    assert.equal(harness.backgroundSettings.name, 'bound b.png');
+    assert.equal(harness.backgroundSettings.url, 'url("backgrounds/bound%20b.png")');
+    assert.equal(harness.background.style.backgroundImage, 'url("backgrounds/bound%20b.png")');
+    assert.equal(harness.moduleLoads, 2);
+    assert.equal(harness.settingsSaves, 2);
+    assert.deepEqual(harness.controlWrites, [
+        { selector: '#background_fitting', value: 'cover' },
+        { selector: '#background_fitting', value: 'cover' },
+    ]);
+});
+
+test('a failed theme switch never reaches bound-background handling', async (t) => {
+    const harness = createBackgroundTestHarness(t, {
+        Bound: { backgroundName: 'bound.png' },
+    }, 'manual-pink.png');
+
+    const result = await new Promise((resolve) => {
+        harness.api.finishApplyTheme('Bound', (ok, reason) => resolve({ ok, reason }), false, 1);
+    });
+
+    assert.deepEqual(result, { ok: false, reason: undefined });
+    assert.equal(harness.backgroundSettings.name, 'manual-pink.png');
+    assert.equal(harness.background.style.backgroundImage, 'url("backgrounds/manual-pink.png")');
+    assert.equal(harness.moduleLoads, 0);
+    assert.equal(harness.settingsSaves, 0);
+});
+
 test('theme API never submits markers or name-only objects but permits legacy partials', async (t) => {
     const previousFetch = global.fetch;
     const requests = [];
@@ -2362,6 +2909,124 @@ test('theme API rejects malformed inventories and accepts only an explicit theme
     settingsJsonError = null;
     settingsBody = { themes: [] };
     assert.deepEqual(await api.getSettingsInventory(), []);
+});
+
+test('targeted theme inventory isolates one malformed item from an unrelated valid target', async (t) => {
+    const good = completeTheme('Good');
+    const harness = createThemeApiInventoryHarness(t, {
+        themes: [null, good, { name: '' }],
+    });
+    const diagnostics = [];
+
+    const themes = await harness.api.getSettingsInventory({
+        targetName: 'Good',
+        onDiagnostics(items) { diagnostics.push(...items); },
+    });
+
+    assert.deepEqual(themes, [good]);
+    assert.deepEqual(diagnostics.map((item) => ({ code: item.code, index: item.index })), [
+        { code: 'inventory-item-invalid', index: 0 },
+        { code: 'inventory-item-invalid', index: 2 },
+    ]);
+});
+
+test('targeted theme inventory excludes unrelated duplicate names without blocking the target', async (t) => {
+    const good = completeTheme('Good');
+    const unique = completeTheme('Unique');
+    const harness = createThemeApiInventoryHarness(t, {
+        themes: [
+            good,
+            completeTheme('Duplicate', { custom_css: '/* first */' }),
+            unique,
+            completeTheme('Duplicate', { custom_css: '/* second */' }),
+        ],
+    });
+    const diagnostics = [];
+
+    const themes = await harness.api.getSettingsInventory({
+        targetName: 'Good',
+        onDiagnostics(items) { diagnostics.push(...items); },
+    });
+
+    assert.deepEqual(themes, [good, unique]);
+    assert.equal(themes.some((theme) => theme.name === 'Duplicate'), false);
+    assert.deepEqual(diagnostics, [{
+        code: 'inventory-name-duplicate',
+        reason: 'duplicate-name',
+        name: 'Duplicate',
+        count: 2,
+        indices: [1, 3],
+    }]);
+});
+
+test('targeted theme inventory rejects ambiguity on the requested theme and preserves diagnostics', async (t) => {
+    const harness = createThemeApiInventoryHarness(t, {
+        themes: [
+            completeTheme('Ambiguous', { custom_css: '/* first */' }),
+            completeTheme('Other'),
+            completeTheme('Ambiguous', { custom_css: '/* second */' }),
+        ],
+    });
+
+    await assert.rejects(
+        harness.api.getSettingsInventory({ targetName: 'Ambiguous' }),
+        (error) => error.code === 'inventory-target-ambiguous' &&
+            error.details.reason === 'target-ambiguous' &&
+            error.details.targetName === 'Ambiguous' &&
+            error.details.diagnostics[0].code === 'inventory-name-duplicate',
+    );
+});
+
+test('an unusable requested theme fails safely with its specific code and target diagnostics', async (t) => {
+    const previousBridge = global.__baibaokuEarlyBridge;
+    t.after(() => { global.__baibaokuEarlyBridge = previousBridge; });
+    global.__baibaokuEarlyBridge = null;
+    const harness = createThemeApiInventoryHarness(t, {
+        themes: [{ name: 'Broken' }, completeTheme('Good')],
+    });
+    const runtime = modules.createThemeRuntime({ schema, api: harness.api });
+
+    await assert.rejects(
+        runtime.prepareUsableThemeForApply('Broken'),
+        (error) => error.code === 'incomplete' &&
+            error.details.reason === 'target-unusable' &&
+            error.details.targetName === 'Broken',
+    );
+});
+
+test('targeted apply still rejects a structurally corrupt whole inventory without flattening its error', async (t) => {
+    const harness = createThemeApiInventoryHarness(t, { themes: null });
+    const runtime = modules.createThemeRuntime({ schema, api: harness.api });
+
+    await assert.rejects(
+        runtime.prepareUsableThemeForApply('Good'),
+        (error) => error.code === 'inventory-invalid' &&
+            error.details.reason === 'inventory-structure',
+    );
+});
+
+test('theme apply preload rethrows typed lower-level errors with the original diagnostic object', async () => {
+    const diagnostic = { reason: 'backend-revision-mismatch', expected: 7, actual: 8 };
+    const original = new Error('revision mismatch');
+    original.code = 'inventory-revision-mismatch';
+    original.details = diagnostic;
+    let receivedOptions = null;
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: {
+            getSettingsInventory(options) {
+                receivedOptions = options;
+                return Promise.reject(original);
+            },
+            getRawSettingsInventory() { return Promise.reject(original); },
+        },
+    });
+
+    await assert.rejects(
+        runtime.prepareUsableThemeForApply('Good'),
+        (error) => error === original && error.details === diagnostic,
+    );
+    assert.equal(receivedOptions.targetName, 'Good');
 });
 
 test('malformed initial inventory aborts standalone save before any theme write or rollback delete', async () => {

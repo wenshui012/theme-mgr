@@ -23,9 +23,10 @@
         var visualMaxAttempts = Number(opts.visualMaxAttempts) > 0 ? Number(opts.visualMaxAttempts) : 4;
         var visualRetryDelayMs = Number(opts.visualRetryDelayMs) >= 0 ? Number(opts.visualRetryDelayMs) : 50;
 
-        function makeError(code, message) {
+        function makeError(code, message, details) {
             var error = new Error(message || code);
             error.code = code;
+            if (details !== undefined) error.details = details;
             return error;
         }
 
@@ -155,9 +156,21 @@
         function getInventory(options) {
             options = options || {};
             var bridge = getBridge();
+            var apiOptions = {};
+            if (typeof options.targetName === 'string' && options.targetName.trim()) {
+                apiOptions.targetName = options.targetName;
+                apiOptions.onDiagnostics = typeof options.onDiagnostics === 'function'
+                    ? options.onDiagnostics
+                    : function (diagnostics) {
+                        console.warn('[ThemeManager] non-blocking inventory diagnostics:', {
+                            targetName: options.targetName,
+                            diagnostics: diagnostics,
+                        });
+                    };
+            }
             var promise = options.bypassBaibaokuCache && bridge && typeof bridge.rawFetch === 'function'
-                ? api.getRawSettingsInventory(bridge.rawFetch)
-                : api.getSettingsInventory();
+                ? api.getRawSettingsInventory(bridge.rawFetch, apiOptions)
+                : api.getSettingsInventory(apiOptions);
             return promise.then(function (themes) {
                 if (options.capture === false || options.bypassBaibaokuCache) return themes;
                 return captureInventory(themes);
@@ -182,14 +195,20 @@
 
             var bridge = getBridge();
             if (!bridge || typeof bridge.ensureThemeLoaded !== 'function') {
-                return Promise.reject(makeError('incomplete', '主题不是可用主题，且无法加载懒加载内容'));
+                return Promise.reject(makeError('incomplete', '主题不是可用主题，且无法加载懒加载内容', {
+                    reason: 'target-unusable',
+                    targetName: themeName,
+                }));
             }
 
             return Promise.resolve()
                 .then(function () { return bridge.ensureThemeLoaded(themeName); })
                 .then(function (loaded) {
                     if (!schema.isUsableTheme(loaded, themeName)) {
-                        throw makeError('incomplete', '柏宝库未返回可用主题对象');
+                        throw makeError('incomplete', '柏宝库未返回可用主题对象', {
+                            reason: 'target-hydration-invalid',
+                            targetName: themeName,
+                        });
                     }
                     var usable = schema.cloneValue(loaded);
                     remember(usable);
@@ -351,7 +370,7 @@
         }
 
         function refreshStaleTheme(themeName) {
-            return getInventory({ bypassBaibaokuCache: true, capture: false }).then(function (themes) {
+            return getInventory({ bypassBaibaokuCache: true, capture: false, targetName: themeName }).then(function (themes) {
                 return resolveCandidate(themeName, findTheme(themes, themeName));
             }).then(function (theme) {
                 var protectedTheme = preserveNewerLiveCustomCss(themeName, theme);
@@ -378,7 +397,7 @@
             }
             if (cached) return Promise.resolve(cached);
             if (staleThemeCache[themeName]) return refreshStaleTheme(themeName);
-            return getInventory().then(function (themes) {
+            return getInventory({ targetName: themeName }).then(function (themes) {
                 return resolveCandidate(themeName, findTheme(themes, themeName));
             });
         }
@@ -403,9 +422,13 @@
                     };
                 })
                 .catch(function (err) {
-                    if (err && (err.code === 'incomplete' || err.code === 'load-failed')) throw err;
+                    if (err && err.code) throw err;
                     console.warn('[美化管理] 主题切换预加载失败:', err);
-                    throw makeError('load-failed', err && err.message ? err.message : '主题加载失败');
+                    throw makeError('load-failed', err && err.message ? err.message : '主题加载失败', {
+                        reason: 'untyped-load-error',
+                        causeName: err && err.name ? err.name : '',
+                        causeDetails: err && err.details !== undefined ? err.details : undefined,
+                    });
                 });
         }
 
