@@ -114,7 +114,18 @@ node -c dist/index.js
 
 ## 📝 更新日志
 
-### v4.0.4（当前版本）
+### v4.0.5（当前版本）
+
+这是针对 TauriTavern 纯前端环境 metadata 保存失败的兼容性 hotfix。
+
+#### 修复
+
+- 识别 TT 官方运行时 ABI，在没有 Node 后端的环境中使用纯本地存储，不再探测不存在的主题管理后端接口
+- 修复后端路由返回空内容或 HTML 时，作者、备注等编辑被误判为 `LOCAL_STATE_NOT_AUTHORITATIVE` 的问题
+- 保存前仍会重新确认本地状态；本地主数据、同步状态或 revision 损坏时继续安全失败，不会覆盖不确定数据
+- 原生 SillyTavern 保持原有严格后端校验，不受 TT 本地模式影响
+
+### v4.0.4
 
 这是针对部分 TT 用户 metadata 无法保存的安全 hotfix。
 
