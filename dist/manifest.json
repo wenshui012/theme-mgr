@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v4.0.3",
-  "version": "4.0.3",
+  "display_name": "美化管理 v4.0.4",
+  "version": "4.0.4",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v4.0.3: 修复主题切换与未绑定背景回归，增强 metadata 保存诊断和临时读取异常恢复"
+  "description": "v4.0.4: 修复部分空存储环境下 metadata 无法保存，保留严格数据安全校验"
 }

@@ -680,6 +680,83 @@
             return makeStorageError(normalized.code, normalized.cause || normalized, combinedDetails);
         }
 
+        function isProvablyEmptyLocalState(local) {
+            var diagnostics = local && local.diagnostics;
+            return Boolean(local && local.status === 'absent' && local.source === 'none'
+                && local.hasData !== true && (local.data === undefined || local.data === null)
+                && (local.persistedSync === undefined || local.persistedSync === null)
+                && diagnostics && diagnostics.hasMain === false && diagnostics.hasSyncState === false
+                && diagnostics.mainType === 'absent' && diagnostics.syncStateType === 'absent');
+        }
+
+        function makeEmptyBootstrapError(local, reason, cause) {
+            return makeRevalidationError(makeStorageError('LOCAL_STATE_NOT_AUTHORITATIVE', cause, {
+                reason: reason,
+                stage: 'save-revalidation',
+            }), local);
+        }
+
+        function authorizeEmptyLocalBootstrap(local) {
+            return new Promise(function (resolve, reject) {
+                detectServer(function (statusResult) {
+                    if (!statusResult || statusResult.status === 'error') {
+                        reject(makeEmptyBootstrapError(
+                            local,
+                            'empty-bootstrap-server-status-failed',
+                            statusResult && statusResult.error,
+                        ));
+                        return;
+                    }
+
+                    serverMode = statusResult.status === 'present';
+                    serverDataStatus = statusResult.status === 'absent' ? 'absent' : 'unknown';
+                    serverWritesAuthorized = false;
+                    if (!serverMode) {
+                        resolve(true);
+                        return;
+                    }
+
+                    serverGetData(function (serverResult) {
+                        serverDataStatus = serverResult && serverResult.status ? serverResult.status : 'error';
+                        if (serverDataStatus === 'absent') {
+                            serverWritesAuthorized = true;
+                            resolve(true);
+                            return;
+                        }
+                        if (serverDataStatus === 'present') {
+                            reject(makeEmptyBootstrapError(local, 'empty-bootstrap-backend-data-present'));
+                            return;
+                        }
+                        reject(makeEmptyBootstrapError(
+                            local,
+                            'empty-bootstrap-backend-read-failed',
+                            serverResult && serverResult.error,
+                        ));
+                    });
+                });
+            }).then(function () {
+                return readLocalState();
+            }).then(function (confirmedLocal) {
+                recordLocalRead(confirmedLocal, 'save-bootstrap-confirmation');
+                if (!confirmedLocal || confirmedLocal.status === 'error') {
+                    throw makeRevalidationError(confirmedLocal && confirmedLocal.error, confirmedLocal);
+                }
+                if (!isProvablyEmptyLocalState(confirmedLocal)) {
+                    throw makeEmptyBootstrapError(confirmedLocal, 'empty-bootstrap-local-changed');
+                }
+                syncState = createSyncState();
+                legacyMigrationPending = false;
+                localWritesAuthorized = true;
+                lastLocalAuthorityError = null;
+                lastLocalRevalidationSummary = {
+                    attempted: true,
+                    succeeded: true,
+                    errorCode: null,
+                };
+                return true;
+            });
+        }
+
         function revalidateLocalWriteAuthority() {
             if (localWritesAuthorized) return Promise.resolve(true);
             if (localRevalidationPromise) return localRevalidationPromise;
@@ -695,6 +772,9 @@
                 recordLocalRead(local, 'save-revalidation');
                 if (!local || local.status === 'error') {
                     throw makeRevalidationError(local && local.error, local);
+                }
+                if (isProvablyEmptyLocalState(local)) {
+                    return authorizeEmptyLocalBootstrap(local);
                 }
                 if (local.status !== 'present' || local.source !== 'current' || !isDataObject(local.data)) {
                     throw makeRevalidationError(makeStorageError('LOCAL_MAIN_INVALID', null, {

@@ -674,7 +674,8 @@ test('backend GET error cannot promote generated defaults into a later pending o
     await initTestStorage(first.storage);
     await assert.rejects(
         first.storage.save({ value: 'default-derived-session' }),
-        (error) => error.code === 'LOCAL_MAIN_INVALID' &&
+        (error) => error.code === 'LOCAL_STATE_NOT_AUTHORITATIVE' &&
+            error.details.reason === 'empty-bootstrap-backend-read-failed' &&
             error.details.revalidationAttempted === true,
     );
 
@@ -1223,6 +1224,152 @@ test('a transient initial read failure is revalidated once and the same metadata
     assert.equal(harness.localWriteCount(), 2);
     assert.equal(harness.shared.data.value, 'second-save-needs-no-revalidation');
     assert.equal(harness.shared.sync.localRevision, 5);
+});
+
+test('a recovered truly empty local store bootstraps the first save when the backend is explicitly absent', async () => {
+    let firstRead = true;
+    const harness = createStorageTestHarness({
+        server: false,
+        localReadFactory() {
+            if (firstRead) {
+                firstRead = false;
+                throw new Error('temporary initial IndexedDB read failure');
+            }
+            return { status: 'absent', data: null, sync: null };
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    await harness.storage.save({
+        value: 'first-safe-save',
+        themeMeta: {
+            Example: { author: 'saved author', description: 'saved note' },
+        },
+    });
+
+    assert.equal(harness.localReadCount(), 3);
+    assert.equal(harness.localWriteCount(), 1);
+    assert.equal(harness.shared.data.value, 'first-safe-save');
+    assert.equal(harness.shared.data.themeMeta.Example.author, 'saved author');
+    assert.equal(harness.shared.sync.localRevision, 1);
+    assert.equal(harness.shared.sync.lastAckRevision, 0);
+    assert.equal(harness.shared.sync.pendingServerSync, true);
+    assert.equal(harness.puts.length, 0);
+
+    await harness.storage.save({ value: 'second-save-needs-no-bootstrap' });
+    assert.equal(harness.localReadCount(), 3);
+    assert.equal(harness.localWriteCount(), 2);
+    assert.equal(harness.shared.data.value, 'second-save-needs-no-bootstrap');
+    assert.equal(harness.shared.sync.localRevision, 2);
+});
+
+test('a transient backend probe failure can bootstrap a still-empty local store on save', async () => {
+    let statusReads = 0;
+    const harness = createStorageTestHarness({
+        serverData: null,
+        statusFactory() {
+            statusReads += 1;
+            if (statusReads === 1) return Promise.reject(new Error('temporary backend probe failure'));
+            return Promise.resolve({ ok: false, status: 404, json: async () => ({ ok: false }) });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    await harness.storage.save({ value: 'saved-after-backend-reprobe' });
+
+    assert.equal(statusReads, 2);
+    assert.equal(harness.localReadCount(), 3);
+    assert.equal(harness.localWriteCount(), 1);
+    assert.equal(harness.shared.data.value, 'saved-after-backend-reprobe');
+    assert.equal(harness.shared.sync.localRevision, 1);
+    assert.equal(harness.puts.length, 0);
+});
+
+test('empty-store bootstrap stops if local state changes during backend verification', async () => {
+    let localReads = 0;
+    const harness = createStorageTestHarness({
+        server: false,
+        localReadFactory() {
+            localReads += 1;
+            if (localReads === 1) throw new Error('temporary initial IndexedDB read failure');
+            if (localReads === 2) return { status: 'absent', data: null, sync: null };
+            return {
+                status: 'present',
+                data: { value: 'appeared-during-verification' },
+                sync: { version: 1, localRevision: 2, lastAckRevision: 2, pendingServerSync: false, localUpdatedAt: 1 },
+            };
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    await assert.rejects(
+        harness.storage.save({ value: 'must-not-overwrite-new-local-state' }),
+        (error) => error.code === 'LOCAL_STATE_NOT_AUTHORITATIVE' &&
+            error.details.reason === 'empty-bootstrap-local-changed' &&
+            error.details.revalidationAttempted === true,
+    );
+
+    assert.equal(harness.localReadCount(), 3);
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+});
+
+test('a truly empty local store stays fail closed when backend status cannot be proven', async () => {
+    let firstRead = true;
+    let statusReads = 0;
+    const harness = createStorageTestHarness({
+        localReadFactory() {
+            if (firstRead) {
+                firstRead = false;
+                throw new Error('temporary initial IndexedDB read failure');
+            }
+            return { status: 'absent', data: null, sync: null };
+        },
+        statusFactory() {
+            statusReads += 1;
+            return Promise.reject(new Error('backend status remains unavailable'));
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    await assert.rejects(
+        harness.storage.save({ value: 'must-not-bootstrap' }),
+        (error) => error.code === 'LOCAL_STATE_NOT_AUTHORITATIVE' &&
+            error.details.reason === 'empty-bootstrap-server-status-failed' &&
+            error.details.revalidationAttempted === true,
+    );
+
+    assert.equal(statusReads, 2);
+    assert.equal(harness.localReadCount(), 2);
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+});
+
+test('a truly empty local store does not overwrite existing backend data during bootstrap', async () => {
+    let firstRead = true;
+    const harness = createStorageTestHarness({
+        serverData: { value: 'authoritative-server-data' },
+        localReadFactory() {
+            if (firstRead) {
+                firstRead = false;
+                throw new Error('temporary initial IndexedDB read failure');
+            }
+            return { status: 'absent', data: null, sync: null };
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    await assert.rejects(
+        harness.storage.save({ value: 'must-not-overwrite-server' }),
+        (error) => error.code === 'LOCAL_STATE_NOT_AUTHORITATIVE' &&
+            error.details.reason === 'empty-bootstrap-backend-data-present' &&
+            error.details.revalidationAttempted === true,
+    );
+
+    assert.equal(harness.getCount(), 2);
+    assert.equal(harness.localReadCount(), 2);
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
 });
 
 test('a still-unreadable local store rejects revalidation with IDB_READ_FAILED and performs zero writes', async () => {

@@ -17,6 +17,7 @@ const { chromium } = loadPlaywright();
 const ST_URL = process.env.THEME_MGR_SMOKE_URL || 'http://127.0.0.1:8000/';
 const CHROME_PATH = process.env.THEME_MGR_CHROME_PATH || undefined;
 const THEME_SOURCE_PATH = process.env.THEME_MGR_SMOKE_THEME_SOURCE || '';
+const EMPTY_BOOTSTRAP_SMOKE = process.env.THEME_MGR_SMOKE_EMPTY_BOOTSTRAP === '1';
 const SMOKE_THEME_NAME = '__ThemeMgr_SingleFile_Smoke__';
 
 function assert(condition, message) {
@@ -62,18 +63,24 @@ async function dismissHostDialogs(page) {
     }));
 }
 
+async function clickElement(locator) {
+    await locator.waitFor({ state: 'attached' });
+    await locator.evaluate((element) => element.click());
+}
+
 async function openCardEdit(page, cardKey) {
     await dismissHostDialogs(page);
     const card = page.locator(`.tm-card[data-key=${JSON.stringify(cardKey)}]`);
-    await card.locator('.tm-card-menu').click();
-    await page.locator('#tm-ctx-edit').click();
+    await clickElement(card.locator('.tm-card-menu'));
+    await clickElement(page.locator('#tm-ctx-edit'));
     await page.locator('#tm-dsave').waitFor({ state: 'visible' });
 }
 
 async function saveMetadata(page, author, description) {
+    await dismissHostDialogs(page);
     await page.locator('#tm-dauthor').fill(author);
     await page.locator('#tm-ddesc').fill(description);
-    await page.locator('#tm-dsave').click();
+    await clickElement(page.locator('#tm-dsave'));
     await page.locator('#tm-dsave').waitFor({ state: 'detached', timeout: 30_000 });
 }
 
@@ -152,7 +159,8 @@ async function importSmokeTheme(page) {
     source.name = SMOKE_THEME_NAME;
 
     await removeSmokeTheme(page);
-    await page.locator('#tm-bottom-settings').click();
+    await dismissHostDialogs(page);
+    await clickElement(page.locator('#tm-bottom-settings'));
     const chooserPromise = page.waitForEvent('filechooser');
     await page.locator('#tm-imp-theme').click();
     const chooser = await chooserPromise;
@@ -195,10 +203,25 @@ async function main() {
     });
 
     const report = { phase: 'launch' };
+    let emptyBootstrapStatusRequests = 0;
     let metadataRestore = null;
     let metadataCardKey = '';
     let imported = false;
     try {
+        if (EMPTY_BOOTSTRAP_SMOKE) {
+            await page.route('**/api/plugins/theme-manager/status', async (route) => {
+                emptyBootstrapStatusRequests += 1;
+                if (emptyBootstrapStatusRequests === 1) {
+                    await route.abort('failed');
+                    return;
+                }
+                await route.fulfill({
+                    status: 404,
+                    contentType: 'application/json',
+                    body: JSON.stringify({ ok: false }),
+                });
+            });
+        }
         report.phase = 'open-sillytavern';
         await page.goto(ST_URL, { waitUntil: 'domcontentloaded', timeout: 90_000 });
         report.phase = 'open-theme-manager';
@@ -209,14 +232,14 @@ async function main() {
         report.phase = 'verify-single-file-startup';
         report.bundleIsGenerated = await page.evaluate(async () => {
             const text = await fetch('/scripts/extensions/third-party/theme-mgr/index.js', { cache: 'no-store' }).then((response) => response.text());
-            return text.startsWith('// GENERATED FILE - Theme Manager v4.0.3 single-file release');
+            return text.startsWith('// GENERATED FILE - Theme Manager v4.0.4 single-file release');
         });
         report.version = await page.locator('.tm-version').textContent();
         report.cardCount = await page.locator('.tm-card').count();
         report.moduleRegistrations = await page.evaluate(() => Object.keys(window.ThemeMgrModules || {}).sort());
         report.data = await readPluginDataSummary(page);
         assert(report.bundleIsGenerated, 'the browser did not load the generated dist entry');
-        assert(report.version?.trim() === 'v4.0.3', `unexpected UI version: ${report.version}`);
+        assert(report.version?.trim() === 'v4.0.4', `unexpected UI version: ${report.version}`);
         assert(report.cardCount > 0, 'theme grid is empty');
 
         report.phase = 'metadata-save';
@@ -236,6 +259,13 @@ async function main() {
         await saveMetadata(page, metadataRestore.author, metadataRestore.description);
         metadataRestore = null;
         report.metadataSaveAndRestore = true;
+        if (EMPTY_BOOTSTRAP_SMOKE) {
+            report.emptyBootstrap = {
+                statusRequests: emptyBootstrapStatusRequests,
+                dataAfterSave: await readPluginDataSummary(page),
+            };
+            assert(emptyBootstrapStatusRequests === 2, `expected two backend status probes, got ${emptyBootstrapStatusRequests}`);
+        }
 
         report.phase = 'theme-switch-and-background';
         const currentTheme = await page.locator('#themes').inputValue();
