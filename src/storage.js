@@ -20,6 +20,9 @@
         var nowFn = typeof opts.now === 'function' ? opts.now : Date.now;
         var localStore = opts.localStore || null;
         var pluginVersion = opts.version || '';
+        var tauriTavernLocalOnly = typeof opts.tauriTavernLocalOnly === 'boolean'
+            ? opts.tauriTavernLocalOnly
+            : hasTauriTavernAbi();
         var estimateStorageFn = typeof opts.estimateStorage === 'function'
             ? opts.estimateStorage
             : function () {
@@ -155,6 +158,17 @@
             return Number.isFinite(number) ? number : null;
         }
 
+        function hasTauriTavernAbi() {
+            try {
+                var host = global.__TAURITAVERN__;
+                var abiVersion = host && Number(host.abiVersion);
+                return Boolean(host && typeof host === 'object'
+                    && Number.isFinite(abiVersion) && abiVersion >= 1);
+            } catch (e) {
+                return false;
+            }
+        }
+
         function safeErrorDetails(error) {
             var details = error && error.details;
             if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
@@ -170,7 +184,8 @@
         function detectPlatform() {
             var nav = global.navigator || {};
             var userAgent = typeof nav.userAgent === 'string' ? nav.userAgent : '';
-            return global.__TAURITAVERN_MOBILE_RUNTIME_COMPAT__ || global.__TAURI_INTERNALS__ || /Tauri/i.test(userAgent)
+            return hasTauriTavernAbi() || global.__TAURITAVERN_MOBILE_RUNTIME_COMPAT__
+                || global.__TAURI_INTERNALS__ || /Tauri/i.test(userAgent)
                 ? 'Tauri'
                 : 'Browser';
         }
@@ -186,6 +201,7 @@
                 errorMessage: normalized.message,
                 causeName: errorName(cause) || null,
                 details: safeErrorDetails(normalized),
+                storageMode: tauriTavernLocalOnly ? 'tauri-local-only' : 'standard',
                 localWritesAuthorized: localWritesAuthorized,
                 localState: cloneValue(lastLocalReadSummary),
                 revalidation: cloneValue(lastLocalRevalidationSummary),
@@ -697,44 +713,53 @@
         }
 
         function authorizeEmptyLocalBootstrap(local) {
-            return new Promise(function (resolve, reject) {
-                detectServer(function (statusResult) {
-                    if (!statusResult || statusResult.status === 'error') {
-                        reject(makeEmptyBootstrapError(
-                            local,
-                            'empty-bootstrap-server-status-failed',
-                            statusResult && statusResult.error,
-                        ));
-                        return;
-                    }
+            var backendAuthority;
+            if (tauriTavernLocalOnly) {
+                serverMode = false;
+                serverDataStatus = 'absent';
+                serverWritesAuthorized = false;
+                backendAuthority = Promise.resolve(true);
+            } else {
+                backendAuthority = new Promise(function (resolve, reject) {
+                    detectServer(function (statusResult) {
+                        if (!statusResult || statusResult.status === 'error') {
+                            reject(makeEmptyBootstrapError(
+                                local,
+                                'empty-bootstrap-server-status-failed',
+                                statusResult && statusResult.error,
+                            ));
+                            return;
+                        }
 
-                    serverMode = statusResult.status === 'present';
-                    serverDataStatus = statusResult.status === 'absent' ? 'absent' : 'unknown';
-                    serverWritesAuthorized = false;
-                    if (!serverMode) {
-                        resolve(true);
-                        return;
-                    }
-
-                    serverGetData(function (serverResult) {
-                        serverDataStatus = serverResult && serverResult.status ? serverResult.status : 'error';
-                        if (serverDataStatus === 'absent') {
-                            serverWritesAuthorized = true;
+                        serverMode = statusResult.status === 'present';
+                        serverDataStatus = statusResult.status === 'absent' ? 'absent' : 'unknown';
+                        serverWritesAuthorized = false;
+                        if (!serverMode) {
                             resolve(true);
                             return;
                         }
-                        if (serverDataStatus === 'present') {
-                            reject(makeEmptyBootstrapError(local, 'empty-bootstrap-backend-data-present'));
-                            return;
-                        }
-                        reject(makeEmptyBootstrapError(
-                            local,
-                            'empty-bootstrap-backend-read-failed',
-                            serverResult && serverResult.error,
-                        ));
+
+                        serverGetData(function (serverResult) {
+                            serverDataStatus = serverResult && serverResult.status ? serverResult.status : 'error';
+                            if (serverDataStatus === 'absent') {
+                                serverWritesAuthorized = true;
+                                resolve(true);
+                                return;
+                            }
+                            if (serverDataStatus === 'present') {
+                                reject(makeEmptyBootstrapError(local, 'empty-bootstrap-backend-data-present'));
+                                return;
+                            }
+                            reject(makeEmptyBootstrapError(
+                                local,
+                                'empty-bootstrap-backend-read-failed',
+                                serverResult && serverResult.error,
+                            ));
+                        });
                     });
                 });
-            }).then(function () {
+            }
+            return backendAuthority.then(function () {
                 return readLocalState();
             }).then(function (confirmedLocal) {
                 recordLocalRead(confirmedLocal, 'save-bootstrap-confirmation');
@@ -1433,6 +1458,14 @@
                 legacyMigrationPending = local.status === 'absent' && local.source === 'legacy';
                 syncState = normalizeSyncState(local.sync);
                 dataCache = ensureDefaults(local.data);
+                if (tauriTavernLocalOnly) {
+                    serverMode = false;
+                    serverDataStatus = 'absent';
+                    serverWritesAuthorized = false;
+                    if (local.status === 'error') finishStorageInit();
+                    else persistThenFinish();
+                    return;
+                }
                 detectServer(function (statusResult) {
                     serverMode = statusResult.status === 'present';
                     serverDataStatus = 'unknown';

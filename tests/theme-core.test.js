@@ -227,7 +227,16 @@ function createStorageTestHarness(options) {
             },
         };
     }
-    const storage = modules.createStorage(storageOptions);
+    const hadTauriTavernAbi = Object.prototype.hasOwnProperty.call(global, '__TAURITAVERN__');
+    const previousTauriTavernAbi = global.__TAURITAVERN__;
+    if (config.tauriTavernAbi) global.__TAURITAVERN__ = { abiVersion: 1 };
+    let storage;
+    try {
+        storage = modules.createStorage(storageOptions);
+    } finally {
+        if (hadTauriTavernAbi) global.__TAURITAVERN__ = previousTauriTavernAbi;
+        else delete global.__TAURITAVERN__;
+    }
     return {
         storage,
         shared,
@@ -1261,6 +1270,145 @@ test('a recovered truly empty local store bootstraps the first save when the bac
     assert.equal(harness.localWriteCount(), 2);
     assert.equal(harness.shared.data.value, 'second-save-needs-no-bootstrap');
     assert.equal(harness.shared.sync.localRevision, 2);
+});
+
+test('TauriTavern official ABI keeps a fresh empty store local-only without probing Node backend routes', async () => {
+    let statusReads = 0;
+    const harness = createStorageTestHarness({
+        tauriTavernAbi: true,
+        statusFactory() {
+            statusReads += 1;
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
+            });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+
+    assert.equal(statusReads, 0);
+    assert.equal(harness.getCount(), 0);
+    assert.equal(harness.localWriteCount(), 1);
+    assert.equal(harness.shared.data.value, 'default');
+    assert.equal(harness.storage.getServerMode(), false);
+
+    await harness.storage.save({
+        value: 'tauri-local-save',
+        themeMeta: {
+            Example: { author: 'TT author', description: 'TT note' },
+        },
+    });
+
+    assert.equal(statusReads, 0);
+    assert.equal(harness.getCount(), 0);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(harness.localWriteCount(), 2);
+    assert.equal(harness.shared.data.themeMeta.Example.author, 'TT author');
+    assert.equal(harness.shared.data.themeMeta.Example.description, 'TT note');
+});
+
+test('TauriTavern revalidates a transiently unreadable empty store without any backend probe', async () => {
+    let localReads = 0;
+    let statusReads = 0;
+    const harness = createStorageTestHarness({
+        tauriTavernAbi: true,
+        localReadFactory() {
+            localReads += 1;
+            if (localReads === 1) throw new Error('temporary initial IndexedDB read failure');
+            return { status: 'absent', data: null, sync: null };
+        },
+        statusFactory() {
+            statusReads += 1;
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
+            });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    assert.equal(harness.localWriteCount(), 0);
+
+    await harness.storage.save({ value: 'tauri-save-after-safe-revalidation' });
+
+    assert.equal(statusReads, 0);
+    assert.equal(harness.localReadCount(), 3);
+    assert.equal(harness.localWriteCount(), 1);
+    assert.equal(harness.puts.length, 0);
+    assert.equal(harness.shared.data.value, 'tauri-save-after-safe-revalidation');
+});
+
+test('TauriTavern local-only mode still rejects an invalid current main with zero writes', async () => {
+    let firstRead = true;
+    let statusReads = 0;
+    const harness = createStorageTestHarness({
+        tauriTavernAbi: true,
+        localReadFactory() {
+            if (firstRead) {
+                firstRead = false;
+                throw new Error('initial IndexedDB read failure');
+            }
+            return {
+                status: 'present',
+                data: [],
+                sync: { version: 1, localRevision: 1, lastAckRevision: 1, pendingServerSync: false, localUpdatedAt: 1 },
+            };
+        },
+        statusFactory() {
+            statusReads += 1;
+            return Promise.resolve({ ok: false, status: 404, json: async () => ({ ok: false }) });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+
+    let failure;
+    try {
+        await harness.storage.save({ value: 'must-not-overwrite-invalid-main' });
+    } catch (error) {
+        failure = error;
+    }
+
+    assert.equal(failure.code, 'LOCAL_MAIN_INVALID');
+    assert.equal(failure.details.revalidationAttempted, true);
+    assert.equal(statusReads, 0);
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+    const diagnostic = await harness.storage.collectDiagnostics(failure);
+    assert.equal(diagnostic.storageMode, 'tauri-local-only');
+});
+
+test('ordinary SillyTavern still fails closed on a non-JSON backend status response', async () => {
+    let statusReads = 0;
+    const harness = createStorageTestHarness({
+        statusFactory() {
+            statusReads += 1;
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
+            });
+        },
+    });
+
+    await initTestStorage(harness.storage);
+    let failure;
+    try {
+        await harness.storage.save({ value: 'native-save-must-remain-blocked' });
+    } catch (error) {
+        failure = error;
+    }
+
+    assert.equal(failure.code, 'LOCAL_STATE_NOT_AUTHORITATIVE');
+    assert.equal(failure.details.reason, 'empty-bootstrap-server-status-failed');
+    assert.equal(statusReads, 2);
+    assert.equal(harness.localWriteCount(), 0);
+    assert.equal(harness.puts.length, 0);
+    const diagnostic = await harness.storage.collectDiagnostics(failure);
+    assert.equal(diagnostic.storageMode, 'standard');
 });
 
 test('a transient backend probe failure can bootstrap a still-empty local store on save', async () => {

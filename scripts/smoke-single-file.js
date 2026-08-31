@@ -18,6 +18,7 @@ const ST_URL = process.env.THEME_MGR_SMOKE_URL || 'http://127.0.0.1:8000/';
 const CHROME_PATH = process.env.THEME_MGR_CHROME_PATH || undefined;
 const THEME_SOURCE_PATH = process.env.THEME_MGR_SMOKE_THEME_SOURCE || '';
 const EMPTY_BOOTSTRAP_SMOKE = process.env.THEME_MGR_SMOKE_EMPTY_BOOTSTRAP === '1';
+const TAURI_LOCAL_SMOKE = process.env.THEME_MGR_SMOKE_TAURI_LOCAL === '1';
 const SMOKE_THEME_NAME = '__ThemeMgr_SingleFile_Smoke__';
 
 function assert(condition, message) {
@@ -184,6 +185,7 @@ async function importSmokeTheme(page) {
 }
 
 async function main() {
+    assert(!(EMPTY_BOOTSTRAP_SMOKE && TAURI_LOCAL_SMOKE), 'empty-bootstrap and Tauri-local smoke modes are mutually exclusive');
     const browser = await chromium.launch({ headless: true, executablePath: CHROME_PATH });
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const consoleErrors = [];
@@ -204,10 +206,27 @@ async function main() {
 
     const report = { phase: 'launch' };
     let emptyBootstrapStatusRequests = 0;
+    const tauriBackendRequests = [];
     let metadataRestore = null;
     let metadataCardKey = '';
     let imported = false;
     try {
+        if (TAURI_LOCAL_SMOKE) {
+            await page.addInitScript(() => {
+                window.__TAURITAVERN__ = { abiVersion: 1 };
+            });
+            await page.route('**/api/plugins/theme-manager/**', async (route) => {
+                tauriBackendRequests.push({
+                    method: route.request().method(),
+                    url: route.request().url(),
+                });
+                await route.fulfill({
+                    status: 200,
+                    contentType: 'text/html',
+                    body: '<!doctype html><title>TauriTavern</title>',
+                });
+            });
+        }
         if (EMPTY_BOOTSTRAP_SMOKE) {
             await page.route('**/api/plugins/theme-manager/status', async (route) => {
                 emptyBootstrapStatusRequests += 1;
@@ -232,14 +251,14 @@ async function main() {
         report.phase = 'verify-single-file-startup';
         report.bundleIsGenerated = await page.evaluate(async () => {
             const text = await fetch('/scripts/extensions/third-party/theme-mgr/index.js', { cache: 'no-store' }).then((response) => response.text());
-            return text.startsWith('// GENERATED FILE - Theme Manager v4.0.4 single-file release');
+            return text.startsWith('// GENERATED FILE - Theme Manager v4.0.5 single-file release');
         });
         report.version = await page.locator('.tm-version').textContent();
         report.cardCount = await page.locator('.tm-card').count();
         report.moduleRegistrations = await page.evaluate(() => Object.keys(window.ThemeMgrModules || {}).sort());
         report.data = await readPluginDataSummary(page);
         assert(report.bundleIsGenerated, 'the browser did not load the generated dist entry');
-        assert(report.version?.trim() === 'v4.0.4', `unexpected UI version: ${report.version}`);
+        assert(report.version?.trim() === 'v4.0.5', `unexpected UI version: ${report.version}`);
         assert(report.cardCount > 0, 'theme grid is empty');
 
         report.phase = 'metadata-save';
@@ -266,30 +285,39 @@ async function main() {
             };
             assert(emptyBootstrapStatusRequests === 2, `expected two backend status probes, got ${emptyBootstrapStatusRequests}`);
         }
-
-        report.phase = 'theme-switch-and-background';
-        const currentTheme = await page.locator('#themes').inputValue();
-        const originalActiveKey = await page.locator('.tm-card.on').first().getAttribute('data-key').catch(() => null);
-        const unbound = await findUnboundOrdinaryCard(page, currentTheme);
-        assert(unbound, 'no unbound ordinary theme is available for background smoke');
-        const beforeBackground = await backgroundSnapshot(page);
-        await page.locator(`.tm-card[data-key=${JSON.stringify(unbound.key)}] .tm-card-img`).click();
-        await page.waitForFunction((name) => document.querySelector('#themes')?.value === name, unbound.name, { timeout: 30_000 });
-        await page.waitForTimeout(500);
-        const afterBackground = await backgroundSnapshot(page);
-        assert(JSON.stringify(afterBackground) === JSON.stringify(beforeBackground), 'unbound theme changed the SillyTavern background state');
-        report.unboundBackgroundPreserved = true;
-        report.themeSwitch = { from: currentTheme, to: unbound.name };
-        if (originalActiveKey) {
-            await page.locator(`.tm-card[data-key=${JSON.stringify(originalActiveKey)}] .tm-card-img`).click();
-            await page.waitForFunction((name) => document.querySelector('#themes')?.value === name, currentTheme, { timeout: 30_000 });
+        if (TAURI_LOCAL_SMOKE) {
+            report.tauriLocal = {
+                backendRequests: tauriBackendRequests.slice(),
+                dataAfterSave: await readPluginDataSummary(page),
+            };
+            assert(tauriBackendRequests.length === 0, `Tauri local-only mode sent ${tauriBackendRequests.length} backend requests`);
         }
 
-        report.phase = 'single-theme-import';
-        imported = await importSmokeTheme(page);
-        report.singleThemeImport = imported;
-        report.smokeThemeCleaned = await removeSmokeTheme(page);
-        imported = false;
+        if (!TAURI_LOCAL_SMOKE) {
+            report.phase = 'theme-switch-and-background';
+            const currentTheme = await page.locator('#themes').inputValue();
+            const originalActiveKey = await page.locator('.tm-card.on').first().getAttribute('data-key').catch(() => null);
+            const unbound = await findUnboundOrdinaryCard(page, currentTheme);
+            assert(unbound, 'no unbound ordinary theme is available for background smoke');
+            const beforeBackground = await backgroundSnapshot(page);
+            await page.locator(`.tm-card[data-key=${JSON.stringify(unbound.key)}] .tm-card-img`).click();
+            await page.waitForFunction((name) => document.querySelector('#themes')?.value === name, unbound.name, { timeout: 30_000 });
+            await page.waitForTimeout(500);
+            const afterBackground = await backgroundSnapshot(page);
+            assert(JSON.stringify(afterBackground) === JSON.stringify(beforeBackground), 'unbound theme changed the SillyTavern background state');
+            report.unboundBackgroundPreserved = true;
+            report.themeSwitch = { from: currentTheme, to: unbound.name };
+            if (originalActiveKey) {
+                await page.locator(`.tm-card[data-key=${JSON.stringify(originalActiveKey)}] .tm-card-img`).click();
+                await page.waitForFunction((name) => document.querySelector('#themes')?.value === name, currentTheme, { timeout: 30_000 });
+            }
+
+            report.phase = 'single-theme-import';
+            imported = await importSmokeTheme(page);
+            report.singleThemeImport = imported;
+            report.smokeThemeCleaned = await removeSmokeTheme(page);
+            imported = false;
+        }
 
         report.srcModuleRequests = extensionRequests.filter((url) => /\/theme-mgr\/src\//.test(url));
         report.extensionRequestCount = extensionRequests.length;

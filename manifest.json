@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v4.0.4",
-  "version": "4.0.4",
+  "display_name": "美化管理 v4.0.5",
+  "version": "4.0.5",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v4.0.4: 修复部分空存储环境下 metadata 无法保存，保留严格数据安全校验"
+  "description": "v4.0.5: 修复 TauriTavern 纯前端环境 metadata 无法保存，保留原生酒馆严格数据安全校验"
 }
