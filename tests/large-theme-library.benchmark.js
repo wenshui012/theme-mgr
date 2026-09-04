@@ -1114,7 +1114,7 @@ async function measureCase(browser, count, dataset) {
             return result;
         });
         if (metrics.documentOverflow > 1 || metrics.headerOverflow > 1
-            || metrics.headerCenterSpread > 4 || metrics.triggerHeight < 39 || metrics.naturalTriggerWidth > 150
+            || metrics.headerCenterSpread > 4 || metrics.triggerHeight < 33 || metrics.triggerHeight > 35 || metrics.naturalTriggerWidth > 150
             || !metrics.titleTextTruncated
             || !metrics.menuExpanded || !metrics.menuInsideViewport || !metrics.menuAlignedToTitle || !metrics.menuVisibleAtCenter) {
             throw new Error(`mobile app shell failed at ${width}px: ${JSON.stringify(metrics)}`);
