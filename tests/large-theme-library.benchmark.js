@@ -1084,6 +1084,7 @@ async function measureCase(browser, count, dataset) {
             const actions = head.querySelector('.tm-head-actions');
             const menu = document.getElementById('tm-page-switcher-menu');
             const originalLabel = label.textContent;
+            const naturalTriggerWidth = trigger.getBoundingClientRect().width;
             label.textContent = '这是一个非常长的一级页面标题用于验证截断行为并确保所有手机宽度下工具按钮始终保持完整可见';
             trigger.click();
             const menuRect = menu.getBoundingClientRect();
@@ -1099,6 +1100,7 @@ async function measureCase(browser, count, dataset) {
                 headerOverflow: head.scrollWidth - head.clientWidth,
                 headerCenterSpread: Math.max(...centers) - Math.min(...centers),
                 triggerHeight: trigger.getBoundingClientRect().height,
+                naturalTriggerWidth,
                 titleTextTruncated: label.scrollWidth > label.clientWidth + 1,
                 menuExpanded: trigger.getAttribute('aria-expanded') === 'true' && !menu.hidden,
                 menuInsideViewport: menuRect.left >= -1 && menuRect.right <= innerWidth + 1 && menuRect.top >= -1 && menuRect.bottom <= innerHeight + 1,
@@ -1112,7 +1114,8 @@ async function measureCase(browser, count, dataset) {
             return result;
         });
         if (metrics.documentOverflow > 1 || metrics.headerOverflow > 1
-            || metrics.headerCenterSpread > 4 || metrics.triggerHeight < 39 || !metrics.titleTextTruncated
+            || metrics.headerCenterSpread > 4 || metrics.triggerHeight < 39 || metrics.naturalTriggerWidth > 150
+            || !metrics.titleTextTruncated
             || !metrics.menuExpanded || !metrics.menuInsideViewport || !metrics.menuAlignedToTitle || !metrics.menuVisibleAtCenter) {
             throw new Error(`mobile app shell failed at ${width}px: ${JSON.stringify(metrics)}`);
         }
