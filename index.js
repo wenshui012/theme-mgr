@@ -43,6 +43,7 @@
             'src/theme-series.js',
             'src/theme-bindings.js',
             'src/theme-appearance.js',
+            'src/avatar-inplace-editor-poc.js',
             'src/storage.js',
             'src/image-tools.js',
             'src/image-loader.js',
