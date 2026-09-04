@@ -58,6 +58,10 @@
     var imageToolsApi = null;
     var imageLoaderApi = null;
     var gridImageLoader = null;
+    var avatarStore = null;
+    var avatarImageProcessor = null;
+    var avatarRuntime = null;
+    var avatarPageController = null;
     var appShellApi = null;
     var appShellController = null;
     var styleApi = null;
@@ -80,6 +84,7 @@
     var supportFailed = false;
     var supportErrorText = '';
     var pendingOpenAfterReady = false;
+    var pendingOpenAfterAvatarCancel = false;
     var darkMode = false;
 
     // 缓存主题列表
@@ -133,6 +138,8 @@
                 !modules.themeSeries ||
                 !modules.themeBindings ||
                 !modules.themeAppearance ||
+                !modules.createAvatarStore || !modules.createAvatarImageProcessor ||
+                !modules.createAvatarRuntime || !modules.createAvatarPage || !modules.avatarPage ||
                 !modules.createBackgrounds ||
                 !modules.createUiSheets ||
                 !modules.createUiEvents || !modules.appShell ||
@@ -156,6 +163,10 @@
                     if (!modules.themeSeries) missing.push('theme-series.js');
                     if (!modules.themeBindings) missing.push('theme-bindings.js');
                     if (!modules.themeAppearance) missing.push('theme-appearance.js');
+                    if (!modules.createAvatarStore) missing.push('avatar-storage.js');
+                    if (!modules.createAvatarImageProcessor) missing.push('avatar-image-tools.js');
+                    if (!modules.createAvatarRuntime) missing.push('avatar-runtime.js');
+                    if (!modules.createAvatarPage || !modules.avatarPage) missing.push('avatar-page.js');
                     if (!modules.createBackgrounds) missing.push('backgrounds.js');
                     if (!modules.createUiSheets) missing.push('ui-sheets.js');
                     if (!modules.createUiEvents) missing.push('ui-events.js');
@@ -251,6 +262,37 @@
             });
             imageToolsApi = modules.imageTools;
             imageLoaderApi = modules.imageLoader;
+            avatarStore = modules.createAvatarStore({});
+            avatarImageProcessor = modules.createAvatarImageProcessor({});
+            avatarRuntime = modules.createAvatarRuntime({
+                window: global,
+                document: document,
+                store: avatarStore,
+                getContext: function () {
+                    try {
+                        return global.SillyTavern && typeof global.SillyTavern.getContext === 'function'
+                            ? global.SillyTavern.getContext()
+                            : {};
+                    } catch (e) { return {}; }
+                },
+                getThemeName: getCurrentThemeName,
+                onError: function (error) {
+                    console.warn('[头像管理] runtime 失败:', error);
+                    toast(error && error.message ? error.message : '头像运行时失败', true);
+                },
+            });
+            avatarPageController = modules.createAvatarPage({
+                document: document,
+                store: avatarStore,
+                processor: avatarImageProcessor,
+                runtime: avatarRuntime,
+                imageLoader: imageLoaderApi,
+                getRoot: function () { return document.querySelector('[data-tm-page="avatars"]'); },
+                closeManager: closePopup,
+                toast: toast,
+                confirm: global.confirm.bind(global),
+            });
+            global.ThemeMgrAvatarEditor = avatarRuntime;
             appShellApi = modules.appShell;
             styleApi = modules.injectStyles;
             supportReady = true;
@@ -783,6 +825,7 @@
     function finishApplyTheme(themeName, cb, ok, requestId) {
         return backgroundsApi.finishApplyTheme(themeName, function (backgroundOk, reason) {
             scheduleManagerAppearanceSync();
+            if (avatarRuntime) avatarRuntime.scheduleReconcile(80);
             if (cb) cb(backgroundOk, reason);
         }, ok, requestId);
     }
@@ -969,6 +1012,7 @@
                 if (ok) {
                     applyBoundBackground(name, function () {
                         scheduleManagerAppearanceSync();
+                        if (avatarRuntime) avatarRuntime.scheduleReconcile(80);
                         updateActiveCardState(name); renderBottomStatus();
                     });
                 }
@@ -1857,6 +1901,7 @@
         )
             .then(function (result) {
                 scheduleManagerAppearanceSync();
+                if (avatarRuntime) avatarRuntime.scheduleReconcile(80);
                 if (!result.visualVerification || !result.visualVerification.ok) {
                     console.warn('[ThemeManager] bound background skipped', {
                         requestedTheme: themeName,
@@ -3424,7 +3469,9 @@
             defaultPage: 'themes',
             pages: [
                 { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
-                { id: 'avatars', label: '头像管理', icon: 'fa-user' },
+                { id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
+                    avatarPageController.mount().catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
+                }, unmount: function () { avatarPageController.unmount(); } },
                 { id: 'backgrounds', label: '背景管理', icon: 'fa-image' },
             ],
             beforeChange: function () {
@@ -3437,6 +3484,18 @@
     // ── 打开全屏主界面 ────────────────────────────────────────
     var popupWaitingForStorage = false;
     function openPopup() {
+        if (avatarRuntime && avatarRuntime.isEditing()) {
+            if (pendingOpenAfterAvatarCancel) return;
+            pendingOpenAfterAvatarCancel = true;
+            avatarRuntime.cancelEdit('manager-open').then(function () {
+                pendingOpenAfterAvatarCancel = false;
+                openPopup();
+            }).catch(function (error) {
+                pendingOpenAfterAvatarCancel = false;
+                toast(error.message || '无法结束头像调整', true);
+            });
+            return;
+        }
         if (!isStorageReady()) {
             if (!storageApi || popupWaitingForStorage) return;
             popupWaitingForStorage = true;
@@ -3485,7 +3544,7 @@
                 id: 'avatars',
                 label: '头像管理',
                 icon: 'fa-user',
-                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像管理</h2><p>头像管理功能将在后续版本加入</p></div>',
+                html: modules.avatarPage.buildPageHtml(imageLoaderApi.PLACEHOLDER_SRC),
             },
             {
                 id: 'backgrounds',
@@ -3676,6 +3735,7 @@
         seriesGridResizeObserver = null;
         if (seriesResizeTimer) clearTimeout(seriesResizeTimer);
         seriesResizeTimer = null;
+        if (avatarPageController) avatarPageController.unmount();
         if (appShellController) appShellController.destroy();
         appShellController = null;
         var ov = document.querySelector('.tm-overlay'); if (ov) ov.parentNode.removeChild(ov);
@@ -6491,6 +6551,10 @@
             if (eventsApi && typeof eventsApi.syncFabVisibility === 'function') eventsApi.syncFabVisibility(d);
             bindColorSchemeListener();
             if (bindingController) bindingController.start();
+            if (avatarRuntime) avatarRuntime.start().catch(function (error) {
+                console.warn('[头像管理] 初始化失败:', error);
+                toast(error.message || '头像管理初始化失败', true);
+            });
             updateBtn();
         });
     }
