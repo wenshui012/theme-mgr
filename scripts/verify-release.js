@@ -77,12 +77,14 @@ function main() {
     assert(actual === expected.source, 'dist/index.js differs from a fresh deterministic build');
     assert(normalizeNewlines(fs.readFileSync(DIST_MANIFEST_PATH, 'utf8')) === read('manifest.json'), 'dist/manifest.json differs from the source manifest');
     assert(normalizeNewlines(fs.readFileSync(DIST_README_PATH, 'utf8')) === read('README.md'), 'dist/README.md differs from the source README');
-    assert(expected.modules.length === 19, `expected 19 modules, found ${expected.modules.length}`);
+    assert(expected.modules.length === 20, `expected 20 modules, found ${expected.modules.length}`);
 
     verifyModuleMarkers(actual);
     verifyNoDevelopmentLoader(actual);
     verifyVersions(actual, expected.version);
     assert(actual.includes('global.ThemeMgrModules = global.ThemeMgrModules || {}'), 'ThemeMgrModules registration is missing');
+    assert(actual.includes('ns.appShell = {'), 'app shell module registration is missing');
+    assert(actual.includes('appShellApi.createAppShell'), 'app shell initialization is missing');
     assert(actual.includes('modules.createUiMain({ version: TM_VERSION, modules: modules }).start()'), 'single-file createUiMain startup is missing');
 
     console.log(`[release verify] PASS v${expected.version}`);

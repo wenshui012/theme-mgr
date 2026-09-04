@@ -58,6 +58,8 @@
     var imageToolsApi = null;
     var imageLoaderApi = null;
     var gridImageLoader = null;
+    var appShellApi = null;
+    var appShellController = null;
     var styleApi = null;
     var themeSchema = null;
     var themeApi = null;
@@ -133,7 +135,7 @@
                 !modules.themeAppearance ||
                 !modules.createBackgrounds ||
                 !modules.createUiSheets ||
-                !modules.createUiEvents ||
+                !modules.createUiEvents || !modules.appShell ||
                 !modules.createStorage || !modules.imageTools || !modules.imageLoader || !modules.injectStyles) {
                 supportFailed = true;
                 if (!supportErrorText) {
@@ -141,6 +143,7 @@
                     if (!modules.createStorage) missing.push('storage.js');
                     if (!modules.imageTools) missing.push('image-tools.js');
                     if (!modules.imageLoader) missing.push('image-loader.js');
+                    if (!modules.appShell) missing.push('app-shell.js');
                     if (!modules.injectStyles) missing.push('styles.js');
                     if (!modules.themeSchema) missing.push('theme-schema.js');
                     if (!modules.createThemeApi) missing.push('theme-api.js');
@@ -248,6 +251,7 @@
             });
             imageToolsApi = modules.imageTools;
             imageLoaderApi = modules.imageLoader;
+            appShellApi = modules.appShell;
             styleApi = modules.injectStyles;
             supportReady = true;
             supportFailed = false;
@@ -2170,9 +2174,11 @@
     }
 
     function scheduleSeriesResizeCheck() {
+        if (!isThemePageActive()) return;
         if (seriesResizeTimer) clearTimeout(seriesResizeTimer);
         seriesResizeTimer = setTimeout(function () {
             seriesResizeTimer = null;
+            if (!isThemePageActive()) return;
             var area = document.getElementById('tm-grid-area');
             if (!area) return;
             var d = load();
@@ -3388,6 +3394,46 @@
         }
     }
 
+    function isThemePageActive() {
+        return !appShellController || appShellController.getActivePage() === 'themes';
+    }
+
+    function unmountThemePage() {
+        cancelSearchDebounce();
+        searchComposing = false;
+        cancelPendingGridRender();
+        if (seriesGridResizeObserver) seriesGridResizeObserver.disconnect();
+        seriesGridResizeObserver = null;
+        if (seriesResizeTimer) clearTimeout(seriesResizeTimer);
+        seriesResizeTimer = null;
+    }
+
+    function mountThemePage() {
+        var overlay = document.querySelector('.tm-overlay');
+        if (!overlay || !isThemePageActive()) return;
+        bindSeriesResizeListener();
+        renderCatbar();
+        renderGrid();
+        renderBottomStatus();
+    }
+
+    function createAppShellController(overlay) {
+        if (appShellController) appShellController.destroy();
+        appShellController = appShellApi.createAppShell({
+            root: overlay,
+            defaultPage: 'themes',
+            pages: [
+                { id: 'themes', label: '美化', mount: mountThemePage, unmount: unmountThemePage },
+                { id: 'avatars', label: '头像' },
+                { id: 'backgrounds', label: '背景' },
+            ],
+            beforeChange: function () {
+                return !uiSheetsApi || uiSheetsApi.requestCloseAll(overlay, 'page-change');
+            },
+        });
+        return appShellController;
+    }
+
     // ── 打开全屏主界面 ────────────────────────────────────────
     var popupWaitingForStorage = false;
     function openPopup() {
@@ -3417,16 +3463,7 @@
         ov.className = 'tm-overlay ' + (darkMode ? 'tm-dark' : 'tm-light');
         ov.setAttribute('style', 'position:fixed !important;top:0 !important;left:0 !important;right:0 !important;bottom:0 !important;z-index:2147483647 !important;');
 
-        ov.innerHTML =
-            '<div class="tm-box">' +
-            '<div class="tm-head">' +
-            '<div class="tm-head-title"><i class="fa-solid fa-palette"></i>' + SCRIPT_NAME + '<span class="tm-version">v' + esc(TM_VERSION) + '</span></div>' +
-            '<div class="tm-head-actions">' +
-            '<button class="tm-icon-btn" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
-            '<button class="tm-icon-btn" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
-            '<button class="tm-icon-btn" id="tm-theme-toggle" title="切换明暗"><i class="fa-solid fa-circle-half-stroke"></i></button>' +
-            '<button class="tm-icon-btn" id="tm-x" title="关闭"><i class="fa-solid fa-xmark"></i></button>' +
-            '</div></div>' +
+        var themePageHtml =
             '<div class="tm-search-bar" id="tm-search-bar"><div class="tm-search-wrap"><i class="fa-solid fa-magnifying-glass"></i><input class="tm-search-inp" id="tm-search-inp" placeholder="搜索主题名称、标签、作者…" autocomplete="off" /></div><button class="tm-search-clear" id="tm-search-clear"><i class="fa-solid fa-xmark"></i></button></div>' +
             '<div class="tm-sortbar" id="tm-sortbar">' +
             '<span style="font-size:.72em;opacity:.4;flex-shrink:0">排序：</span>' +
@@ -3441,17 +3478,48 @@
             '</div>' +
             '<div class="tm-catbar" id="tm-catbar" style="display:none"></div>' +
             '<div class="tm-batch-area" id="tm-batch-area"></div>' +
-            '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>' +
+            '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
+        var shellHtml = appShellApi.buildShellHtml({
+            defaultPage: 'themes',
+            pages: [
+                { id: 'themes', label: '美化', icon: 'fa-palette', html: themePageHtml },
+                {
+                    id: 'avatars',
+                    label: '头像',
+                    icon: 'fa-user',
+                    html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像库</h2><p>头像管理功能将在后续版本加入</p></div>',
+                },
+                {
+                    id: 'backgrounds',
+                    label: '背景',
+                    icon: 'fa-image',
+                    html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景库</h2><p>背景管理功能将在后续版本加入</p></div>',
+                },
+            ],
+        });
+
+        ov.innerHTML =
+            '<div class="tm-box">' +
+            '<div class="tm-head">' +
+            '<div class="tm-head-title"><i class="fa-solid fa-palette"></i>' + SCRIPT_NAME + '<span class="tm-version">v' + esc(TM_VERSION) + '</span></div>' +
+            '<div class="tm-head-actions">' +
+            '<button class="tm-icon-btn tm-themes-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
+            '<button class="tm-icon-btn tm-themes-only" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
+            '<button class="tm-icon-btn" id="tm-theme-toggle" title="切换明暗"><i class="fa-solid fa-circle-half-stroke"></i></button>' +
+            '<button class="tm-icon-btn" id="tm-x" title="关闭"><i class="fa-solid fa-xmark"></i></button>' +
+            '</div></div>' +
+            shellHtml +
             '<div class="tm-bottombar">' +
-            '<div class="tm-bottom-status" id="tm-bottom-status"></div>' +
-            '<button class="tm-bottom-btn" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
-            '<button class="tm-bottom-btn" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
+            '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
+            '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
+            '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i></button>' +
             '</div>' +
             '<div id="tm-popup-slot" style="position:absolute;inset:0;pointer-events:none;z-index:20;isolation:isolate;"></div>' +
             '</div>';
 
         document.body.appendChild(ov);
+        createAppShellController(ov);
         bindSeriesResizeListener();
         syncManagerAppearance();
         bindManagerAppearanceObserver();
@@ -3604,6 +3672,8 @@
         seriesGridResizeObserver = null;
         if (seriesResizeTimer) clearTimeout(seriesResizeTimer);
         seriesResizeTimer = null;
+        if (appShellController) appShellController.destroy();
+        appShellController = null;
         var ov = document.querySelector('.tm-overlay'); if (ov) ov.parentNode.removeChild(ov);
         return true;
     }
@@ -4173,7 +4243,8 @@
     }
 
     function renderGrid() {
-        var area = document.getElementById('tm-grid-area'); if (!area) return;
+        var area = document.getElementById('tm-grid-area');
+        if (!area || !isThemePageActive()) return;
         cancelPendingGridRender();
         var generation = gridRenderGeneration;
         var batchArea = document.getElementById('tm-batch-area');

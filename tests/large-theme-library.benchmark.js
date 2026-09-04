@@ -19,6 +19,7 @@ try {
 
 const ROOT = path.resolve(__dirname, '..');
 const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+4iH7WQAAAABJRU5ErkJggg==', 'base64');
+const ENTRY_MODE = argValue('entry', 'modules') === 'dist' ? 'dist' : 'modules';
 const MODULE_FILES = [
     'src/theme-schema.js',
     'src/theme-api.js',
@@ -34,6 +35,7 @@ const MODULE_FILES = [
     'src/storage.js',
     'src/image-tools.js',
     'src/image-loader.js',
+    'src/app-shell.js',
     'src/styles.js',
     'src/backgrounds.js',
     'src/ui-sheets.js',
@@ -183,6 +185,10 @@ async function collectBrowserMetrics(cdp) {
 }
 
 async function addModules(page) {
+    if (ENTRY_MODE === 'dist') {
+        await page.addScriptTag({ path: path.join(ROOT, 'dist/index.js') });
+        return;
+    }
     for (const relative of MODULE_FILES) {
         await page.addScriptTag({ path: path.join(ROOT, relative) });
     }
@@ -356,9 +362,11 @@ async function measureCase(browser, count, dataset) {
     }, { inventory: themes, persisted: metadata });
 
     await addModules(page);
-    await page.evaluate(() => {
-        window.__themeManager = window.ThemeMgrModules.createUiMain({ version: 'benchmark', modules: window.ThemeMgrModules });
-        window.__themeManager.start();
+    await page.evaluate((entryMode) => {
+        if (entryMode !== 'dist') {
+            window.__themeManager = window.ThemeMgrModules.createUiMain({ version: 'benchmark', modules: window.ThemeMgrModules });
+            window.__themeManager.start();
+        }
         window.__waitGridFlag = async function (name, expected, timeoutMs = 60000) {
             const started = performance.now();
             while (performance.now() - started < timeoutMs) {
@@ -974,7 +982,129 @@ async function measureCase(browser, count, dataset) {
     await page.evaluate(async () => {
         document.getElementById('theme-mgr-ext-btn').click();
         await window.__waitGridFlag('tmRenderComplete', 'true');
+    }, ENTRY_MODE);
+    const shellLeave = await page.evaluate(async ({ expectedCount, hasImages }) => {
+        const overlay = document.querySelector('.tm-overlay');
+        const nav = overlay.querySelector('[data-tm-primary-nav]');
+        const tabs = Array.from(nav.querySelectorAll('[data-tm-page-target]'));
+        const pages = Array.from(overlay.querySelectorAll('[data-tm-page]'));
+        const area = document.getElementById('tm-grid-area');
+        const initialGeneration = area.dataset.tmRenderGeneration;
+        const initialCards = document.querySelectorAll('.tm-card').length;
+        if (tabs.length !== 3 || pages.length !== 3 || overlay.dataset.tmActivePage !== 'themes') {
+            throw new Error('app shell did not initialize with three pages and themes active');
+        }
+        if (initialCards !== expectedCount || document.querySelectorAll('#tm-popup-slot').length !== 1) {
+            throw new Error('theme page or shared popup root was duplicated');
+        }
+
+        const allButton = Array.from(document.querySelectorAll('.tm-catbtn')).find((item) => item.dataset.c === '__all__');
+        allButton.click();
+        const generationBeforeLeave = area.dataset.tmRenderGeneration;
+        const cardsBeforeLeave = document.querySelectorAll('.tm-card').length;
+
+        if (hasImages) {
+            const menu = document.querySelector('.tm-card-menu');
+            if (menu) {
+                menu.click();
+                const view = document.getElementById('tm-ctx-view');
+                if (view) view.click();
+            }
+        }
+        tabs.find((tab) => tab.dataset.tmPageTarget === 'avatars').click();
+        for (let index = 0; index < 6; index += 1) await new Promise((resolve) => requestAnimationFrame(resolve));
+        const cardsAfterLeave = document.querySelectorAll('.tm-card').length;
+        if (cardsAfterLeave !== cardsBeforeLeave) throw new Error('theme grid kept appending after leaving themes');
+        if (document.querySelector('.tm-lightbox') || document.querySelector('.tm-sheet-overlay')) {
+            throw new Error('shared popup content survived a primary page switch');
+        }
+        const avatarPage = document.getElementById('tm-page-avatars');
+        if (overlay.dataset.tmActivePage !== 'avatars' || avatarPage.hidden || !avatarPage.textContent.includes('后续版本')) {
+            throw new Error('avatar placeholder did not become active');
+        }
+
+        tabs.find((tab) => tab.dataset.tmPageTarget === 'backgrounds').click();
+        const backgroundPage = document.getElementById('tm-page-backgrounds');
+        if (overlay.dataset.tmActivePage !== 'backgrounds' || backgroundPage.hidden || !backgroundPage.textContent.includes('后续版本')) {
+            throw new Error('background placeholder did not become active');
+        }
+        const settingsButton = document.getElementById('tm-bottom-settings');
+        if (getComputedStyle(settingsButton).display === 'none') throw new Error('global settings entry is hidden outside themes');
+        settingsButton.click();
+        if (document.querySelectorAll('#tm-popup-slot').length !== 1 || !document.querySelector('.tm-sheet-overlay')) {
+            throw new Error('settings did not use the single shared popup root');
+        }
+        return {
+            navigation: tabs.map((tab) => tab.textContent.trim()),
+            navListeners: window.__listenerCountFor(nav),
+            initialGeneration,
+            generationBeforeLeave,
+            cardsBeforeLeave,
+            cardsAfterLeave,
+            activePage: overlay.dataset.tmActivePage,
+            popupRoots: document.querySelectorAll('#tm-popup-slot').length,
+        };
+    }, { expectedCount: logicalCount, hasImages: dataset === 'images' });
+
+    await page.setViewportSize({ width: 390, height: 720 });
+    const mobileShell = await page.evaluate(() => {
+        const overlay = document.querySelector('.tm-overlay');
+        const nav = overlay.querySelector('.tm-primary-nav');
+        const overlayRect = overlay.getBoundingClientRect();
+        const overlayStyle = getComputedStyle(overlay);
+        return {
+            viewportWidth: innerWidth,
+            documentClientWidth: document.documentElement.clientWidth,
+            documentScrollWidth: document.documentElement.scrollWidth,
+            documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            overlayClientWidth: overlay.clientWidth,
+            overlayScrollWidth: overlay.scrollWidth,
+            overlayRectWidth: overlayRect.width,
+            overlayBoxSizing: overlayStyle.boxSizing,
+            overlayBorderLeft: overlayStyle.borderLeftWidth,
+            overlayBorderRight: overlayStyle.borderRightWidth,
+            overlayOverflow: overlay.scrollWidth - overlay.clientWidth,
+            navigationClientWidth: nav.clientWidth,
+            navigationScrollWidth: nav.scrollWidth,
+            navigationOverflow: nav.scrollWidth - nav.clientWidth,
+        };
     });
+    if (mobileShell.documentOverflow > 1 || mobileShell.navigationOverflow > 1) {
+        throw new Error(`mobile app shell overflowed horizontally: ${JSON.stringify(mobileShell)}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+
+    const shellReturn = await page.evaluate(async ({ expectedCount, hasImages }) => {
+        const overlay = document.querySelector('.tm-overlay');
+        const nav = overlay.querySelector('[data-tm-primary-nav]');
+        const themesTab = nav.querySelector('[data-tm-page-target="themes"]');
+        const previousGeneration = document.getElementById('tm-grid-area').dataset.tmRenderGeneration;
+        themesTab.click();
+        await window.__waitGridGenerationAfter(previousGeneration);
+        await window.__waitGridFlag('tmRenderComplete', 'true');
+        if (document.querySelectorAll('.tm-card').length !== expectedCount) throw new Error('theme page did not fully remount');
+        if (document.querySelector('.tm-sheet-overlay')) throw new Error('settings sheet survived the return to themes');
+        let imageReloaded = true;
+        if (hasImages) {
+            const started = performance.now();
+            let image = null;
+            while (performance.now() - started < 10000) {
+                image = document.querySelector('img[data-theme-key][data-image-state="loaded"]');
+                if (image) break;
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+            }
+            imageReloaded = !!image;
+        }
+        if (!imageReloaded) throw new Error('image loader did not resume after returning to themes');
+        return {
+            activePage: overlay.dataset.tmActivePage,
+            activeTab: themesTab.getAttribute('aria-selected'),
+            popupRoots: document.querySelectorAll('#tm-popup-slot').length,
+            navListeners: window.__listenerCountFor(nav),
+            cards: document.querySelectorAll('.tm-card').length,
+            imageReloaded,
+        };
+    }, { expectedCount: logicalCount, hasImages: dataset === 'images' });
     const beforeFinalCloseMemory = await collectBrowserMetrics(cdp);
     const closeFinal = await page.evaluate(async () => {
         const start = performance.now();
@@ -1010,6 +1140,7 @@ async function measureCase(browser, count, dataset) {
         },
         metadata: { initial: initialMetadataCount, afterFirstOpen: metadataCountAfterOpen },
         imageLoading,
+        appShell: { leave: shellLeave, mobile: mobileShell, returned: shellReturn },
         memory: { beforeOpen: beforeOpenMemory, firstOpen: firstOpenMemory, afterFirstClose: afterFirstCloseMemory, reopen: reopenMemory, beforeFinalClose: beforeFinalCloseMemory, afterFinalClose: afterFinalCloseMemory },
         closeFinal,
         pageErrors,
@@ -1055,6 +1186,7 @@ async function main() {
     }
     const report = {
         generatedAt: new Date().toISOString(),
+        entry: ENTRY_MODE,
         safety: 'fresh browser contexts + in-memory fixtures + mocked HTTP; no SillyTavern theme directory access',
         durationMs: performance.now() - started,
         results,
@@ -1066,6 +1198,7 @@ async function main() {
         console.error(`[benchmark] full report: ${outputPath}`);
     }
     const summary = results.map((result) => ({
+        entry: ENTRY_MODE,
         dataset: result.dataset,
         themes: result.themes,
         settingsPayloadBytes: result.settingsPayloadBytes,
@@ -1085,6 +1218,7 @@ async function main() {
         inventory: result.inventory,
         metadata: result.metadata,
         imageLoading: result.imageLoading,
+        appShell: result.appShell,
         heap: {
             beforeOpen: result.memory.beforeOpen.jsHeapUsedBytes,
             firstOpen: result.memory.firstOpen.jsHeapUsedBytes,

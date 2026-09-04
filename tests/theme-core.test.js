@@ -12,6 +12,7 @@ require('../src/theme-metadata.js');
 require('../src/editor-draft.js');
 require('../src/image-tools.js');
 require('../src/image-loader.js');
+require('../src/app-shell.js');
 require('../src/theme-pairs.js');
 require('../src/theme-series.js');
 require('../src/theme-bindings.js');

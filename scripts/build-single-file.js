@@ -26,6 +26,7 @@ const EXPECTED_MODULES = [
     'src/storage.js',
     'src/image-tools.js',
     'src/image-loader.js',
+    'src/app-shell.js',
     'src/styles.js',
     'src/backgrounds.js',
     'src/ui-sheets.js',

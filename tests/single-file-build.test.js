@@ -4,10 +4,12 @@ const fs = require('node:fs');
 
 const build = require('../scripts/build-single-file.js');
 
-test('development loader exposes the fixed 19-module release order', () => {
+test('development loader exposes the fixed 20-module release order', () => {
     const entry = build.parseDevelopmentEntry();
-    assert.equal(entry.modules.length, 19);
+    assert.equal(entry.modules.length, 20);
     assert.deepEqual(entry.modules, build.EXPECTED_MODULES);
+    assert.ok(entry.modules.indexOf('src/app-shell.js') > entry.modules.indexOf('src/image-loader.js'));
+    assert.ok(entry.modules.indexOf('src/app-shell.js') < entry.modules.indexOf('src/ui-main.js'));
 });
 
 test('single-file build is deterministic and contains every module once in order', () => {
@@ -33,6 +35,7 @@ test('generated release entry has direct startup and no development module loade
     assert.doesNotMatch(bundle.source, /document\.currentScript/);
     assert.doesNotMatch(bundle.source, /createElement\s*\(\s*['"]script['"]\s*\)/);
     assert.doesNotMatch(bundle.source, /\bloadModule\s*\(/);
+    assert.match(bundle.source, /ns\.appShell\s*=\s*\{/);
 });
 
 test('checked-in dist entry exactly matches a fresh build', () => {

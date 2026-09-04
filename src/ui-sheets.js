@@ -7,6 +7,7 @@
         var load = opts.load;
         var esc = opts.esc;
         var beforeCloseHandlers = new WeakMap();
+        var openLightboxes = new Set();
 
         function createSheet(contentHtml) {
             var overlay = global.document.createElement('div');
@@ -51,6 +52,9 @@
                 var guard = beforeCloseHandlers.get(sheets[i]);
                 if (guard && guard(reason || 'manager-close') === false) return false;
             }
+            openLightboxes.forEach(function (record) {
+                if (!root || !root.contains || root.contains(record.element)) record.close();
+            });
             sheets.forEach(removeSheet);
             return true;
         }
@@ -67,6 +71,7 @@
             var lightbox = global.document.createElement('div');
             lightbox.className = 'tm-lightbox';
             lightbox.style.cssText = 'position:absolute !important;inset:0 !important;z-index:2 !important;pointer-events:auto !important;';
+            var lightboxRecord = { element: lightbox, close: closeLightbox };
 
             function render() {
                 var data = load();
@@ -96,6 +101,7 @@
             }
 
             function closeLightbox() {
+                openLightboxes.delete(lightboxRecord);
                 if (lightbox.parentNode) lightbox.parentNode.removeChild(lightbox);
                 global.document.removeEventListener('keydown', handleKey);
             }
@@ -115,6 +121,7 @@
                 if (event.target === lightbox) closeLightbox();
             });
             global.document.addEventListener('keydown', handleKey);
+            openLightboxes.add(lightboxRecord);
             render();
             getPopupLayer().appendChild(lightbox);
         }
