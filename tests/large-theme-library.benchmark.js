@@ -997,9 +997,12 @@ async function measureCase(browser, count, dataset) {
             throw new Error('app shell did not initialize with three pages and themes active');
         }
         if (trigger.getAttribute('aria-haspopup') !== 'menu' || trigger.getAttribute('aria-expanded') !== 'false'
-            || trigger.querySelector('[data-tm-current-page-label]')?.textContent.trim() !== '美化'
+            || trigger.querySelector('[data-tm-current-page-label]')?.textContent.trim() !== '美化管理'
+            || !trigger.classList.contains('tm-head-title-switcher')
+            || overlay.querySelectorAll('.tm-head > [data-tm-page-switcher]').length !== 1
+            || overlay.querySelector('.tm-head > .tm-head-title:not(.tm-head-title-switcher), .tm-head .tm-version')
             || overlay.querySelector('[role="tablist"], [role="tab"], [aria-selected], .tm-primary-nav, .tm-primary-tab')) {
-            throw new Error('compact page switcher semantics did not initialize correctly');
+            throw new Error('title-integrated page switcher semantics did not initialize correctly');
         }
         if (initialCards !== expectedCount || document.querySelectorAll('#tm-popup-slot').length !== 1) {
             throw new Error('theme page or shared popup root was duplicated');
@@ -1010,7 +1013,7 @@ async function measureCase(browser, count, dataset) {
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
         if (trigger.getAttribute('aria-expanded') !== 'false' || !menu.hidden) throw new Error('Escape did not close page menu');
         trigger.click();
-        document.querySelector('.tm-head-title').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        document.querySelector('.tm-head-actions').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
         if (trigger.getAttribute('aria-expanded') !== 'false' || !menu.hidden) throw new Error('outside click did not close page menu');
 
         const allButton = Array.from(document.querySelectorAll('.tm-catbtn')).find((item) => item.dataset.c === '__all__');
@@ -1038,7 +1041,7 @@ async function measureCase(browser, count, dataset) {
         if (overlay.dataset.tmActivePage !== 'avatars' || avatarPage.hidden || !avatarPage.textContent.includes('后续版本')) {
             throw new Error('avatar placeholder did not become active');
         }
-        if (trigger.querySelector('[data-tm-current-page-label]')?.textContent.trim() !== '头像'
+        if (trigger.querySelector('[data-tm-current-page-label]')?.textContent.trim() !== '头像管理'
             || trigger.getAttribute('aria-expanded') !== 'false' || !menu.hidden) {
             throw new Error('avatar selection did not update and close the compact switcher');
         }
@@ -1048,6 +1051,10 @@ async function measureCase(browser, count, dataset) {
         const backgroundPage = document.getElementById('tm-page-backgrounds');
         if (overlay.dataset.tmActivePage !== 'backgrounds' || backgroundPage.hidden || !backgroundPage.textContent.includes('后续版本')) {
             throw new Error('background placeholder did not become active');
+        }
+        if (trigger.querySelector('[data-tm-current-page-label]')?.textContent.trim() !== '背景管理'
+            || !trigger.querySelector('[data-tm-current-page-icon]')?.classList.contains('fa-image')) {
+            throw new Error('background selection did not update the title switcher');
         }
         const settingsButton = document.getElementById('tm-bottom-settings');
         if (getComputedStyle(settingsButton).display === 'none') throw new Error('global settings entry is hidden outside themes');
@@ -1072,13 +1079,16 @@ async function measureCase(browser, count, dataset) {
         const metrics = await page.evaluate(() => {
             const overlay = document.querySelector('.tm-overlay');
             const head = overlay.querySelector('.tm-head');
-            const title = head.querySelector('.tm-head-title');
             const trigger = document.getElementById('tm-page-switcher-button');
+            const label = trigger.querySelector('[data-tm-current-page-label]');
             const actions = head.querySelector('.tm-head-actions');
             const menu = document.getElementById('tm-page-switcher-menu');
+            const originalLabel = label.textContent;
+            label.textContent = '这是一个非常长的一级页面标题用于验证截断行为并确保所有手机宽度下工具按钮始终保持完整可见';
             trigger.click();
             const menuRect = menu.getBoundingClientRect();
-            const centers = [title, trigger, actions].map((element) => {
+            const triggerRect = trigger.getBoundingClientRect();
+            const centers = [trigger, actions].map((element) => {
                 const rect = element.getBoundingClientRect();
                 return rect.top + rect.height / 2;
             });
@@ -1089,16 +1099,21 @@ async function measureCase(browser, count, dataset) {
                 headerOverflow: head.scrollWidth - head.clientWidth,
                 headerCenterSpread: Math.max(...centers) - Math.min(...centers),
                 triggerHeight: trigger.getBoundingClientRect().height,
+                titleTextTruncated: label.scrollWidth > label.clientWidth + 1,
                 menuExpanded: trigger.getAttribute('aria-expanded') === 'true' && !menu.hidden,
                 menuInsideViewport: menuRect.left >= -1 && menuRect.right <= innerWidth + 1 && menuRect.top >= -1 && menuRect.bottom <= innerHeight + 1,
+                menuAlignedToTitle: Math.abs(menuRect.left - triggerRect.left) <= 1,
+                menuLeft: menuRect.left,
+                titleLeft: triggerRect.left,
                 menuVisibleAtCenter: menu.contains(centerElement),
             };
+            label.textContent = originalLabel;
             trigger.click();
             return result;
         });
         if (metrics.documentOverflow > 1 || metrics.headerOverflow > 1
-            || metrics.headerCenterSpread > 4 || metrics.triggerHeight < 39 || !metrics.menuExpanded
-            || !metrics.menuInsideViewport || !metrics.menuVisibleAtCenter) {
+            || metrics.headerCenterSpread > 4 || metrics.triggerHeight < 39 || !metrics.titleTextTruncated
+            || !metrics.menuExpanded || !metrics.menuInsideViewport || !metrics.menuAlignedToTitle || !metrics.menuVisibleAtCenter) {
             throw new Error(`mobile app shell failed at ${width}px: ${JSON.stringify(metrics)}`);
         }
         mobileShell.push(metrics);

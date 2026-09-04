@@ -50,14 +50,14 @@
     function buildPageSwitcherHtml(options) {
         options = options || {};
         var page = currentPage(options.pages, options.defaultPage);
-        return '<div class="tm-page-switcher" data-tm-page-switcher>' +
-            '<button type="button" class="tm-page-switcher-button" id="tm-page-switcher-button"' +
+        return '<button type="button" class="tm-head-title tm-head-title-switcher" id="tm-page-switcher-button"' +
+            ' data-tm-page-switcher' +
             ' aria-haspopup="menu" aria-expanded="false" aria-controls="tm-page-switcher-menu"' +
             ' aria-label="切换一级功能，当前：' + escapeHtml(page.label) + '">' +
             '<i class="fa-solid ' + escapeHtml(page.icon) + ' tm-page-switcher-icon" data-tm-current-page-icon aria-hidden="true"></i>' +
-            '<span data-tm-current-page-label>' + escapeHtml(page.label) + '</span>' +
+            '<span class="tm-head-name" data-tm-current-page-label>' + escapeHtml(page.label) + '</span>' +
             '<i class="fa-solid fa-chevron-down tm-page-switcher-chevron" aria-hidden="true"></i>' +
-            '</button></div>';
+            '</button>';
     }
 
     function buildPageMenuHtml(options) {
@@ -159,7 +159,7 @@
             var rootRect = typeof root.getBoundingClientRect === 'function'
                 ? root.getBoundingClientRect()
                 : { left: 0, top: 0, width: root.clientWidth || 0 };
-            var menuWidth = menu.offsetWidth || 148;
+            var menuWidth = menu.offsetWidth || 160;
             var maxLeft = Math.max(8, (rootRect.width || root.clientWidth || 0) - menuWidth - 8);
             var left = Math.max(8, Math.min(triggerRect.left - rootRect.left, maxLeft));
             menu.style.left = left + 'px';

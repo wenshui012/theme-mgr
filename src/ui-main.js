@@ -3423,9 +3423,9 @@
             root: overlay,
             defaultPage: 'themes',
             pages: [
-                { id: 'themes', label: '美化', mount: mountThemePage, unmount: unmountThemePage },
-                { id: 'avatars', label: '头像' },
-                { id: 'backgrounds', label: '背景' },
+                { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
+                { id: 'avatars', label: '头像管理', icon: 'fa-user' },
+                { id: 'backgrounds', label: '背景管理', icon: 'fa-image' },
             ],
             beforeChange: function () {
                 return !uiSheetsApi || uiSheetsApi.requestCloseAll(overlay, 'page-change');
@@ -3480,18 +3480,18 @@
             '<div class="tm-batch-area" id="tm-batch-area"></div>' +
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
         var appPages = [
-            { id: 'themes', label: '美化', icon: 'fa-palette', html: themePageHtml },
+            { id: 'themes', label: '美化管理', icon: 'fa-palette', html: themePageHtml },
             {
                 id: 'avatars',
-                label: '头像',
+                label: '头像管理',
                 icon: 'fa-user',
-                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像库</h2><p>头像管理功能将在后续版本加入</p></div>',
+                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像管理</h2><p>头像管理功能将在后续版本加入</p></div>',
             },
             {
                 id: 'backgrounds',
-                label: '背景',
+                label: '背景管理',
                 icon: 'fa-image',
-                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景库</h2><p>背景管理功能将在后续版本加入</p></div>',
+                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景管理</h2><p>背景管理功能将在后续版本加入</p></div>',
             },
         ];
         var shellOptions = {
@@ -3505,7 +3505,6 @@
         ov.innerHTML =
             '<div class="tm-box">' +
             '<div class="tm-head">' +
-            '<div class="tm-head-title"><i class="fa-solid fa-palette"></i><span class="tm-head-name">' + SCRIPT_NAME + '</span><span class="tm-version">v' + esc(TM_VERSION) + '</span></div>' +
             pageSwitcherHtml +
             '<div class="tm-head-actions">' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +

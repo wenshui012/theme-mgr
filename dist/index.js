@@ -7410,7 +7410,7 @@
 })(window);
 /* END MODULE 14/20: src/image-loader.js */
 
-/* BEGIN MODULE 15/20: src/app-shell.js | sha256:fe7978c3f8dc2f8d2c21a1cdb656881bef878d0cca07d7596a34609e2d3ab8ed */
+/* BEGIN MODULE 15/20: src/app-shell.js | sha256:331420ac6da390646b9f6bb701e28b1a2a300c65000bddf6d18568b814b04e44 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -7463,14 +7463,14 @@
     function buildPageSwitcherHtml(options) {
         options = options || {};
         var page = currentPage(options.pages, options.defaultPage);
-        return '<div class="tm-page-switcher" data-tm-page-switcher>' +
-            '<button type="button" class="tm-page-switcher-button" id="tm-page-switcher-button"' +
+        return '<button type="button" class="tm-head-title tm-head-title-switcher" id="tm-page-switcher-button"' +
+            ' data-tm-page-switcher' +
             ' aria-haspopup="menu" aria-expanded="false" aria-controls="tm-page-switcher-menu"' +
             ' aria-label="切换一级功能，当前：' + escapeHtml(page.label) + '">' +
             '<i class="fa-solid ' + escapeHtml(page.icon) + ' tm-page-switcher-icon" data-tm-current-page-icon aria-hidden="true"></i>' +
-            '<span data-tm-current-page-label>' + escapeHtml(page.label) + '</span>' +
+            '<span class="tm-head-name" data-tm-current-page-label>' + escapeHtml(page.label) + '</span>' +
             '<i class="fa-solid fa-chevron-down tm-page-switcher-chevron" aria-hidden="true"></i>' +
-            '</button></div>';
+            '</button>';
     }
 
     function buildPageMenuHtml(options) {
@@ -7572,7 +7572,7 @@
             var rootRect = typeof root.getBoundingClientRect === 'function'
                 ? root.getBoundingClientRect()
                 : { left: 0, top: 0, width: root.clientWidth || 0 };
-            var menuWidth = menu.offsetWidth || 148;
+            var menuWidth = menu.offsetWidth || 160;
             var maxLeft = Math.max(8, (rootRect.width || root.clientWidth || 0) - menuWidth - 8);
             var left = Math.max(8, Math.min(triggerRect.left - rootRect.left, maxLeft));
             menu.style.left = left + 'px';
@@ -7740,7 +7740,7 @@
 })(window);
 /* END MODULE 15/20: src/app-shell.js */
 
-/* BEGIN MODULE 16/20: src/styles.js | sha256:9441913ce84ecd18483f203bdc11e42964123c365e8f04afcf3c48d59b3c56d1 */
+/* BEGIN MODULE 16/20: src/styles.js | sha256:fbe48cca4f9b53cf9eb25b357844f3db508568e7bcbfd85c21cbf3970e5c0ed6 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -7771,17 +7771,14 @@
             '.tm-head-title{font-weight:700;font-size:1.05em;display:flex;align-items:center;gap:7px;flex:1;min-width:0;}',
             '.tm-head-title i{color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-head-name{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
-            '.tm-version{align-self:flex-end;font-size:.58em;font-weight:700;line-height:1;padding:0 0 2px;color:var(--tm-text);opacity:.55;flex-shrink:0;}',
             '.tm-head-actions{display:flex;align-items:center;gap:4px;}',
-            '.tm-page-switcher{display:flex;align-items:center;flex-shrink:0;}',
-            '.tm-page-switcher-button{height:32px;max-width:112px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:var(--tm-control-radius,9px);background:var(--tm-control-bg,rgba(127,127,127,.06));color:inherit;font:inherit;font-size:.8em;font-weight:650;cursor:pointer;opacity:.72;white-space:nowrap;transition:background .16s,color .16s,opacity .16s;}',
-            '.tm-page-switcher-button:hover,.tm-page-switcher.open .tm-page-switcher-button{opacity:1;background:var(--tm-control-hover,rgba(127,127,127,.12));}',
-            '.tm-page-switcher-button:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf);outline-offset:1px;}',
-            '.tm-page-switcher-icon{color:var(--SmartThemeQuoteColor,#7c6daf);font-size:.92em;flex-shrink:0;}',
-            '.tm-page-switcher-button>span{min-width:0;overflow:hidden;text-overflow:ellipsis;}',
+            '.tm-head-title-switcher{height:34px;padding:0 6px 0 0;border:0;border-radius:var(--tm-control-radius,8px);background:transparent;color:inherit;font-family:inherit;text-align:left;cursor:pointer;white-space:nowrap;transition:background .16s,color .16s;}',
+            '.tm-head-title-switcher:hover,.tm-head-title-switcher.open{background:var(--tm-control-bg,rgba(127,127,127,.06));}',
+            '.tm-head-title-switcher:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf);outline-offset:1px;}',
+            '.tm-page-switcher-icon{color:var(--SmartThemeQuoteColor,#7c6daf);font-size:.94em;flex-shrink:0;}',
             '.tm-page-switcher-chevron{font-size:.68em;opacity:.52;transition:transform .16s;flex-shrink:0;}',
-            '.tm-page-switcher.open .tm-page-switcher-chevron{transform:rotate(180deg);}',
-            '.tm-page-menu{position:absolute;width:148px;max-width:calc(100vw - 16px);padding:6px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box;border:1px solid var(--tm-control-border,rgba(127,127,127,.16));border-radius:var(--tm-panel-radius,12px);background:var(--tm-bg2,var(--SmartThemeBackgroundColor,#1e1e24));color:var(--tm-text,var(--SmartThemeBodyColor,#eee));box-shadow:0 10px 30px var(--tm-shadow,rgba(0,0,0,.3));backdrop-filter:var(--tm-panel-blur,blur(14px));pointer-events:auto;z-index:4;animation:tm-popin .14s ease;}',
+            '.tm-head-title-switcher.open .tm-page-switcher-chevron{transform:rotate(180deg);}',
+            '.tm-page-menu{position:absolute;width:160px;max-width:calc(100vw - 16px);padding:6px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box;border:1px solid var(--tm-control-border,rgba(127,127,127,.16));border-radius:var(--tm-panel-radius,12px);background:var(--tm-bg2,var(--SmartThemeBackgroundColor,#1e1e24));color:var(--tm-text,var(--SmartThemeBodyColor,#eee));box-shadow:0 10px 30px var(--tm-shadow,rgba(0,0,0,.3));backdrop-filter:var(--tm-panel-blur,blur(14px));pointer-events:auto;z-index:4;transform-origin:top left;animation:tm-popin .14s ease;}',
             '.tm-page-menu[hidden]{display:none !important;}',
             '.tm-page-menu-item{width:100%;min-height:40px;padding:7px 10px;display:grid;grid-template-columns:18px minmax(0,1fr) 16px;align-items:center;gap:8px;border:0;border-radius:var(--tm-control-radius,8px);background:transparent;color:inherit;font:inherit;font-size:.84em;text-align:left;cursor:pointer;opacity:.72;}',
             '.tm-page-menu-item:hover,.tm-page-menu-item:focus-visible{opacity:1;background:var(--tm-control-hover,rgba(127,127,127,.12));outline:none;}',
@@ -7802,8 +7799,8 @@
             '.tm-overlay:not([data-tm-active-page="themes"]) .tm-bottombar{justify-content:flex-end;}',
             '#tm-bottom-settings{margin-left:auto;}',
             '.tm-auto-hide-head .tm-head{cursor:pointer;}',
-            '.tm-auto-hide-head .tm-head-title,.tm-auto-hide-head .tm-page-switcher,.tm-auto-hide-head .tm-head-actions{transition:opacity .18s ease,transform .18s ease,visibility .18s;}',
-            '.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-title,.tm-auto-hide-head:not(.tm-head-revealed) .tm-page-switcher,.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-actions{opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-4px);}',
+            '.tm-auto-hide-head .tm-head-title-switcher,.tm-auto-hide-head .tm-head-actions{transition:opacity .18s ease,transform .18s ease,visibility .18s;}',
+            '.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-title-switcher,.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-actions{opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-4px);}',
             '.tm-icon-btn{cursor:pointer;background:none;border:none;opacity:.55;font-size:1.15em;',
             'width:34px;height:34px;border-radius:var(--tm-control-radius,50%);display:flex;align-items:center;justify-content:center;transition:.18s;color:inherit;box-shadow:var(--tm-control-shadow,none);flex-shrink:0;}',
             '.tm-icon-btn:hover{opacity:1;background:var(--tm-control-hover,rgba(127,127,127,.12));color:var(--SmartThemeQuoteColor,#7c6daf);}',
@@ -8081,7 +8078,7 @@
             '.tm-cat-item.drag-over-top{border-top:2px solid var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-cat-item.drag-over-bottom{border-bottom:2px solid var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-cat-item.dragging{opacity:.3;}',
-            '@media (max-width:430px){.tm-head{gap:5px;padding-left:8px;padding-right:8px}.tm-head-title{gap:4px}.tm-head-name{font-size:.9em}.tm-version{display:none}.tm-page-switcher-button{height:40px;max-width:92px;padding-left:8px;padding-right:8px}.tm-head-actions{gap:0}.tm-icon-btn{width:32px}.tm-app-page-avatars,.tm-app-page-backgrounds{padding:14px}}',
+            '@media (max-width:430px){.tm-head{gap:5px;padding-left:8px;padding-right:8px}.tm-head-title-switcher{height:40px;gap:5px;padding-right:5px}.tm-head-name{font-size:.9em}.tm-head-actions{gap:0}.tm-icon-btn{width:32px}.tm-app-page-avatars,.tm-app-page-backgrounds{padding:14px}}',
             '@media (max-width:480px){.tm-day-night-assign{grid-template-columns:minmax(0,1fr) 30px minmax(0,1fr);gap:5px}.tm-day-night-choice{padding:8px 7px}.tm-day-night-choice-label{font-size:.74em}.tm-day-night-choice select{font-size:.76em;padding:6px 5px}.tm-day-night-swap{width:30px;height:30px}.tm-day-night-swap-icon{width:16px;height:16px}.tm-edit-sheet-title{align-items:flex-start}.tm-day-night-delete-actions .tm-btn{flex:1;min-width:96px;padding-left:8px;padding-right:8px}}',
             '.tm-drag-handle{opacity:.35;cursor:grab;padding:0 6px;font-size:.9em;touch-action:none;}',
             '.tm-cat-name{flex:1;font-size:.88em;}',
@@ -8834,7 +8831,7 @@
 })(window);
 /* END MODULE 19/20: src/ui-events.js */
 
-/* BEGIN MODULE 20/20: src/ui-main.js | sha256:fae1c5206d530f71a2643eebbae348dab6cee1fe8b575d7c896df584dd3e3bc6 */
+/* BEGIN MODULE 20/20: src/ui-main.js | sha256:9694a01ba7f7535f8c33d50274b27f917f95895ae29dd09ebad8277a38da8cfc */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -12260,9 +12257,9 @@
             root: overlay,
             defaultPage: 'themes',
             pages: [
-                { id: 'themes', label: '美化', mount: mountThemePage, unmount: unmountThemePage },
-                { id: 'avatars', label: '头像' },
-                { id: 'backgrounds', label: '背景' },
+                { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
+                { id: 'avatars', label: '头像管理', icon: 'fa-user' },
+                { id: 'backgrounds', label: '背景管理', icon: 'fa-image' },
             ],
             beforeChange: function () {
                 return !uiSheetsApi || uiSheetsApi.requestCloseAll(overlay, 'page-change');
@@ -12317,18 +12314,18 @@
             '<div class="tm-batch-area" id="tm-batch-area"></div>' +
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
         var appPages = [
-            { id: 'themes', label: '美化', icon: 'fa-palette', html: themePageHtml },
+            { id: 'themes', label: '美化管理', icon: 'fa-palette', html: themePageHtml },
             {
                 id: 'avatars',
-                label: '头像',
+                label: '头像管理',
                 icon: 'fa-user',
-                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像库</h2><p>头像管理功能将在后续版本加入</p></div>',
+                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像管理</h2><p>头像管理功能将在后续版本加入</p></div>',
             },
             {
                 id: 'backgrounds',
-                label: '背景',
+                label: '背景管理',
                 icon: 'fa-image',
-                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景库</h2><p>背景管理功能将在后续版本加入</p></div>',
+                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景管理</h2><p>背景管理功能将在后续版本加入</p></div>',
             },
         ];
         var shellOptions = {
@@ -12342,7 +12339,6 @@
         ov.innerHTML =
             '<div class="tm-box">' +
             '<div class="tm-head">' +
-            '<div class="tm-head-title"><i class="fa-solid fa-palette"></i><span class="tm-head-name">' + SCRIPT_NAME + '</span><span class="tm-version">v' + esc(TM_VERSION) + '</span></div>' +
             pageSwitcherHtml +
             '<div class="tm-head-actions">' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +

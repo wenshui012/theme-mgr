@@ -7,9 +7,9 @@ require('../src/app-shell.js');
 
 const appShell = global.ThemeMgrModules.appShell;
 const pageDefinitions = [
-    { id: 'themes', label: '美化', icon: 'fa-palette', html: '<div id="theme-content"></div>' },
-    { id: 'avatars', label: '头像', icon: 'fa-user', html: '<p>avatar placeholder</p>' },
-    { id: 'backgrounds', label: '背景', icon: 'fa-image', html: '<p>background placeholder</p>' },
+    { id: 'themes', label: '美化管理', icon: 'fa-palette', html: '<div id="theme-content"></div>' },
+    { id: 'avatars', label: '头像管理', icon: 'fa-user', html: '<p>avatar placeholder</p>' },
+    { id: 'backgrounds', label: '背景管理', icon: 'fa-image', html: '<p>background placeholder</p>' },
 ];
 
 class FakeClassList {
@@ -33,7 +33,7 @@ class FakeNode {
         this.focusCount = 0;
         this.style = {};
         this.textContent = '';
-        this.offsetWidth = 148;
+        this.offsetWidth = 160;
         this.clientWidth = 390;
     }
     getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; }
@@ -69,10 +69,9 @@ class FakeNode {
 function createHarness(callbacks) {
     callbacks = callbacks || {};
     const pages = callbacks.pages || pageDefinitions;
-    const switcher = new FakeNode({ 'data-tm-page-switcher': '' });
     const label = new FakeNode({ 'data-tm-current-page-label': '' });
     const icon = new FakeNode({ 'data-tm-current-page-icon': '' });
-    const trigger = new FakeNode({ id: 'tm-page-switcher-button', 'aria-expanded': 'false' });
+    const trigger = new FakeNode({ id: 'tm-page-switcher-button', 'data-tm-page-switcher': '', 'aria-expanded': 'false' });
     trigger.querySelector = (selector) => {
         if (selector === '[data-tm-current-page-label]') return label;
         if (selector === '[data-tm-current-page-icon]') return icon;
@@ -88,7 +87,7 @@ function createHarness(callbacks) {
     const root = new FakeNode();
     root.querySelectorAll = (selector) => selector === '[data-tm-page]' ? panels : [];
     root.querySelector = (selector) => {
-        if (selector === '[data-tm-page-switcher]') return switcher;
+        if (selector === '[data-tm-page-switcher]') return trigger;
         if (selector === '#tm-page-switcher-button') return trigger;
         if (selector === '#tm-page-switcher-menu') return menu;
         return null;
@@ -101,7 +100,7 @@ function createHarness(callbacks) {
         pages,
         defaultPage: callbacks.defaultPage || 'themes',
     }));
-    return { root, doc, switcher, trigger, label, icon, menu, items, panels, controller };
+    return { root, doc, switcher: trigger, trigger, label, icon, menu, items, panels, controller };
 }
 
 test('page registry rejects invalid and duplicate ids without creating business data', () => {
@@ -120,13 +119,16 @@ test('missing or invalid active page still falls back to themes', () => {
     assert.equal(appShell.normalizePageId('unknown', pageDefinitions, 'themes'), 'themes');
 });
 
-test('compact switcher shows the current themes label and Font Awesome icons', () => {
+test('the title itself is the themes dropdown trigger with Font Awesome icons', () => {
     const html = appShell.buildPageSwitcherHtml({ pages: pageDefinitions, defaultPage: 'themes' });
-    assert.match(html, /data-tm-current-page-label>美化<\/span>/);
+    assert.match(html, /^<button[^>]+class="tm-head-title tm-head-title-switcher"/);
+    assert.match(html, /data-tm-page-switcher/);
+    assert.match(html, /data-tm-current-page-label>美化管理<\/span>/);
     assert.match(html, /fa-palette/);
     assert.match(html, /fa-chevron-down/);
     assert.match(html, /aria-haspopup="menu"/);
     assert.match(html, /aria-expanded="false"/);
+    assert.doesNotMatch(html, /<div class="tm-page-switcher"|class="tm-page-switcher-button"/);
 });
 
 test('menu contains three menuitems without stale tablist or tab semantics', () => {
@@ -134,6 +136,9 @@ test('menu contains three menuitems without stale tablist or tab semantics', () 
     assert.equal((html.match(/role="menuitem"/g) || []).length, 3);
     assert.equal((html.match(/data-tm-page-target=/g) || []).length, 3);
     assert.match(html, /role="menu"/);
+    assert.match(html, />美化管理<\/span>/);
+    assert.match(html, />头像管理<\/span>/);
+    assert.match(html, />背景管理<\/span>/);
     assert.doesNotMatch(html, /role="tablist"|role="tab"|aria-selected/);
     assert.doesNotMatch(html, /tm-primary-nav|tm-primary-tab/);
 });
@@ -150,7 +155,7 @@ test('controller initializes themes without opening the menu or firing lifecycle
     const harness = createHarness({ onChange() { changes += 1; } });
     assert.equal(harness.controller.getActivePage(), 'themes');
     assert.equal(harness.controller.isMenuOpen(), false);
-    assert.equal(harness.label.textContent, '美化');
+    assert.equal(harness.label.textContent, '美化管理');
     assert.equal(harness.trigger.getAttribute('aria-expanded'), 'false');
     assert.equal(changes, 0);
 });
@@ -190,7 +195,7 @@ test('selecting avatars switches lifecycle, closes the menu and updates the trig
     harness.menu.dispatch('click', harness.items[1]);
     assert.equal(harness.controller.getActivePage(), 'avatars');
     assert.equal(harness.controller.isMenuOpen(), false);
-    assert.equal(harness.label.textContent, '头像');
+    assert.equal(harness.label.textContent, '头像管理');
     assert.match(harness.icon.className, /fa-user/);
     assert.deepEqual(events, ['unmount:themes', 'mount:avatars']);
 });
@@ -200,7 +205,7 @@ test('selecting backgrounds updates active state and current marker', () => {
     harness.trigger.dispatch('click', harness.trigger);
     harness.menu.dispatch('click', harness.items[2]);
     assert.equal(harness.controller.getActivePage(), 'backgrounds');
-    assert.equal(harness.label.textContent, '背景');
+    assert.equal(harness.label.textContent, '背景管理');
     assert.match(harness.icon.className, /fa-image/);
     assert.equal(harness.items[2].getAttribute('aria-current'), 'page');
     assert.equal(harness.panels[2].hidden, false);
@@ -218,7 +223,7 @@ test('switching back to themes mounts the original theme page once', () => {
     harness.trigger.dispatch('click', harness.trigger);
     harness.menu.dispatch('click', harness.items[0]);
     assert.equal(harness.controller.getActivePage(), 'themes');
-    assert.equal(harness.label.textContent, '美化');
+    assert.equal(harness.label.textContent, '美化管理');
     assert.deepEqual(events, ['unmount:themes', 'mount:backgrounds', 'unmount:backgrounds', 'mount:themes']);
 });
 
@@ -270,7 +275,7 @@ test('shared popup guard can veto a page change while the menu still closes', ()
     harness.menu.dispatch('click', harness.items[1]);
     assert.equal(harness.controller.getActivePage(), 'themes');
     assert.equal(harness.controller.isMenuOpen(), false);
-    assert.equal(harness.label.textContent, '美化');
+    assert.equal(harness.label.textContent, '美化管理');
 });
 
 test('destroy removes component and temporary document listeners', () => {

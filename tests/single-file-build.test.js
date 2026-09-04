@@ -38,6 +38,8 @@ test('generated release entry has direct startup and no development module loade
     assert.match(bundle.source, /ns\.appShell\s*=\s*\{/);
     assert.match(bundle.source, /aria-haspopup="menu"/);
     assert.match(bundle.source, /buildPageMenuHtml/);
+    assert.match(bundle.source, /tm-head-title tm-head-title-switcher/);
+    assert.doesNotMatch(bundle.source, /class="tm-page-switcher-button"|tm-version/);
     assert.doesNotMatch(bundle.source, /role="tablist"/);
 });
 
