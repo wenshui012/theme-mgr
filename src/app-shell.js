@@ -37,51 +37,97 @@
         return ids[0] || DEFAULT_PAGE_ID;
     }
 
-    function buildShellHtml(options) {
+    function currentPage(pages, defaultPage) {
+        var normalized = normalizePages(pages);
+        var activeId = normalizePageId(defaultPage, normalized, DEFAULT_PAGE_ID);
+        return normalized.find(function (page) { return page.id === activeId; }) || normalized[0] || {
+            id: DEFAULT_PAGE_ID,
+            label: DEFAULT_PAGE_ID,
+            icon: '',
+        };
+    }
+
+    function buildPageSwitcherHtml(options) {
+        options = options || {};
+        var page = currentPage(options.pages, options.defaultPage);
+        return '<div class="tm-page-switcher" data-tm-page-switcher>' +
+            '<button type="button" class="tm-page-switcher-button" id="tm-page-switcher-button"' +
+            ' aria-haspopup="menu" aria-expanded="false" aria-controls="tm-page-switcher-menu"' +
+            ' aria-label="切换一级功能，当前：' + escapeHtml(page.label) + '">' +
+            '<i class="fa-solid ' + escapeHtml(page.icon) + ' tm-page-switcher-icon" data-tm-current-page-icon aria-hidden="true"></i>' +
+            '<span data-tm-current-page-label>' + escapeHtml(page.label) + '</span>' +
+            '<i class="fa-solid fa-chevron-down tm-page-switcher-chevron" aria-hidden="true"></i>' +
+            '</button></div>';
+    }
+
+    function buildPageMenuHtml(options) {
         options = options || {};
         var pages = normalizePages(options.pages);
-        var activePage = normalizePageId(options.defaultPage, pages, DEFAULT_PAGE_ID);
-        var navigation = pages.map(function (page) {
-            var active = page.id === activePage;
-            return '<button type="button" class="tm-primary-tab' + (active ? ' active' : '') + '"' +
-                ' id="tm-primary-tab-' + escapeHtml(page.id) + '"' +
-                ' role="tab" data-tm-page-target="' + escapeHtml(page.id) + '"' +
-                ' aria-controls="tm-page-' + escapeHtml(page.id) + '"' +
-                ' aria-selected="' + (active ? 'true' : 'false') + '"' +
-                (active ? ' aria-current="page" tabindex="0"' : ' tabindex="-1"') + '>' +
-                (page.icon ? '<i class="fa-solid ' + escapeHtml(page.icon) + '" aria-hidden="true"></i>' : '') +
-                '<span>' + escapeHtml(page.label) + '</span></button>';
+        var activeId = normalizePageId(options.defaultPage, pages, DEFAULT_PAGE_ID);
+        var items = pages.map(function (page) {
+            var active = page.id === activeId;
+            return '<button type="button" class="tm-page-menu-item' + (active ? ' active' : '') + '"' +
+                ' role="menuitem" data-tm-page-target="' + escapeHtml(page.id) + '"' +
+                (active ? ' aria-current="page"' : '') + ' tabindex="-1">' +
+                '<i class="fa-solid ' + escapeHtml(page.icon) + ' tm-page-menu-icon" aria-hidden="true"></i>' +
+                '<span>' + escapeHtml(page.label) + '</span>' +
+                '<i class="fa-solid fa-check tm-page-menu-check" aria-hidden="true"></i>' +
+                '</button>';
         }).join('');
-        var pagePanels = pages.map(function (page) {
-            var active = page.id === activePage;
+        return '<div class="tm-page-menu" id="tm-page-switcher-menu" role="menu"' +
+            ' aria-labelledby="tm-page-switcher-button" hidden>' + items + '</div>';
+    }
+
+    function buildPagePanelsHtml(options) {
+        options = options || {};
+        var pages = normalizePages(options.pages);
+        var activeId = normalizePageId(options.defaultPage, pages, DEFAULT_PAGE_ID);
+        var panels = pages.map(function (page) {
+            var active = page.id === activeId;
             return '<section class="tm-app-page tm-app-page-' + escapeHtml(page.id) + '"' +
-                ' id="tm-page-' + escapeHtml(page.id) + '"' +
-                ' role="tabpanel" data-tm-page="' + escapeHtml(page.id) + '"' +
-                ' aria-labelledby="tm-primary-tab-' + escapeHtml(page.id) + '"' +
-                (active ? '' : ' hidden') + '>' + page.html + '</section>';
+                ' id="tm-page-' + escapeHtml(page.id) + '" data-tm-page="' + escapeHtml(page.id) + '"' +
+                ' aria-label="' + escapeHtml(page.label) + '"' + (active ? '' : ' hidden') + '>' +
+                page.html + '</section>';
         }).join('');
-        return '<nav class="tm-primary-nav" data-tm-primary-nav role="tablist" aria-label="一级功能">' +
-            navigation + '</nav><main class="tm-app-pages">' + pagePanels + '</main>';
+        return '<main class="tm-app-pages">' + panels + '</main>';
+    }
+
+    function buildShellHtml(options) {
+        return buildPageSwitcherHtml(options) + buildPagePanelsHtml(options) + buildPageMenuHtml(options);
     }
 
     function createAppShell(options) {
         options = options || {};
         var root = options.root;
         if (!root || typeof root.querySelectorAll !== 'function') throw new Error('app shell root is required');
+        var doc = options.document || global.document;
         var pages = normalizePages(options.pages);
         var pageById = Object.create(null);
         pages.forEach(function (page) { pageById[page.id] = page; });
         var activePage = normalizePageId(options.defaultPage, pages, DEFAULT_PAGE_ID);
-        var nav = root.querySelector('[data-tm-primary-nav]');
+        var switcher = root.querySelector('[data-tm-page-switcher]');
+        var trigger = root.querySelector('#tm-page-switcher-button');
+        var menu = root.querySelector('#tm-page-switcher-menu');
         var destroyed = false;
+        var menuOpen = false;
+
+        function menuItems() {
+            return menu ? Array.prototype.slice.call(menu.querySelectorAll('[data-tm-page-target]')) : [];
+        }
 
         function syncState() {
+            var page = pageById[activePage];
             root.setAttribute('data-tm-active-page', activePage);
-            Array.prototype.forEach.call(root.querySelectorAll('[data-tm-page-target]'), function (button) {
+            if (trigger && page) {
+                var label = trigger.querySelector('[data-tm-current-page-label]');
+                var icon = trigger.querySelector('[data-tm-current-page-icon]');
+                if (label) label.textContent = page.label;
+                if (icon) icon.className = 'fa-solid ' + page.icon + ' tm-page-switcher-icon';
+                trigger.setAttribute('aria-label', '切换一级功能，当前：' + page.label);
+            }
+            menuItems().forEach(function (button) {
                 var active = button.getAttribute('data-tm-page-target') === activePage;
                 button.classList.toggle('active', active);
-                button.setAttribute('aria-selected', active ? 'true' : 'false');
-                button.setAttribute('tabindex', active ? '0' : '-1');
                 if (active) button.setAttribute('aria-current', 'page');
                 else button.removeAttribute('aria-current');
             });
@@ -107,58 +153,162 @@
             return true;
         }
 
-        function pageButtonFromEvent(event) {
+        function positionMenu() {
+            if (!menu || !trigger || typeof trigger.getBoundingClientRect !== 'function') return;
+            var triggerRect = trigger.getBoundingClientRect();
+            var rootRect = typeof root.getBoundingClientRect === 'function'
+                ? root.getBoundingClientRect()
+                : { left: 0, top: 0, width: root.clientWidth || 0 };
+            var menuWidth = menu.offsetWidth || 148;
+            var maxLeft = Math.max(8, (rootRect.width || root.clientWidth || 0) - menuWidth - 8);
+            var left = Math.max(8, Math.min(triggerRect.left - rootRect.left, maxLeft));
+            menu.style.left = left + 'px';
+            menu.style.top = Math.max(8, triggerRect.bottom - rootRect.top + 5) + 'px';
+        }
+
+        function removeOpenListeners() {
+            if (!doc || typeof doc.removeEventListener !== 'function') return;
+            doc.removeEventListener('pointerdown', handleOutsidePointer, true);
+            doc.removeEventListener('keydown', handleDocumentKeydown, true);
+        }
+
+        function closeMenu(options) {
+            options = options || {};
+            if (!menuOpen) return false;
+            menuOpen = false;
+            if (menu) {
+                menu.hidden = true;
+                menu.setAttribute('hidden', '');
+            }
+            if (trigger) trigger.setAttribute('aria-expanded', 'false');
+            if (switcher) switcher.classList.remove('open');
+            removeOpenListeners();
+            if (options.restoreFocus !== false && trigger && typeof trigger.focus === 'function') trigger.focus();
+            return true;
+        }
+
+        function openMenu(options) {
+            options = options || {};
+            if (destroyed || menuOpen || !menu) return false;
+            menuOpen = true;
+            menu.hidden = false;
+            menu.removeAttribute('hidden');
+            if (trigger) trigger.setAttribute('aria-expanded', 'true');
+            if (switcher) switcher.classList.add('open');
+            positionMenu();
+            if (doc && typeof doc.addEventListener === 'function') {
+                doc.addEventListener('pointerdown', handleOutsidePointer, true);
+                doc.addEventListener('keydown', handleDocumentKeydown, true);
+            }
+            if (options.focusMenu) {
+                var active = menuItems().find(function (item) { return item.getAttribute('aria-current') === 'page'; });
+                if (active && typeof active.focus === 'function') active.focus();
+            }
+            return true;
+        }
+
+        function toggleMenu(source) {
+            return menuOpen ? closeMenu({ restoreFocus: source === 'keyboard' }) : openMenu({ focusMenu: source === 'keyboard' });
+        }
+
+        function handleTriggerClick() {
+            toggleMenu('click');
+        }
+
+        function handleTriggerKeydown(event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                if (event.preventDefault) event.preventDefault();
+                toggleMenu('keyboard');
+            } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                if (event.preventDefault) event.preventDefault();
+                openMenu({ focusMenu: true });
+            } else if (event.key === 'Escape') {
+                closeMenu();
+            }
+        }
+
+        function itemFromEvent(event) {
             if (!event || !event.target) return null;
-            var button = typeof event.target.closest === 'function'
+            var item = typeof event.target.closest === 'function'
                 ? event.target.closest('[data-tm-page-target]')
                 : event.target;
-            return button && (!nav || typeof nav.contains !== 'function' || nav.contains(button)) ? button : null;
+            return item && (!menu || typeof menu.contains !== 'function' || menu.contains(item)) ? item : null;
         }
 
-        function handleClick(event) {
-            var button = pageButtonFromEvent(event);
-            if (!button) return;
-            setActivePage(button.getAttribute('data-tm-page-target'), 'click');
+        function selectItem(item, source) {
+            if (!item) return false;
+            var changed = setActivePage(item.getAttribute('data-tm-page-target'), source);
+            closeMenu({ restoreFocus: source === 'keyboard' });
+            return changed;
         }
 
-        function handleKeydown(event) {
-            var button = pageButtonFromEvent(event);
-            if (!button) return;
-            var currentIndex = pages.findIndex(function (page) {
-                return page.id === button.getAttribute('data-tm-page-target');
-            });
-            var nextIndex = currentIndex;
-            if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % pages.length;
-            else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + pages.length) % pages.length;
+        function handleMenuClick(event) {
+            selectItem(itemFromEvent(event), 'click');
+        }
+
+        function handleMenuKeydown(event) {
+            var items = menuItems();
+            var item = itemFromEvent(event);
+            var index = items.indexOf(item);
+            var nextIndex = index;
+            if (event.key === 'ArrowDown') nextIndex = (index + 1) % items.length;
+            else if (event.key === 'ArrowUp') nextIndex = (index - 1 + items.length) % items.length;
             else if (event.key === 'Home') nextIndex = 0;
-            else if (event.key === 'End') nextIndex = pages.length - 1;
+            else if (event.key === 'End') nextIndex = items.length - 1;
             else if (event.key === 'Enter' || event.key === ' ') {
-                setActivePage(button.getAttribute('data-tm-page-target'), 'keyboard');
+                if (event.preventDefault) event.preventDefault();
+                selectItem(item, 'keyboard');
+                return;
+            } else if (event.key === 'Escape') {
+                if (event.preventDefault) event.preventDefault();
+                closeMenu();
                 return;
             } else return;
             if (event.preventDefault) event.preventDefault();
-            var nextPage = pages[nextIndex];
-            if (!nextPage) return;
-            setActivePage(nextPage.id, 'keyboard');
-            var nextButton = root.querySelector('[data-tm-page-target="' + nextPage.id + '"]');
-            if (nextButton && typeof nextButton.focus === 'function') nextButton.focus();
+            if (items[nextIndex] && typeof items[nextIndex].focus === 'function') items[nextIndex].focus();
         }
 
-        if (nav && typeof nav.addEventListener === 'function') {
-            nav.addEventListener('click', handleClick);
-            nav.addEventListener('keydown', handleKeydown);
+        function handleOutsidePointer(event) {
+            if (!menuOpen || !event || !event.target) return;
+            if (menu && typeof menu.contains === 'function' && menu.contains(event.target)) return;
+            if (trigger && typeof trigger.contains === 'function' && trigger.contains(event.target)) return;
+            closeMenu({ restoreFocus: false });
+        }
+
+        function handleDocumentKeydown(event) {
+            if (event && event.key === 'Escape') {
+                if (event.preventDefault) event.preventDefault();
+                closeMenu();
+            }
+        }
+
+        if (trigger && typeof trigger.addEventListener === 'function') {
+            trigger.addEventListener('click', handleTriggerClick);
+            trigger.addEventListener('keydown', handleTriggerKeydown);
+        }
+        if (menu && typeof menu.addEventListener === 'function') {
+            menu.addEventListener('click', handleMenuClick);
+            menu.addEventListener('keydown', handleMenuKeydown);
         }
         syncState();
 
         return {
             getActivePage: function () { return activePage; },
+            isMenuOpen: function () { return menuOpen; },
             setActivePage: setActivePage,
+            openMenu: openMenu,
+            closeMenu: closeMenu,
             destroy: function () {
                 if (destroyed) return;
+                closeMenu({ restoreFocus: false });
                 destroyed = true;
-                if (nav && typeof nav.removeEventListener === 'function') {
-                    nav.removeEventListener('click', handleClick);
-                    nav.removeEventListener('keydown', handleKeydown);
+                if (trigger && typeof trigger.removeEventListener === 'function') {
+                    trigger.removeEventListener('click', handleTriggerClick);
+                    trigger.removeEventListener('keydown', handleTriggerKeydown);
+                }
+                if (menu && typeof menu.removeEventListener === 'function') {
+                    menu.removeEventListener('click', handleMenuClick);
+                    menu.removeEventListener('keydown', handleMenuKeydown);
                 }
             },
         };
@@ -168,6 +318,9 @@
         DEFAULT_PAGE_ID: DEFAULT_PAGE_ID,
         normalizePages: normalizePages,
         normalizePageId: normalizePageId,
+        buildPageSwitcherHtml: buildPageSwitcherHtml,
+        buildPageMenuHtml: buildPageMenuHtml,
+        buildPagePanelsHtml: buildPagePanelsHtml,
         buildShellHtml: buildShellHtml,
         createAppShell: createAppShell,
     };

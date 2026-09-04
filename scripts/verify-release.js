@@ -85,6 +85,9 @@ function main() {
     assert(actual.includes('global.ThemeMgrModules = global.ThemeMgrModules || {}'), 'ThemeMgrModules registration is missing');
     assert(actual.includes('ns.appShell = {'), 'app shell module registration is missing');
     assert(actual.includes('appShellApi.createAppShell'), 'app shell initialization is missing');
+    assert(actual.includes('aria-haspopup="menu"'), 'compact page switcher menu semantics are missing');
+    assert(actual.includes('buildPageMenuHtml'), 'compact page switcher menu builder is missing');
+    assert(!actual.includes('role="tablist"'), 'stale primary tablist semantics remain');
     assert(actual.includes('modules.createUiMain({ version: TM_VERSION, modules: modules }).start()'), 'single-file createUiMain startup is missing');
 
     console.log(`[release verify] PASS v${expected.version}`);

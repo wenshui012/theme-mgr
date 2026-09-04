@@ -36,6 +36,9 @@ test('generated release entry has direct startup and no development module loade
     assert.doesNotMatch(bundle.source, /createElement\s*\(\s*['"]script['"]\s*\)/);
     assert.doesNotMatch(bundle.source, /\bloadModule\s*\(/);
     assert.match(bundle.source, /ns\.appShell\s*=\s*\{/);
+    assert.match(bundle.source, /aria-haspopup="menu"/);
+    assert.match(bundle.source, /buildPageMenuHtml/);
+    assert.doesNotMatch(bundle.source, /role="tablist"/);
 });
 
 test('checked-in dist entry exactly matches a fresh build', () => {

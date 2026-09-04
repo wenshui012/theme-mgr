@@ -7410,7 +7410,7 @@
 })(window);
 /* END MODULE 14/20: src/image-loader.js */
 
-/* BEGIN MODULE 15/20: src/app-shell.js | sha256:7aa8779da2fa2e4b570faf1d6d7f5a080b511eef6ba6045658dd67fad410fd17 */
+/* BEGIN MODULE 15/20: src/app-shell.js | sha256:fe7978c3f8dc2f8d2c21a1cdb656881bef878d0cca07d7596a34609e2d3ab8ed */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -7450,51 +7450,97 @@
         return ids[0] || DEFAULT_PAGE_ID;
     }
 
-    function buildShellHtml(options) {
+    function currentPage(pages, defaultPage) {
+        var normalized = normalizePages(pages);
+        var activeId = normalizePageId(defaultPage, normalized, DEFAULT_PAGE_ID);
+        return normalized.find(function (page) { return page.id === activeId; }) || normalized[0] || {
+            id: DEFAULT_PAGE_ID,
+            label: DEFAULT_PAGE_ID,
+            icon: '',
+        };
+    }
+
+    function buildPageSwitcherHtml(options) {
+        options = options || {};
+        var page = currentPage(options.pages, options.defaultPage);
+        return '<div class="tm-page-switcher" data-tm-page-switcher>' +
+            '<button type="button" class="tm-page-switcher-button" id="tm-page-switcher-button"' +
+            ' aria-haspopup="menu" aria-expanded="false" aria-controls="tm-page-switcher-menu"' +
+            ' aria-label="切换一级功能，当前：' + escapeHtml(page.label) + '">' +
+            '<i class="fa-solid ' + escapeHtml(page.icon) + ' tm-page-switcher-icon" data-tm-current-page-icon aria-hidden="true"></i>' +
+            '<span data-tm-current-page-label>' + escapeHtml(page.label) + '</span>' +
+            '<i class="fa-solid fa-chevron-down tm-page-switcher-chevron" aria-hidden="true"></i>' +
+            '</button></div>';
+    }
+
+    function buildPageMenuHtml(options) {
         options = options || {};
         var pages = normalizePages(options.pages);
-        var activePage = normalizePageId(options.defaultPage, pages, DEFAULT_PAGE_ID);
-        var navigation = pages.map(function (page) {
-            var active = page.id === activePage;
-            return '<button type="button" class="tm-primary-tab' + (active ? ' active' : '') + '"' +
-                ' id="tm-primary-tab-' + escapeHtml(page.id) + '"' +
-                ' role="tab" data-tm-page-target="' + escapeHtml(page.id) + '"' +
-                ' aria-controls="tm-page-' + escapeHtml(page.id) + '"' +
-                ' aria-selected="' + (active ? 'true' : 'false') + '"' +
-                (active ? ' aria-current="page" tabindex="0"' : ' tabindex="-1"') + '>' +
-                (page.icon ? '<i class="fa-solid ' + escapeHtml(page.icon) + '" aria-hidden="true"></i>' : '') +
-                '<span>' + escapeHtml(page.label) + '</span></button>';
+        var activeId = normalizePageId(options.defaultPage, pages, DEFAULT_PAGE_ID);
+        var items = pages.map(function (page) {
+            var active = page.id === activeId;
+            return '<button type="button" class="tm-page-menu-item' + (active ? ' active' : '') + '"' +
+                ' role="menuitem" data-tm-page-target="' + escapeHtml(page.id) + '"' +
+                (active ? ' aria-current="page"' : '') + ' tabindex="-1">' +
+                '<i class="fa-solid ' + escapeHtml(page.icon) + ' tm-page-menu-icon" aria-hidden="true"></i>' +
+                '<span>' + escapeHtml(page.label) + '</span>' +
+                '<i class="fa-solid fa-check tm-page-menu-check" aria-hidden="true"></i>' +
+                '</button>';
         }).join('');
-        var pagePanels = pages.map(function (page) {
-            var active = page.id === activePage;
+        return '<div class="tm-page-menu" id="tm-page-switcher-menu" role="menu"' +
+            ' aria-labelledby="tm-page-switcher-button" hidden>' + items + '</div>';
+    }
+
+    function buildPagePanelsHtml(options) {
+        options = options || {};
+        var pages = normalizePages(options.pages);
+        var activeId = normalizePageId(options.defaultPage, pages, DEFAULT_PAGE_ID);
+        var panels = pages.map(function (page) {
+            var active = page.id === activeId;
             return '<section class="tm-app-page tm-app-page-' + escapeHtml(page.id) + '"' +
-                ' id="tm-page-' + escapeHtml(page.id) + '"' +
-                ' role="tabpanel" data-tm-page="' + escapeHtml(page.id) + '"' +
-                ' aria-labelledby="tm-primary-tab-' + escapeHtml(page.id) + '"' +
-                (active ? '' : ' hidden') + '>' + page.html + '</section>';
+                ' id="tm-page-' + escapeHtml(page.id) + '" data-tm-page="' + escapeHtml(page.id) + '"' +
+                ' aria-label="' + escapeHtml(page.label) + '"' + (active ? '' : ' hidden') + '>' +
+                page.html + '</section>';
         }).join('');
-        return '<nav class="tm-primary-nav" data-tm-primary-nav role="tablist" aria-label="一级功能">' +
-            navigation + '</nav><main class="tm-app-pages">' + pagePanels + '</main>';
+        return '<main class="tm-app-pages">' + panels + '</main>';
+    }
+
+    function buildShellHtml(options) {
+        return buildPageSwitcherHtml(options) + buildPagePanelsHtml(options) + buildPageMenuHtml(options);
     }
 
     function createAppShell(options) {
         options = options || {};
         var root = options.root;
         if (!root || typeof root.querySelectorAll !== 'function') throw new Error('app shell root is required');
+        var doc = options.document || global.document;
         var pages = normalizePages(options.pages);
         var pageById = Object.create(null);
         pages.forEach(function (page) { pageById[page.id] = page; });
         var activePage = normalizePageId(options.defaultPage, pages, DEFAULT_PAGE_ID);
-        var nav = root.querySelector('[data-tm-primary-nav]');
+        var switcher = root.querySelector('[data-tm-page-switcher]');
+        var trigger = root.querySelector('#tm-page-switcher-button');
+        var menu = root.querySelector('#tm-page-switcher-menu');
         var destroyed = false;
+        var menuOpen = false;
+
+        function menuItems() {
+            return menu ? Array.prototype.slice.call(menu.querySelectorAll('[data-tm-page-target]')) : [];
+        }
 
         function syncState() {
+            var page = pageById[activePage];
             root.setAttribute('data-tm-active-page', activePage);
-            Array.prototype.forEach.call(root.querySelectorAll('[data-tm-page-target]'), function (button) {
+            if (trigger && page) {
+                var label = trigger.querySelector('[data-tm-current-page-label]');
+                var icon = trigger.querySelector('[data-tm-current-page-icon]');
+                if (label) label.textContent = page.label;
+                if (icon) icon.className = 'fa-solid ' + page.icon + ' tm-page-switcher-icon';
+                trigger.setAttribute('aria-label', '切换一级功能，当前：' + page.label);
+            }
+            menuItems().forEach(function (button) {
                 var active = button.getAttribute('data-tm-page-target') === activePage;
                 button.classList.toggle('active', active);
-                button.setAttribute('aria-selected', active ? 'true' : 'false');
-                button.setAttribute('tabindex', active ? '0' : '-1');
                 if (active) button.setAttribute('aria-current', 'page');
                 else button.removeAttribute('aria-current');
             });
@@ -7520,58 +7566,162 @@
             return true;
         }
 
-        function pageButtonFromEvent(event) {
+        function positionMenu() {
+            if (!menu || !trigger || typeof trigger.getBoundingClientRect !== 'function') return;
+            var triggerRect = trigger.getBoundingClientRect();
+            var rootRect = typeof root.getBoundingClientRect === 'function'
+                ? root.getBoundingClientRect()
+                : { left: 0, top: 0, width: root.clientWidth || 0 };
+            var menuWidth = menu.offsetWidth || 148;
+            var maxLeft = Math.max(8, (rootRect.width || root.clientWidth || 0) - menuWidth - 8);
+            var left = Math.max(8, Math.min(triggerRect.left - rootRect.left, maxLeft));
+            menu.style.left = left + 'px';
+            menu.style.top = Math.max(8, triggerRect.bottom - rootRect.top + 5) + 'px';
+        }
+
+        function removeOpenListeners() {
+            if (!doc || typeof doc.removeEventListener !== 'function') return;
+            doc.removeEventListener('pointerdown', handleOutsidePointer, true);
+            doc.removeEventListener('keydown', handleDocumentKeydown, true);
+        }
+
+        function closeMenu(options) {
+            options = options || {};
+            if (!menuOpen) return false;
+            menuOpen = false;
+            if (menu) {
+                menu.hidden = true;
+                menu.setAttribute('hidden', '');
+            }
+            if (trigger) trigger.setAttribute('aria-expanded', 'false');
+            if (switcher) switcher.classList.remove('open');
+            removeOpenListeners();
+            if (options.restoreFocus !== false && trigger && typeof trigger.focus === 'function') trigger.focus();
+            return true;
+        }
+
+        function openMenu(options) {
+            options = options || {};
+            if (destroyed || menuOpen || !menu) return false;
+            menuOpen = true;
+            menu.hidden = false;
+            menu.removeAttribute('hidden');
+            if (trigger) trigger.setAttribute('aria-expanded', 'true');
+            if (switcher) switcher.classList.add('open');
+            positionMenu();
+            if (doc && typeof doc.addEventListener === 'function') {
+                doc.addEventListener('pointerdown', handleOutsidePointer, true);
+                doc.addEventListener('keydown', handleDocumentKeydown, true);
+            }
+            if (options.focusMenu) {
+                var active = menuItems().find(function (item) { return item.getAttribute('aria-current') === 'page'; });
+                if (active && typeof active.focus === 'function') active.focus();
+            }
+            return true;
+        }
+
+        function toggleMenu(source) {
+            return menuOpen ? closeMenu({ restoreFocus: source === 'keyboard' }) : openMenu({ focusMenu: source === 'keyboard' });
+        }
+
+        function handleTriggerClick() {
+            toggleMenu('click');
+        }
+
+        function handleTriggerKeydown(event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                if (event.preventDefault) event.preventDefault();
+                toggleMenu('keyboard');
+            } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                if (event.preventDefault) event.preventDefault();
+                openMenu({ focusMenu: true });
+            } else if (event.key === 'Escape') {
+                closeMenu();
+            }
+        }
+
+        function itemFromEvent(event) {
             if (!event || !event.target) return null;
-            var button = typeof event.target.closest === 'function'
+            var item = typeof event.target.closest === 'function'
                 ? event.target.closest('[data-tm-page-target]')
                 : event.target;
-            return button && (!nav || typeof nav.contains !== 'function' || nav.contains(button)) ? button : null;
+            return item && (!menu || typeof menu.contains !== 'function' || menu.contains(item)) ? item : null;
         }
 
-        function handleClick(event) {
-            var button = pageButtonFromEvent(event);
-            if (!button) return;
-            setActivePage(button.getAttribute('data-tm-page-target'), 'click');
+        function selectItem(item, source) {
+            if (!item) return false;
+            var changed = setActivePage(item.getAttribute('data-tm-page-target'), source);
+            closeMenu({ restoreFocus: source === 'keyboard' });
+            return changed;
         }
 
-        function handleKeydown(event) {
-            var button = pageButtonFromEvent(event);
-            if (!button) return;
-            var currentIndex = pages.findIndex(function (page) {
-                return page.id === button.getAttribute('data-tm-page-target');
-            });
-            var nextIndex = currentIndex;
-            if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % pages.length;
-            else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + pages.length) % pages.length;
+        function handleMenuClick(event) {
+            selectItem(itemFromEvent(event), 'click');
+        }
+
+        function handleMenuKeydown(event) {
+            var items = menuItems();
+            var item = itemFromEvent(event);
+            var index = items.indexOf(item);
+            var nextIndex = index;
+            if (event.key === 'ArrowDown') nextIndex = (index + 1) % items.length;
+            else if (event.key === 'ArrowUp') nextIndex = (index - 1 + items.length) % items.length;
             else if (event.key === 'Home') nextIndex = 0;
-            else if (event.key === 'End') nextIndex = pages.length - 1;
+            else if (event.key === 'End') nextIndex = items.length - 1;
             else if (event.key === 'Enter' || event.key === ' ') {
-                setActivePage(button.getAttribute('data-tm-page-target'), 'keyboard');
+                if (event.preventDefault) event.preventDefault();
+                selectItem(item, 'keyboard');
+                return;
+            } else if (event.key === 'Escape') {
+                if (event.preventDefault) event.preventDefault();
+                closeMenu();
                 return;
             } else return;
             if (event.preventDefault) event.preventDefault();
-            var nextPage = pages[nextIndex];
-            if (!nextPage) return;
-            setActivePage(nextPage.id, 'keyboard');
-            var nextButton = root.querySelector('[data-tm-page-target="' + nextPage.id + '"]');
-            if (nextButton && typeof nextButton.focus === 'function') nextButton.focus();
+            if (items[nextIndex] && typeof items[nextIndex].focus === 'function') items[nextIndex].focus();
         }
 
-        if (nav && typeof nav.addEventListener === 'function') {
-            nav.addEventListener('click', handleClick);
-            nav.addEventListener('keydown', handleKeydown);
+        function handleOutsidePointer(event) {
+            if (!menuOpen || !event || !event.target) return;
+            if (menu && typeof menu.contains === 'function' && menu.contains(event.target)) return;
+            if (trigger && typeof trigger.contains === 'function' && trigger.contains(event.target)) return;
+            closeMenu({ restoreFocus: false });
+        }
+
+        function handleDocumentKeydown(event) {
+            if (event && event.key === 'Escape') {
+                if (event.preventDefault) event.preventDefault();
+                closeMenu();
+            }
+        }
+
+        if (trigger && typeof trigger.addEventListener === 'function') {
+            trigger.addEventListener('click', handleTriggerClick);
+            trigger.addEventListener('keydown', handleTriggerKeydown);
+        }
+        if (menu && typeof menu.addEventListener === 'function') {
+            menu.addEventListener('click', handleMenuClick);
+            menu.addEventListener('keydown', handleMenuKeydown);
         }
         syncState();
 
         return {
             getActivePage: function () { return activePage; },
+            isMenuOpen: function () { return menuOpen; },
             setActivePage: setActivePage,
+            openMenu: openMenu,
+            closeMenu: closeMenu,
             destroy: function () {
                 if (destroyed) return;
+                closeMenu({ restoreFocus: false });
                 destroyed = true;
-                if (nav && typeof nav.removeEventListener === 'function') {
-                    nav.removeEventListener('click', handleClick);
-                    nav.removeEventListener('keydown', handleKeydown);
+                if (trigger && typeof trigger.removeEventListener === 'function') {
+                    trigger.removeEventListener('click', handleTriggerClick);
+                    trigger.removeEventListener('keydown', handleTriggerKeydown);
+                }
+                if (menu && typeof menu.removeEventListener === 'function') {
+                    menu.removeEventListener('click', handleMenuClick);
+                    menu.removeEventListener('keydown', handleMenuKeydown);
                 }
             },
         };
@@ -7581,13 +7731,16 @@
         DEFAULT_PAGE_ID: DEFAULT_PAGE_ID,
         normalizePages: normalizePages,
         normalizePageId: normalizePageId,
+        buildPageSwitcherHtml: buildPageSwitcherHtml,
+        buildPageMenuHtml: buildPageMenuHtml,
+        buildPagePanelsHtml: buildPagePanelsHtml,
         buildShellHtml: buildShellHtml,
         createAppShell: createAppShell,
     };
 })(window);
 /* END MODULE 15/20: src/app-shell.js */
 
-/* BEGIN MODULE 16/20: src/styles.js | sha256:5aa5e4e6475d7893e28997a61f18544c1420647a7fbb9b5d12a9ef9f0bb8e549 */
+/* BEGIN MODULE 16/20: src/styles.js | sha256:9441913ce84ecd18483f203bdc11e42964123c365e8f04afcf3c48d59b3c56d1 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -7617,14 +7770,25 @@
             '.tm-head>* ,.tm-bottombar>*{position:relative;z-index:1;}',
             '.tm-head-title{font-weight:700;font-size:1.05em;display:flex;align-items:center;gap:7px;flex:1;min-width:0;}',
             '.tm-head-title i{color:var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-head-name{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
             '.tm-version{align-self:flex-end;font-size:.58em;font-weight:700;line-height:1;padding:0 0 2px;color:var(--tm-text);opacity:.55;flex-shrink:0;}',
             '.tm-head-actions{display:flex;align-items:center;gap:4px;}',
-            '.tm-primary-nav{display:flex;align-items:center;justify-content:center;gap:4px;padding:5px 12px;flex-shrink:0;border-bottom:1px solid var(--tm-border,rgba(127,127,127,.1));background:color-mix(in srgb,var(--tm-head-bg,transparent) 82%,transparent);overflow-x:auto;scrollbar-width:none;}',
-            '.tm-primary-nav::-webkit-scrollbar{display:none;}',
-            '.tm-primary-tab{min-width:78px;min-height:36px;padding:6px 16px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border:var(--tm-control-border-style,1px solid transparent);border-radius:var(--tm-control-radius,10px);background:transparent;color:inherit;font:inherit;font-size:.82em;font-weight:650;cursor:pointer;opacity:.58;transition:background .16s,color .16s,opacity .16s,border-color .16s;white-space:nowrap;}',
-            '.tm-primary-tab:hover{opacity:.9;background:var(--tm-control-hover,rgba(127,127,127,.1));}',
-            '.tm-primary-tab.active{opacity:1;color:var(--SmartThemeQuoteColor,#7c6daf);background:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 15%,transparent);border-color:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 32%,transparent);}',
-            '.tm-primary-tab:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf);outline-offset:1px;}',
+            '.tm-page-switcher{display:flex;align-items:center;flex-shrink:0;}',
+            '.tm-page-switcher-button{height:32px;max-width:112px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:var(--tm-control-radius,9px);background:var(--tm-control-bg,rgba(127,127,127,.06));color:inherit;font:inherit;font-size:.8em;font-weight:650;cursor:pointer;opacity:.72;white-space:nowrap;transition:background .16s,color .16s,opacity .16s;}',
+            '.tm-page-switcher-button:hover,.tm-page-switcher.open .tm-page-switcher-button{opacity:1;background:var(--tm-control-hover,rgba(127,127,127,.12));}',
+            '.tm-page-switcher-button:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf);outline-offset:1px;}',
+            '.tm-page-switcher-icon{color:var(--SmartThemeQuoteColor,#7c6daf);font-size:.92em;flex-shrink:0;}',
+            '.tm-page-switcher-button>span{min-width:0;overflow:hidden;text-overflow:ellipsis;}',
+            '.tm-page-switcher-chevron{font-size:.68em;opacity:.52;transition:transform .16s;flex-shrink:0;}',
+            '.tm-page-switcher.open .tm-page-switcher-chevron{transform:rotate(180deg);}',
+            '.tm-page-menu{position:absolute;width:148px;max-width:calc(100vw - 16px);padding:6px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box;border:1px solid var(--tm-control-border,rgba(127,127,127,.16));border-radius:var(--tm-panel-radius,12px);background:var(--tm-bg2,var(--SmartThemeBackgroundColor,#1e1e24));color:var(--tm-text,var(--SmartThemeBodyColor,#eee));box-shadow:0 10px 30px var(--tm-shadow,rgba(0,0,0,.3));backdrop-filter:var(--tm-panel-blur,blur(14px));pointer-events:auto;z-index:4;animation:tm-popin .14s ease;}',
+            '.tm-page-menu[hidden]{display:none !important;}',
+            '.tm-page-menu-item{width:100%;min-height:40px;padding:7px 10px;display:grid;grid-template-columns:18px minmax(0,1fr) 16px;align-items:center;gap:8px;border:0;border-radius:var(--tm-control-radius,8px);background:transparent;color:inherit;font:inherit;font-size:.84em;text-align:left;cursor:pointer;opacity:.72;}',
+            '.tm-page-menu-item:hover,.tm-page-menu-item:focus-visible{opacity:1;background:var(--tm-control-hover,rgba(127,127,127,.12));outline:none;}',
+            '.tm-page-menu-item.active{opacity:1;background:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 12%,transparent);}',
+            '.tm-page-menu-icon{color:var(--SmartThemeQuoteColor,#7c6daf);text-align:center;}',
+            '.tm-page-menu-check{color:var(--SmartThemeQuoteColor,#7c6daf);opacity:0;font-size:.76em;}',
+            '.tm-page-menu-item.active .tm-page-menu-check{opacity:.85;}',
             '.tm-app-pages{flex:1;min-width:0;min-height:0;display:flex;overflow:hidden;}',
             '.tm-app-page{flex:1;min-width:0;min-height:0;overflow:hidden;}',
             '.tm-app-page[hidden]{display:none !important;}',
@@ -7638,8 +7802,8 @@
             '.tm-overlay:not([data-tm-active-page="themes"]) .tm-bottombar{justify-content:flex-end;}',
             '#tm-bottom-settings{margin-left:auto;}',
             '.tm-auto-hide-head .tm-head{cursor:pointer;}',
-            '.tm-auto-hide-head .tm-head-title,.tm-auto-hide-head .tm-head-actions{transition:opacity .18s ease,transform .18s ease,visibility .18s;}',
-            '.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-title,.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-actions{opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-4px);}',
+            '.tm-auto-hide-head .tm-head-title,.tm-auto-hide-head .tm-page-switcher,.tm-auto-hide-head .tm-head-actions{transition:opacity .18s ease,transform .18s ease,visibility .18s;}',
+            '.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-title,.tm-auto-hide-head:not(.tm-head-revealed) .tm-page-switcher,.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-actions{opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-4px);}',
             '.tm-icon-btn{cursor:pointer;background:none;border:none;opacity:.55;font-size:1.15em;',
             'width:34px;height:34px;border-radius:var(--tm-control-radius,50%);display:flex;align-items:center;justify-content:center;transition:.18s;color:inherit;box-shadow:var(--tm-control-shadow,none);flex-shrink:0;}',
             '.tm-icon-btn:hover{opacity:1;background:var(--tm-control-hover,rgba(127,127,127,.12));color:var(--SmartThemeQuoteColor,#7c6daf);}',
@@ -7917,7 +8081,8 @@
             '.tm-cat-item.drag-over-top{border-top:2px solid var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-cat-item.drag-over-bottom{border-bottom:2px solid var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-cat-item.dragging{opacity:.3;}',
-            '@media (max-width:480px){.tm-primary-nav{justify-content:stretch;padding-left:8px;padding-right:8px}.tm-primary-tab{flex:1;min-width:0;min-height:40px;padding-left:8px;padding-right:8px}.tm-app-page-avatars,.tm-app-page-backgrounds{padding:14px}.tm-day-night-assign{grid-template-columns:minmax(0,1fr) 30px minmax(0,1fr);gap:5px}.tm-day-night-choice{padding:8px 7px}.tm-day-night-choice-label{font-size:.74em}.tm-day-night-choice select{font-size:.76em;padding:6px 5px}.tm-day-night-swap{width:30px;height:30px}.tm-day-night-swap-icon{width:16px;height:16px}.tm-edit-sheet-title{align-items:flex-start}.tm-day-night-delete-actions .tm-btn{flex:1;min-width:96px;padding-left:8px;padding-right:8px}}',
+            '@media (max-width:430px){.tm-head{gap:5px;padding-left:8px;padding-right:8px}.tm-head-title{gap:4px}.tm-head-name{font-size:.9em}.tm-version{display:none}.tm-page-switcher-button{height:40px;max-width:92px;padding-left:8px;padding-right:8px}.tm-head-actions{gap:0}.tm-icon-btn{width:32px}.tm-app-page-avatars,.tm-app-page-backgrounds{padding:14px}}',
+            '@media (max-width:480px){.tm-day-night-assign{grid-template-columns:minmax(0,1fr) 30px minmax(0,1fr);gap:5px}.tm-day-night-choice{padding:8px 7px}.tm-day-night-choice-label{font-size:.74em}.tm-day-night-choice select{font-size:.76em;padding:6px 5px}.tm-day-night-swap{width:30px;height:30px}.tm-day-night-swap-icon{width:16px;height:16px}.tm-edit-sheet-title{align-items:flex-start}.tm-day-night-delete-actions .tm-btn{flex:1;min-width:96px;padding-left:8px;padding-right:8px}}',
             '.tm-drag-handle{opacity:.35;cursor:grab;padding:0 6px;font-size:.9em;touch-action:none;}',
             '.tm-cat-name{flex:1;font-size:.88em;}',
             '.tm-cat-count{font-size:.74em;opacity:.45;}',
@@ -8669,7 +8834,7 @@
 })(window);
 /* END MODULE 19/20: src/ui-events.js */
 
-/* BEGIN MODULE 20/20: src/ui-main.js | sha256:1c12fd76867ae98c64a98b852ae4d385f347365ddf6dfb28ff08dad8bc87420f */
+/* BEGIN MODULE 20/20: src/ui-main.js | sha256:fae1c5206d530f71a2643eebbae348dab6cee1fe8b575d7c896df584dd3e3bc6 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -12151,43 +12316,48 @@
             '<div class="tm-catbar" id="tm-catbar" style="display:none"></div>' +
             '<div class="tm-batch-area" id="tm-batch-area"></div>' +
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
-        var shellHtml = appShellApi.buildShellHtml({
+        var appPages = [
+            { id: 'themes', label: '美化', icon: 'fa-palette', html: themePageHtml },
+            {
+                id: 'avatars',
+                label: '头像',
+                icon: 'fa-user',
+                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像库</h2><p>头像管理功能将在后续版本加入</p></div>',
+            },
+            {
+                id: 'backgrounds',
+                label: '背景',
+                icon: 'fa-image',
+                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景库</h2><p>背景管理功能将在后续版本加入</p></div>',
+            },
+        ];
+        var shellOptions = {
             defaultPage: 'themes',
-            pages: [
-                { id: 'themes', label: '美化', icon: 'fa-palette', html: themePageHtml },
-                {
-                    id: 'avatars',
-                    label: '头像',
-                    icon: 'fa-user',
-                    html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像库</h2><p>头像管理功能将在后续版本加入</p></div>',
-                },
-                {
-                    id: 'backgrounds',
-                    label: '背景',
-                    icon: 'fa-image',
-                    html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景库</h2><p>背景管理功能将在后续版本加入</p></div>',
-                },
-            ],
-        });
+            pages: appPages,
+        };
+        var pageSwitcherHtml = appShellApi.buildPageSwitcherHtml(shellOptions);
+        var pagePanelsHtml = appShellApi.buildPagePanelsHtml(shellOptions);
+        var pageMenuHtml = appShellApi.buildPageMenuHtml(shellOptions);
 
         ov.innerHTML =
             '<div class="tm-box">' +
             '<div class="tm-head">' +
-            '<div class="tm-head-title"><i class="fa-solid fa-palette"></i>' + SCRIPT_NAME + '<span class="tm-version">v' + esc(TM_VERSION) + '</span></div>' +
+            '<div class="tm-head-title"><i class="fa-solid fa-palette"></i><span class="tm-head-name">' + SCRIPT_NAME + '</span><span class="tm-version">v' + esc(TM_VERSION) + '</span></div>' +
+            pageSwitcherHtml +
             '<div class="tm-head-actions">' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
             '<button class="tm-icon-btn" id="tm-theme-toggle" title="切换明暗"><i class="fa-solid fa-circle-half-stroke"></i></button>' +
             '<button class="tm-icon-btn" id="tm-x" title="关闭"><i class="fa-solid fa-xmark"></i></button>' +
             '</div></div>' +
-            shellHtml +
+            pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i></button>' +
             '</div>' +
-            '<div id="tm-popup-slot" style="position:absolute;inset:0;pointer-events:none;z-index:20;isolation:isolate;"></div>' +
+            '<div id="tm-popup-slot" style="position:absolute;inset:0;pointer-events:none;z-index:20;isolation:isolate;">' + pageMenuHtml + '</div>' +
             '</div>';
 
         document.body.appendChild(ov);

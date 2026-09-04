@@ -985,18 +985,33 @@ async function measureCase(browser, count, dataset) {
     }, ENTRY_MODE);
     const shellLeave = await page.evaluate(async ({ expectedCount, hasImages }) => {
         const overlay = document.querySelector('.tm-overlay');
-        const nav = overlay.querySelector('[data-tm-primary-nav]');
-        const tabs = Array.from(nav.querySelectorAll('[data-tm-page-target]'));
+        const switcher = overlay.querySelector('[data-tm-page-switcher]');
+        const trigger = document.getElementById('tm-page-switcher-button');
+        const menu = document.getElementById('tm-page-switcher-menu');
+        const items = Array.from(menu.querySelectorAll('[data-tm-page-target]'));
         const pages = Array.from(overlay.querySelectorAll('[data-tm-page]'));
         const area = document.getElementById('tm-grid-area');
         const initialGeneration = area.dataset.tmRenderGeneration;
         const initialCards = document.querySelectorAll('.tm-card').length;
-        if (tabs.length !== 3 || pages.length !== 3 || overlay.dataset.tmActivePage !== 'themes') {
+        if (items.length !== 3 || pages.length !== 3 || overlay.dataset.tmActivePage !== 'themes') {
             throw new Error('app shell did not initialize with three pages and themes active');
+        }
+        if (trigger.getAttribute('aria-haspopup') !== 'menu' || trigger.getAttribute('aria-expanded') !== 'false'
+            || trigger.querySelector('[data-tm-current-page-label]')?.textContent.trim() !== '美化'
+            || overlay.querySelector('[role="tablist"], [role="tab"], [aria-selected], .tm-primary-nav, .tm-primary-tab')) {
+            throw new Error('compact page switcher semantics did not initialize correctly');
         }
         if (initialCards !== expectedCount || document.querySelectorAll('#tm-popup-slot').length !== 1) {
             throw new Error('theme page or shared popup root was duplicated');
         }
+
+        trigger.click();
+        if (trigger.getAttribute('aria-expanded') !== 'true' || menu.hidden) throw new Error('page menu did not open');
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        if (trigger.getAttribute('aria-expanded') !== 'false' || !menu.hidden) throw new Error('Escape did not close page menu');
+        trigger.click();
+        document.querySelector('.tm-head-title').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        if (trigger.getAttribute('aria-expanded') !== 'false' || !menu.hidden) throw new Error('outside click did not close page menu');
 
         const allButton = Array.from(document.querySelectorAll('.tm-catbtn')).find((item) => item.dataset.c === '__all__');
         allButton.click();
@@ -1011,7 +1026,8 @@ async function measureCase(browser, count, dataset) {
                 if (view) view.click();
             }
         }
-        tabs.find((tab) => tab.dataset.tmPageTarget === 'avatars').click();
+        trigger.click();
+        items.find((item) => item.dataset.tmPageTarget === 'avatars').click();
         for (let index = 0; index < 6; index += 1) await new Promise((resolve) => requestAnimationFrame(resolve));
         const cardsAfterLeave = document.querySelectorAll('.tm-card').length;
         if (cardsAfterLeave !== cardsBeforeLeave) throw new Error('theme grid kept appending after leaving themes');
@@ -1022,21 +1038,22 @@ async function measureCase(browser, count, dataset) {
         if (overlay.dataset.tmActivePage !== 'avatars' || avatarPage.hidden || !avatarPage.textContent.includes('后续版本')) {
             throw new Error('avatar placeholder did not become active');
         }
+        if (trigger.querySelector('[data-tm-current-page-label]')?.textContent.trim() !== '头像'
+            || trigger.getAttribute('aria-expanded') !== 'false' || !menu.hidden) {
+            throw new Error('avatar selection did not update and close the compact switcher');
+        }
 
-        tabs.find((tab) => tab.dataset.tmPageTarget === 'backgrounds').click();
+        trigger.click();
+        items.find((item) => item.dataset.tmPageTarget === 'backgrounds').click();
         const backgroundPage = document.getElementById('tm-page-backgrounds');
         if (overlay.dataset.tmActivePage !== 'backgrounds' || backgroundPage.hidden || !backgroundPage.textContent.includes('后续版本')) {
             throw new Error('background placeholder did not become active');
         }
         const settingsButton = document.getElementById('tm-bottom-settings');
         if (getComputedStyle(settingsButton).display === 'none') throw new Error('global settings entry is hidden outside themes');
-        settingsButton.click();
-        if (document.querySelectorAll('#tm-popup-slot').length !== 1 || !document.querySelector('.tm-sheet-overlay')) {
-            throw new Error('settings did not use the single shared popup root');
-        }
         return {
-            navigation: tabs.map((tab) => tab.textContent.trim()),
-            navListeners: window.__listenerCountFor(nav),
+            navigation: items.map((item) => item.textContent.trim()),
+            navigationListeners: window.__listenerCountFor(switcher) + window.__listenerCountFor(menu),
             initialGeneration,
             generationBeforeLeave,
             cardsBeforeLeave,
@@ -1046,40 +1063,62 @@ async function measureCase(browser, count, dataset) {
         };
     }, { expectedCount: logicalCount, hasImages: dataset === 'images' });
 
-    await page.setViewportSize({ width: 390, height: 720 });
-    const mobileShell = await page.evaluate(() => {
-        const overlay = document.querySelector('.tm-overlay');
-        const nav = overlay.querySelector('.tm-primary-nav');
-        const overlayRect = overlay.getBoundingClientRect();
-        const overlayStyle = getComputedStyle(overlay);
-        return {
-            viewportWidth: innerWidth,
-            documentClientWidth: document.documentElement.clientWidth,
-            documentScrollWidth: document.documentElement.scrollWidth,
-            documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-            overlayClientWidth: overlay.clientWidth,
-            overlayScrollWidth: overlay.scrollWidth,
-            overlayRectWidth: overlayRect.width,
-            overlayBoxSizing: overlayStyle.boxSizing,
-            overlayBorderLeft: overlayStyle.borderLeftWidth,
-            overlayBorderRight: overlayStyle.borderRightWidth,
-            overlayOverflow: overlay.scrollWidth - overlay.clientWidth,
-            navigationClientWidth: nav.clientWidth,
-            navigationScrollWidth: nav.scrollWidth,
-            navigationOverflow: nav.scrollWidth - nav.clientWidth,
-        };
-    });
-    if (mobileShell.documentOverflow > 1 || mobileShell.navigationOverflow > 1) {
-        throw new Error(`mobile app shell overflowed horizontally: ${JSON.stringify(mobileShell)}`);
+    // The manager intentionally absorbs residual touch events for 400 ms after
+    // opening. Measure the real interactive header after that shield expires.
+    await page.waitForTimeout(450);
+    const mobileShell = [];
+    for (const width of [360, 390, 430]) {
+        await page.setViewportSize({ width, height: 720 });
+        const metrics = await page.evaluate(() => {
+            const overlay = document.querySelector('.tm-overlay');
+            const head = overlay.querySelector('.tm-head');
+            const title = head.querySelector('.tm-head-title');
+            const trigger = document.getElementById('tm-page-switcher-button');
+            const actions = head.querySelector('.tm-head-actions');
+            const menu = document.getElementById('tm-page-switcher-menu');
+            trigger.click();
+            const menuRect = menu.getBoundingClientRect();
+            const centers = [title, trigger, actions].map((element) => {
+                const rect = element.getBoundingClientRect();
+                return rect.top + rect.height / 2;
+            });
+            const centerElement = document.elementFromPoint(menuRect.left + menuRect.width / 2, menuRect.top + menuRect.height / 2);
+            const result = {
+                viewportWidth: innerWidth,
+                documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                headerOverflow: head.scrollWidth - head.clientWidth,
+                headerCenterSpread: Math.max(...centers) - Math.min(...centers),
+                triggerHeight: trigger.getBoundingClientRect().height,
+                menuExpanded: trigger.getAttribute('aria-expanded') === 'true' && !menu.hidden,
+                menuInsideViewport: menuRect.left >= -1 && menuRect.right <= innerWidth + 1 && menuRect.top >= -1 && menuRect.bottom <= innerHeight + 1,
+                menuVisibleAtCenter: menu.contains(centerElement),
+            };
+            trigger.click();
+            return result;
+        });
+        if (metrics.documentOverflow > 1 || metrics.headerOverflow > 1
+            || metrics.headerCenterSpread > 4 || metrics.triggerHeight < 39 || !metrics.menuExpanded
+            || !metrics.menuInsideViewport || !metrics.menuVisibleAtCenter) {
+            throw new Error(`mobile app shell failed at ${width}px: ${JSON.stringify(metrics)}`);
+        }
+        mobileShell.push(metrics);
     }
     await page.setViewportSize({ width: 1440, height: 1000 });
 
     const shellReturn = await page.evaluate(async ({ expectedCount, hasImages }) => {
         const overlay = document.querySelector('.tm-overlay');
-        const nav = overlay.querySelector('[data-tm-primary-nav]');
-        const themesTab = nav.querySelector('[data-tm-page-target="themes"]');
+        const switcher = overlay.querySelector('[data-tm-page-switcher]');
+        const trigger = document.getElementById('tm-page-switcher-button');
+        const menu = document.getElementById('tm-page-switcher-menu');
+        const themesItem = menu.querySelector('[data-tm-page-target="themes"]');
+        const settingsButton = document.getElementById('tm-bottom-settings');
+        settingsButton.click();
+        if (document.querySelectorAll('#tm-popup-slot').length !== 1 || !document.querySelector('.tm-sheet-overlay')) {
+            throw new Error('settings did not use the single shared popup root');
+        }
         const previousGeneration = document.getElementById('tm-grid-area').dataset.tmRenderGeneration;
-        themesTab.click();
+        trigger.click();
+        themesItem.click();
         await window.__waitGridGenerationAfter(previousGeneration);
         await window.__waitGridFlag('tmRenderComplete', 'true');
         if (document.querySelectorAll('.tm-card').length !== expectedCount) throw new Error('theme page did not fully remount');
@@ -1098,9 +1137,10 @@ async function measureCase(browser, count, dataset) {
         if (!imageReloaded) throw new Error('image loader did not resume after returning to themes');
         return {
             activePage: overlay.dataset.tmActivePage,
-            activeTab: themesTab.getAttribute('aria-selected'),
+            currentLabel: trigger.querySelector('[data-tm-current-page-label]')?.textContent.trim(),
+            menuExpanded: trigger.getAttribute('aria-expanded'),
             popupRoots: document.querySelectorAll('#tm-popup-slot').length,
-            navListeners: window.__listenerCountFor(nav),
+            navigationListeners: window.__listenerCountFor(switcher) + window.__listenerCountFor(menu),
             cards: document.querySelectorAll('.tm-card').length,
             imageReloaded,
         };

@@ -3479,43 +3479,48 @@
             '<div class="tm-catbar" id="tm-catbar" style="display:none"></div>' +
             '<div class="tm-batch-area" id="tm-batch-area"></div>' +
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
-        var shellHtml = appShellApi.buildShellHtml({
+        var appPages = [
+            { id: 'themes', label: '美化', icon: 'fa-palette', html: themePageHtml },
+            {
+                id: 'avatars',
+                label: '头像',
+                icon: 'fa-user',
+                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像库</h2><p>头像管理功能将在后续版本加入</p></div>',
+            },
+            {
+                id: 'backgrounds',
+                label: '背景',
+                icon: 'fa-image',
+                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景库</h2><p>背景管理功能将在后续版本加入</p></div>',
+            },
+        ];
+        var shellOptions = {
             defaultPage: 'themes',
-            pages: [
-                { id: 'themes', label: '美化', icon: 'fa-palette', html: themePageHtml },
-                {
-                    id: 'avatars',
-                    label: '头像',
-                    icon: 'fa-user',
-                    html: '<div class="tm-app-placeholder"><i class="fa-solid fa-user" aria-hidden="true"></i><h2>头像库</h2><p>头像管理功能将在后续版本加入</p></div>',
-                },
-                {
-                    id: 'backgrounds',
-                    label: '背景',
-                    icon: 'fa-image',
-                    html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景库</h2><p>背景管理功能将在后续版本加入</p></div>',
-                },
-            ],
-        });
+            pages: appPages,
+        };
+        var pageSwitcherHtml = appShellApi.buildPageSwitcherHtml(shellOptions);
+        var pagePanelsHtml = appShellApi.buildPagePanelsHtml(shellOptions);
+        var pageMenuHtml = appShellApi.buildPageMenuHtml(shellOptions);
 
         ov.innerHTML =
             '<div class="tm-box">' +
             '<div class="tm-head">' +
-            '<div class="tm-head-title"><i class="fa-solid fa-palette"></i>' + SCRIPT_NAME + '<span class="tm-version">v' + esc(TM_VERSION) + '</span></div>' +
+            '<div class="tm-head-title"><i class="fa-solid fa-palette"></i><span class="tm-head-name">' + SCRIPT_NAME + '</span><span class="tm-version">v' + esc(TM_VERSION) + '</span></div>' +
+            pageSwitcherHtml +
             '<div class="tm-head-actions">' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
             '<button class="tm-icon-btn" id="tm-theme-toggle" title="切换明暗"><i class="fa-solid fa-circle-half-stroke"></i></button>' +
             '<button class="tm-icon-btn" id="tm-x" title="关闭"><i class="fa-solid fa-xmark"></i></button>' +
             '</div></div>' +
-            shellHtml +
+            pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i></button>' +
             '</div>' +
-            '<div id="tm-popup-slot" style="position:absolute;inset:0;pointer-events:none;z-index:20;isolation:isolate;"></div>' +
+            '<div id="tm-popup-slot" style="position:absolute;inset:0;pointer-events:none;z-index:20;isolation:isolate;">' + pageMenuHtml + '</div>' +
             '</div>';
 
         document.body.appendChild(ov);
