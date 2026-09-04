@@ -58,7 +58,7 @@
         function openLightbox(themeNames, startName) {
             var themes = themeNames.filter(function (name) {
                 var meta = load().themeMeta[name];
-                return meta && (meta.imageData || meta.thumbData);
+                return meta && (meta.imageData || meta.thumbData || meta.previewData);
             });
             if (themes.length === 0) return;
             var index = themes.indexOf(startName);
@@ -72,7 +72,7 @@
                 var data = load();
                 var name = themes[index];
                 var meta = data.themeMeta[name] || {};
-                var image = meta.imageData || meta.thumbData || '';
+                var image = meta.imageData || meta.thumbData || meta.previewData || '';
                 lightbox.innerHTML =
                     '<button class="tm-lb-close"><i class="fa-solid fa-xmark"></i></button>' +
                     '<div class="tm-lb-name">' + esc(name) + '</div>' +

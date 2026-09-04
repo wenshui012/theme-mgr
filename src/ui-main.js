@@ -56,6 +56,8 @@
     var TM_VERSION = options.version || '4.0.5';
     var storageApi = null;
     var imageToolsApi = null;
+    var imageLoaderApi = null;
+    var gridImageLoader = null;
     var styleApi = null;
     var themeSchema = null;
     var themeApi = null;
@@ -132,12 +134,13 @@
                 !modules.createBackgrounds ||
                 !modules.createUiSheets ||
                 !modules.createUiEvents ||
-                !modules.createStorage || !modules.imageTools || !modules.injectStyles) {
+                !modules.createStorage || !modules.imageTools || !modules.imageLoader || !modules.injectStyles) {
                 supportFailed = true;
                 if (!supportErrorText) {
                     var missing = [];
                     if (!modules.createStorage) missing.push('storage.js');
                     if (!modules.imageTools) missing.push('image-tools.js');
+                    if (!modules.imageLoader) missing.push('image-loader.js');
                     if (!modules.injectStyles) missing.push('styles.js');
                     if (!modules.themeSchema) missing.push('theme-schema.js');
                     if (!modules.createThemeApi) missing.push('theme-api.js');
@@ -244,6 +247,7 @@
                 version: TM_VERSION,
             });
             imageToolsApi = modules.imageTools;
+            imageLoaderApi = modules.imageLoader;
             styleApi = modules.injectStyles;
             supportReady = true;
             supportFailed = false;
@@ -299,7 +303,8 @@
     //   fabImage: '',
     //   fabSize: 38,
     //   fabPos: null,
-    //   sortMode: 'name'
+    //   sortMode: 'name',
+    //   previewImageQuality: 'performance'
     // }
     function ensureDefaults(d) {
         var dd = def();
@@ -309,6 +314,7 @@
         else if (typeof d.themeMeta !== 'object' || !d.themeMeta) d.themeMeta = Object.create(null);
         if (!Array.isArray(d.categories)) d.categories = [];
         if (typeof d.sortMode !== 'string') d.sortMode = 'name';
+        d.previewImageQuality = d.previewImageQuality === 'quality' ? 'quality' : 'performance';
         if (typeof d.followThemeAppearance !== 'boolean') d.followThemeAppearance = false;
         if (typeof d.showThemeAvatarFrame !== 'boolean') d.showThemeAvatarFrame = false;
         if (typeof d.followThemePreviewShape !== 'boolean') d.followThemePreviewShape = false;
@@ -363,6 +369,7 @@
             bgPickerSize: 132,
             gridCardSize: 108,
             sortMode: 'name',
+            previewImageQuality: 'performance',
             followThemeAppearance: false,
             showThemeAvatarFrame: false,
             followThemePreviewShape: false,
@@ -2102,6 +2109,8 @@
     var renderedActiveItemKey = '';
     var GRID_RENDER_BATCH_SIZE = 48;
     var GRID_RENDER_FOLLOWUP_BATCH_SIZE = 96;
+    var GRID_IMAGE_EAGER_COUNT = 10;
+    var GRID_IMAGE_ROOT_MARGIN = '600px 0px';
     var SEARCH_DEBOUNCE_MS = 100;
 
     function getBatchSelectedKeys() {
@@ -3685,15 +3694,15 @@
         var freqBadge = (d.showFreq !== false && (meta.useCount || 0) > 5 && !batchMode)
             ? '<div class="tm-badge-freq">' + meta.useCount + '次</div>'
             : '';
-        var previewAsset = imageToolsApi.resolvePreviewAsset(variantMeta);
-        var previewImage = previewAsset.src;
-        var previewView = previewAsset.view;
+        var previewPresentation = imageToolsApi.resolvePreviewPresentation(variantMeta);
+        var previewImage = previewPresentation.hasImage;
+        var previewView = previewPresentation.view;
         var previewStyle = '--tm-image-focus-x:' + esc(previewView.posX) + '%;' +
             '--tm-image-focus-y:' + esc(previewView.posY) + '%;' +
             '--tm-image-zoom:' + esc(previewView.zoom) + ';';
         var imgContent = previewImage
             ? '<div class="tm-card-preview-slot" style="' + previewStyle + '">' +
-                '<img src="' + esc(previewImage) + '" alt="' + esc(item.name) + '" loading="lazy" decoding="async" />' +
+                '<img src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-theme-key="' + esc(item.key) + '" data-image-state="idle" alt="' + esc(item.name) + '" decoding="async" />' +
                 '</div>'
             : '<div class="tm-card-noimg"><i class="fa-solid fa-palette"></i><span>' + esc(item.name.slice(0, 6)) + '</span></div>';
         var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-key="' + esc(item.key) + '" title="操作"><i class="fa-solid fa-ellipsis"></i></button>';
@@ -3920,6 +3929,61 @@
         }
         gridRenderFrame = null;
         gridRenderState = null;
+        if (gridImageLoader) gridImageLoader.disconnect();
+    }
+
+    function resolveGridImageSource(itemKey) {
+        var d = load();
+        var item = getLogicalItem(itemKey, d);
+        if (!item) return '';
+        var displayTheme = getItemDisplayTheme(d, item);
+        var meta = d.themeMeta[displayTheme] || {};
+        return imageToolsApi.resolvePreviewAsset(meta, d.previewImageQuality).src;
+    }
+
+    function showGridImageFallback(image) {
+        if (!image || !image.closest) return;
+        var card = image.closest('.tm-card');
+        if (!card || !card.isConnected) return;
+        card.classList.add('no-img', 'image-error');
+        var slot = image.closest('.tm-card-preview-slot');
+        if (slot) slot.style.display = 'none';
+        var imageArea = card.querySelector('.tm-card-img');
+        if (!imageArea || imageArea.querySelector('.tm-card-noimg')) return;
+        var fallback = document.createElement('div');
+        fallback.className = 'tm-card-noimg';
+        var icon = document.createElement('i');
+        icon.className = 'fa-solid fa-palette';
+        var label = document.createElement('span');
+        var name = card.querySelector('.tm-card-name');
+        label.textContent = String(name ? name.textContent : '').slice(0, 6);
+        fallback.appendChild(icon);
+        fallback.appendChild(label);
+        imageArea.insertBefore(fallback, imageArea.firstChild);
+    }
+
+    function resetGridImageLoader(area, generation) {
+        var loaderOptions = {
+            root: area,
+            rootMargin: GRID_IMAGE_ROOT_MARGIN,
+            generation: generation,
+            resolveSource: resolveGridImageSource,
+            onError: showGridImageFallback,
+        };
+        if (!gridImageLoader) gridImageLoader = imageLoaderApi.createImageLoader(loaderOptions);
+        else gridImageLoader.reset(loaderOptions);
+    }
+
+    function registerGridImages(images, state) {
+        if (!gridImageLoader || !state || state.generation !== gridRenderGeneration) return;
+        (images || []).forEach(function (image) {
+            if (state.eagerImagesRemaining > 0) {
+                state.eagerImagesRemaining -= 1;
+                gridImageLoader.loadNow(image, state.generation);
+            } else {
+                gridImageLoader.observe(image, state.generation);
+            }
+        });
     }
 
     function scheduleGridRenderChunk(state) {
@@ -3977,9 +4041,11 @@
         var template = document.createElement('template');
         template.innerHTML = html;
         var cards = Array.from(template.content.querySelectorAll('.tm-card'));
+        var images = Array.from(template.content.querySelectorAll('img[data-theme-key]'));
         state.grid.appendChild(template.content);
         if (state.generation !== gridRenderGeneration || document.getElementById('tm-grid-area') !== state.area) return;
         registerRenderedCards(cards);
+        registerGridImages(images, state);
         state.renderedCards += cards.length;
         state.area.dataset.tmRenderedCards = String(state.renderedCards);
         if (!state.firstBatchDone) {
@@ -4031,8 +4097,12 @@
         template.innerHTML = buildGridCardHtml(item, d, getCurrentThemeName(), view);
         var card = template.content.querySelector('.tm-card');
         if (!card) return false;
+        var oldImage = oldCard.querySelector('img[data-theme-key]');
+        if (oldImage && gridImageLoader) gridImageLoader.unobserve(oldImage);
         oldCard.replaceWith(card);
         renderedCardsByKey[itemKey] = card;
+        var newImage = card.querySelector('img[data-theme-key]');
+        if (newImage && gridImageLoader) gridImageLoader.observe(newImage, gridRenderGeneration);
         return true;
     }
 
@@ -4164,6 +4234,7 @@
             area.dataset.tmRenderedCards = '0';
         } else {
             area.innerHTML = '<div class="tm-grid"></div>';
+            resetGridImageLoader(area, generation);
             renderedCardsByKey = Object.create(null);
             renderedActiveItemKey = (view.itemByThemeName[curTheme] || {}).key || '';
             area.dataset.tmRenderGeneration = String(generation);
@@ -4181,6 +4252,7 @@
                 renderedCards: 0,
                 currentTheme: curTheme,
                 firstBatchDone: false,
+                eagerImagesRemaining: GRID_IMAGE_EAGER_COUNT,
             };
             appendGridRenderChunk(gridRenderState);
         }
@@ -4825,7 +4897,7 @@
         var themeName = getItemDisplayTheme(d, item);
         var curTheme = getCurrentThemeName();
         var isActive = isItemActive(item, curTheme);
-        var imgThemes = stThemeList.filter(function (n) { var m = d.themeMeta[n]; return m && (m.imageData || m.thumbData); });
+        var imgThemes = stThemeList.filter(function (n) { return imageToolsApi.hasPreviewImage(d.themeMeta[n]); });
         var variantMeta = d.themeMeta[themeName] || {};
         var itemLabel = item.name;
 
@@ -4834,7 +4906,7 @@
             isActive
                 ? '<div class="tm-ctx-item" style="opacity:.5"><i class="fa-solid fa-circle-check"></i>当前正在使用</div>'
                 : '<div class="tm-ctx-item" id="tm-ctx-apply"><i class="fa-solid fa-circle-check"></i>应用美化</div>',
-            (variantMeta.imageData || variantMeta.thumbData) ? '<div class="tm-ctx-item" id="tm-ctx-view"><i class="fa-solid fa-expand"></i>查看截图</div>' : '',
+            imageToolsApi.hasPreviewImage(variantMeta) ? '<div class="tm-ctx-item" id="tm-ctx-view"><i class="fa-solid fa-expand"></i>查看截图</div>' : '',
             variantMeta.backgroundName ? '<div class="tm-ctx-item" style="opacity:.75"><i class="fa-solid fa-image"></i>背景：' + esc(variantMeta.backgroundName) + '</div>' : '',
             '<div class="tm-ctx-item" id="tm-ctx-star"><i class="fa-solid fa-star"></i>' + (meta.starred ? '取消收藏' : '加入收藏') + '</div>',
             '<div class="tm-ctx-item" id="tm-ctx-edit"><i class="fa-solid fa-pen"></i>编辑信息</div>',
@@ -5757,6 +5829,14 @@
             '<div class="tm-sec-title">分类管理</div>',
             '<button class="tm-btn tm-btn-outline" id="tm-open-cats" style="width:100%;text-align:left;margin-bottom:10px"><i class="fa-solid fa-tags" style="margin-right:6px"></i>管理分类（' + d.categories.length + '个）</button>',
             '<div class="tm-sec-title">显示</div>',
+            '<div class="tm-field"><label>预览图片质量</label><select id="tm-preview-image-quality">' +
+            '<option value="performance"' + (d.previewImageQuality !== 'quality' ? ' selected' : '') + '>性能优先（默认）</option>' +
+            '<option value="quality"' + (d.previewImageQuality === 'quality' ? ' selected' : '') + '>清晰优先</option>' +
+            '</select><div class="tm-hint" id="tm-preview-image-quality-hint">' +
+            (d.previewImageQuality === 'quality'
+                ? '主界面使用高清截图，卡片放大时更清晰，但图片较多时可能增加内存和加载压力。'
+                : '主界面使用缩略图，适合美化数量较多或设备性能一般。') +
+            '</div></div>',
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>',
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>',
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>',
@@ -5800,6 +5880,17 @@
         var followThemePreviewShapeInput = sheet.querySelector('#tm-follow-preview-shape');
         var simplifyGridTextInput = sheet.querySelector('#tm-simplify-grid-text');
         var autoHideHeaderInput = sheet.querySelector('#tm-auto-hide-header');
+        var previewImageQualityInput = sheet.querySelector('#tm-preview-image-quality');
+        previewImageQualityInput.addEventListener('change', function () {
+            var dd = load();
+            dd.previewImageQuality = this.value === 'quality' ? 'quality' : 'performance';
+            save(dd);
+            var hint = sheet.querySelector('#tm-preview-image-quality-hint');
+            if (hint) hint.textContent = dd.previewImageQuality === 'quality'
+                ? '主界面使用高清截图，卡片放大时更清晰，但图片较多时可能增加内存和加载压力。'
+                : '主界面使用缩略图，适合美化数量较多或设备性能一般。';
+            renderGrid();
+        });
         function syncFollowDetailState() {
             var enabled = followAppearanceInput.checked;
             [showThemeAvatarFrameInput, followThemePreviewShapeInput].forEach(function (input) {

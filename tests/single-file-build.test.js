@@ -4,9 +4,9 @@ const fs = require('node:fs');
 
 const build = require('../scripts/build-single-file.js');
 
-test('development loader exposes the fixed 18-module release order', () => {
+test('development loader exposes the fixed 19-module release order', () => {
     const entry = build.parseDevelopmentEntry();
-    assert.equal(entry.modules.length, 18);
+    assert.equal(entry.modules.length, 19);
     assert.deepEqual(entry.modules, build.EXPECTED_MODULES);
 });
 

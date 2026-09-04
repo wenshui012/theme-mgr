@@ -18,6 +18,7 @@ try {
 }
 
 const ROOT = path.resolve(__dirname, '..');
+const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+4iH7WQAAAABJRU5ErkJggg==', 'base64');
 const MODULE_FILES = [
     'src/theme-schema.js',
     'src/theme-api.js',
@@ -32,6 +33,7 @@ const MODULE_FILES = [
     'src/theme-appearance.js',
     'src/storage.js',
     'src/image-tools.js',
+    'src/image-loader.js',
     'src/styles.js',
     'src/backgrounds.js',
     'src/ui-sheets.js',
@@ -54,7 +56,7 @@ function parseSizes() {
 
 function parseDatasets() {
     const value = argValue('dataset', 'light,mixed');
-    return value.split(',').map((item) => item.trim()).filter((item) => item === 'light' || item === 'mixed');
+    return value.split(',').map((item) => item.trim()).filter((item) => item === 'light' || item === 'mixed' || item === 'images');
 }
 
 function makeCss(bytes, seed) {
@@ -80,10 +82,45 @@ function makeThemes(count, dataset) {
     return themes;
 }
 
-function makeMetadata(themes) {
+function makeDataPreview(index, kind) {
+    const color = kind === 'full' ? '#7556c9' : '#55a889';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12"><title>${kind}-${index}</title><rect width="16" height="12" fill="${color}"/></svg>`;
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function makeMetadata(themes, dataset) {
     const themeMeta = {};
     const dayNight = { version: 1, pairs: {} };
     const series = { version: 1, groups: {} };
+    if (dataset === 'images') {
+        themes.forEach((theme, index) => {
+            const useDataUrl = index >= 20 && index % 2 === 1;
+            themeMeta[theme.name] = {
+                category: `Category ${index % 12}`,
+                tags: ['preview-fixture'],
+                starred: false,
+                useCount: 0,
+                lastUsed: 0,
+                author: 'Benchmark',
+                description: '',
+                imageData: useDataUrl ? makeDataPreview(index, 'full') : `/benchmark-images/full-${index}.png`,
+                thumbData: useDataUrl ? makeDataPreview(index, 'thumb') : `/benchmark-images/thumb-${index}.png`,
+                crop: { version: 2, mode: 'focus', zoom: 1.15, posX: 45, posY: 55 },
+                backgroundName: '',
+            };
+        });
+        if (themes[4]) themeMeta[themes[4].name].thumbData = null;
+        if (themes[5]) themeMeta[themes[5].name].imageData = null;
+        if (themes[6]) themeMeta[themes[6].name].crop = {
+            x: 120, y: 30, width: 800, height: 600, naturalWidth: 1200, naturalHeight: 900,
+        };
+        if (themes[7]) themeMeta[themes[7].name].thumbData = '/benchmark-images/broken-7.png';
+        if (themes[8]) {
+            themeMeta[themes[8].name].previewData = themeMeta[themes[8].name].thumbData;
+            themeMeta[themes[8].name].imageData = null;
+            themeMeta[themes[8].name].thumbData = null;
+        }
+    }
     if (themes.length >= 6) {
         dayNight.pairs['benchmark-pair'] = {
             id: 'benchmark-pair',
@@ -153,7 +190,7 @@ async function addModules(page) {
 
 async function measureCase(browser, count, dataset) {
     const themes = makeThemes(count, dataset);
-    const metadata = makeMetadata(themes);
+    const metadata = makeMetadata(themes, dataset);
     const initialMetadataCount = Object.keys(metadata.themeMeta).length;
     const settingsBody = JSON.stringify({ themes });
     const payloadBytes = Buffer.byteLength(settingsBody);
@@ -162,25 +199,57 @@ async function measureCase(browser, count, dataset) {
     page.setDefaultTimeout(60000);
 
     const pageErrors = [];
+    const imageRequests = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
+    page.on('request', (request) => {
+        const pathname = new URL(request.url()).pathname;
+        if (pathname.startsWith('/benchmark-images/')) imageRequests.push(pathname);
+    });
 
     await page.addInitScript(() => {
         const originalAdd = EventTarget.prototype.addEventListener;
-        const listenerCounts = new WeakMap();
+        const originalRemove = EventTarget.prototype.removeEventListener;
+        const listenerMaps = new WeakMap();
+        function listenersFor(target) {
+            let byType = listenerMaps.get(target);
+            if (!byType) {
+                byType = new Map();
+                listenerMaps.set(target, byType);
+            }
+            return byType;
+        }
         EventTarget.prototype.addEventListener = function (...args) {
-            listenerCounts.set(this, (listenerCounts.get(this) || 0) + 1);
+            const type = String(args[0]);
+            const handler = args[1];
+            const byType = listenersFor(this);
+            if (!byType.has(type)) byType.set(type, new Set());
+            byType.get(type).add(handler);
             return originalAdd.apply(this, args);
         };
+        EventTarget.prototype.removeEventListener = function (...args) {
+            const type = String(args[0]);
+            const handler = args[1];
+            const byType = listenerMaps.get(this);
+            if (byType && byType.has(type)) byType.get(type).delete(handler);
+            return originalRemove.apply(this, args);
+        };
+        function listenerCount(target) {
+            const byType = listenerMaps.get(target);
+            if (!byType) return 0;
+            let total = 0;
+            byType.forEach((handlers) => { total += handlers.size; });
+            return total;
+        }
         window.__listenerCountFor = function (root) {
             if (!root) return 0;
-            let total = listenerCounts.get(root) || 0;
+            let total = listenerCount(root);
             if (root.querySelectorAll) {
-                root.querySelectorAll('*').forEach((node) => { total += listenerCounts.get(node) || 0; });
+                root.querySelectorAll('*').forEach((node) => { total += listenerCount(node); });
             }
             return total;
         };
         window.__globalListenerCount = function () {
-            return (listenerCounts.get(window) || 0) + (listenerCounts.get(document) || 0);
+            return listenerCount(window) + listenerCount(document);
         };
         window.__longTasks = [];
         try {
@@ -225,6 +294,14 @@ async function measureCase(browser, count, dataset) {
         }
         if (url.pathname === '/script.js') {
             await route.fulfill({ status: 200, contentType: 'text/javascript', body: 'export function saveSettingsDebounced() {}' });
+            return;
+        }
+        if (url.pathname.startsWith('/benchmark-images/')) {
+            if (url.pathname.includes('/broken-')) {
+                await route.fulfill({ status: 503, contentType: 'text/plain', body: 'unavailable' });
+                return;
+            }
+            await route.fulfill({ status: 200, contentType: 'image/png', body: TINY_PNG });
             return;
         }
         if (url.pathname.startsWith('/api/themes/')) {
@@ -379,6 +456,148 @@ async function measureCase(browser, count, dataset) {
             globalListeners: window.__globalListenerCount(),
         };
     });
+    let imageLoading = null;
+    if (dataset === 'images') {
+        await page.waitForTimeout(150);
+        const initial = await page.evaluate(() => {
+            const placeholder = window.ThemeMgrModules.imageLoader.PLACEHOLDER_SRC;
+            const images = Array.from(document.querySelectorAll('img[data-theme-key]'));
+            const real = images.filter((image) => image.getAttribute('src') !== placeholder);
+            const last = images[images.length - 1];
+            function sourceFor(index) {
+                const image = document.querySelector(`.tm-card[data-key="theme:Theme ${String(index).padStart(6, '0')}"] img`);
+                return image ? image.getAttribute('src') : '';
+            }
+            return {
+                images: images.length,
+                realSources: real.length,
+                placeholderSources: images.length - real.length,
+                loaded: images.filter((image) => image.dataset.imageState === 'loaded').length,
+                farCardStillPlaceholder: !!last && last.getAttribute('src') === placeholder,
+                firstRealSource: real[0] ? real[0].getAttribute('src') : '',
+                compatibility: {
+                    imageOnly: sourceFor(4),
+                    thumbOnly: sourceFor(5),
+                    legacyCrop: sourceFor(6),
+                    legacyPreview: sourceFor(8),
+                    brokenFallback: !!document.querySelector('.tm-card[data-key="theme:Theme 000007"].image-error .tm-card-noimg'),
+                },
+            };
+        });
+        if (initial.realSources < 1 || initial.realSources >= initial.images) {
+            throw new Error(`viewport loading resolved ${initial.realSources}/${initial.images} initial images`);
+        }
+        if (!initial.farCardStillPlaceholder || !initial.firstRealSource.includes('/thumb-')) {
+            throw new Error('performance preview selection or distant placeholder state is incorrect');
+        }
+        if (!initial.compatibility.imageOnly.includes('/full-4.png') ||
+            !initial.compatibility.thumbOnly.includes('/thumb-5.png') ||
+            !initial.compatibility.legacyCrop.includes('/full-6.png') ||
+            !initial.compatibility.legacyPreview.includes('/thumb-8.png') ||
+            !initial.compatibility.brokenFallback) {
+            throw new Error(`preview compatibility fallback failed: ${JSON.stringify(initial.compatibility)}`);
+        }
+
+        const fastScroll = await page.evaluate(async () => {
+            const placeholder = window.ThemeMgrModules.imageLoader.PLACEHOLDER_SRC;
+            const area = document.getElementById('tm-grid-area');
+            const images = Array.from(document.querySelectorAll('img[data-theme-key]'));
+            const last = images[images.length - 1];
+            area.scrollTop = area.scrollHeight;
+            const started = performance.now();
+            while (performance.now() - started < 10000) {
+                if (last && last.dataset.imageState === 'loaded') break;
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+            }
+            const source = last ? last.getAttribute('src') : '';
+            return {
+                loaded: !!last && last.dataset.imageState === 'loaded',
+                sourceResolved: !!last && source !== placeholder,
+                sourceType: source.startsWith('data:image/') ? 'data-url' : 'url',
+                key: last && last.dataset.themeKey,
+            };
+        });
+        if (!fastScroll.loaded || !fastScroll.sourceResolved) throw new Error('fast scroll did not load the final preview');
+
+        const lightbox = await page.evaluate(() => {
+            const area = document.getElementById('tm-grid-area');
+            area.scrollTop = 0;
+            const menu = document.querySelector('.tm-card[data-key="theme:Theme 000002"] .tm-card-menu');
+            if (!menu) throw new Error('lightbox fixture card is missing');
+            menu.click();
+            const view = document.getElementById('tm-ctx-view');
+            if (!view) throw new Error('lightbox action is missing');
+            view.click();
+            const image = document.querySelector('.tm-lb-img');
+            const source = image ? image.getAttribute('src') : '';
+            const close = document.querySelector('.tm-lb-close');
+            if (close) close.click();
+            return { source, opened: !!image };
+        });
+        if (!lightbox.opened || !lightbox.source.includes('/full-2.png')) {
+            throw new Error('lightbox did not keep the high-resolution source');
+        }
+
+        const quality = await page.evaluate(async () => {
+            const area = document.getElementById('tm-grid-area');
+            area.scrollTop = 0;
+            document.getElementById('tm-bottom-settings').click();
+            const sheet = document.querySelector('.tm-sheet-overlay');
+            const select = document.getElementById('tm-preview-image-quality');
+            const beforeQuality = area.dataset.tmRenderGeneration;
+            select.value = 'quality';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            await window.__waitGridGenerationAfter(beforeQuality);
+            await window.__waitGridFlag('tmRenderComplete', 'true');
+            const qualityStarted = performance.now();
+            let qualityImage = null;
+            while (performance.now() - qualityStarted < 10000) {
+                qualityImage = document.querySelector('.tm-card[data-key^="theme:"] img[data-image-state="loaded"]');
+                if (qualityImage) break;
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+            }
+            const qualitySource = qualityImage ? qualityImage.getAttribute('src') : '';
+            const qualitySlot = qualityImage && qualityImage.closest('.tm-card-preview-slot');
+
+            const beforePerformance = area.dataset.tmRenderGeneration;
+            select.value = 'performance';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            await window.__waitGridGenerationAfter(beforePerformance);
+            await window.__waitGridFlag('tmRenderComplete', 'true');
+            const performanceStarted = performance.now();
+            let performanceImage = null;
+            while (performance.now() - performanceStarted < 10000) {
+                performanceImage = document.querySelector('.tm-card[data-key^="theme:"] img[data-image-state="loaded"]');
+                if (performanceImage) break;
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+            }
+            const performanceSource = performanceImage ? performanceImage.getAttribute('src') : '';
+            sheet.click();
+            document.getElementById('tm-bottom-settings').click();
+            const reopenedSheet = document.querySelector('.tm-sheet-overlay');
+            const savedMode = document.getElementById('tm-preview-image-quality').value;
+            reopenedSheet.click();
+            return {
+                qualitySource,
+                performanceSource,
+                responsiveStyle: qualitySlot ? qualitySlot.getAttribute('style') : '',
+                savedMode,
+            };
+        });
+        if (!quality.qualitySource.includes('/full-') || !quality.performanceSource.includes('/thumb-')) {
+            throw new Error('quality setting did not switch between full and thumbnail grid sources');
+        }
+        if (!quality.responsiveStyle.includes('--tm-image-focus-x:45%') || quality.savedMode !== 'performance') {
+            throw new Error(`quality switch changed responsive layout state or did not persist safely: ${JSON.stringify(quality)}`);
+        }
+        imageLoading = {
+            initial,
+            fastScroll,
+            lightbox,
+            quality,
+            requestsAfterViewportChecks: imageRequests.length,
+        };
+    }
     const firstOpenMemory = await collectBrowserMetrics(cdp);
     const fetchCountsAfterOpen = await page.evaluate(() => ({ ...window.__fetchCounts }));
     const metadataCountAfterOpen = await page.evaluate(() => {
@@ -517,6 +736,15 @@ async function measureCase(browser, count, dataset) {
         const button = Array.from(document.querySelectorAll('.tm-catbtn')).find((item) => item.dataset.c === '__all__');
         return window.__measureGridAction(() => button.click());
     });
+    const gridSize = await page.evaluate(async () => {
+        const area = document.getElementById('tm-grid-area');
+        const before = area.style.getPropertyValue('--tm-grid-card-min');
+        const result = await window.__measureGridAction(() => document.getElementById('tm-grid-zoom-in').click());
+        const after = area.style.getPropertyValue('--tm-grid-card-min');
+        if (before === after) throw new Error('grid size control did not update the card size');
+        await window.__measureGridAction(() => document.getElementById('tm-grid-zoom-out').click());
+        return Object.assign({ before, after }, result);
+    });
 
     const rapidCategories = await page.evaluate(async () => {
         const buttons = ['Category 0', 'Category 1', 'Category 2'].map((category) =>
@@ -546,6 +774,12 @@ async function measureCase(browser, count, dataset) {
         seriesManage.click();
         if (!document.getElementById('tm-series-manage-cancel')) throw new Error('series manage click failed');
         document.getElementById('tm-series-manage-cancel').click();
+        const seriesToggle = document.querySelector('.tm-series-toggle');
+        const seriesBlock = seriesToggle && seriesToggle.closest('.tm-series-block');
+        seriesToggle.click();
+        if (!seriesBlock.classList.contains('is-expanded')) throw new Error('series expansion failed');
+        seriesToggle.click();
+        if (seriesBlock.classList.contains('is-expanded')) throw new Error('series collapse failed');
 
         const pairCard = document.querySelector('.tm-card[data-key="pair:benchmark-pair"]');
         if (!pairCard) throw new Error('day/night card was not rendered');
@@ -653,14 +887,19 @@ async function measureCase(browser, count, dataset) {
     }, targetKey);
     await page.waitForSelector('#tm-dsave');
     const edit = await page.evaluate(async () => {
+        const previewImage = document.querySelector('#tm-dimgarea img');
+        const previewSource = previewImage ? previewImage.getAttribute('src') : '';
         document.getElementById('tm-dauthor').value = 'Edited benchmark author';
         const start = performance.now();
         document.getElementById('tm-dsave').click();
         const syncEnd = performance.now();
         while (document.getElementById('tm-dsave')) await new Promise((resolve) => requestAnimationFrame(resolve));
         await new Promise((resolve) => requestAnimationFrame(resolve));
-        return { syncMs: syncEnd - start, totalMs: performance.now() - start, cards: document.querySelectorAll('.tm-card').length };
+        return { syncMs: syncEnd - start, totalMs: performance.now() - start, cards: document.querySelectorAll('.tm-card').length, previewSource };
     });
+    if (dataset === 'images' && decodeURIComponent(edit.previewSource).indexOf('<title>full-') === -1 && edit.previewSource.indexOf('/full-') === -1) {
+        throw new Error('screenshot editor did not keep the high-resolution source');
+    }
 
     const pureCosts = await page.evaluate(async (persisted) => {
         const modules = window.ThemeMgrModules;
@@ -760,7 +999,7 @@ async function measureCase(browser, count, dataset) {
         reopen,
         operations: {
             searchAll, searchNarrow, searchClear, generationToken, repeatedSearch, imeSearch,
-            category, categoryAll, rapidCategories, sort, favorite, switchTheme, switchThemeWarm, edit,
+            category, categoryAll, gridSize, rapidCategories, sort, favorite, switchTheme, switchThemeWarm, edit,
             featureRegression, cancelOnClose, consecutiveOpenClose,
         },
         pureCosts,
@@ -770,6 +1009,7 @@ async function measureCase(browser, count, dataset) {
             final: finalFetchCounts['/api/settings/get'] || 0,
         },
         metadata: { initial: initialMetadataCount, afterFirstOpen: metadataCountAfterOpen },
+        imageLoading,
         memory: { beforeOpen: beforeOpenMemory, firstOpen: firstOpenMemory, afterFirstClose: afterFirstCloseMemory, reopen: reopenMemory, beforeFinalClose: beforeFinalCloseMemory, afterFinalClose: afterFinalCloseMemory },
         closeFinal,
         pageErrors,
@@ -844,6 +1084,7 @@ async function main() {
         pureCosts: result.pureCosts,
         inventory: result.inventory,
         metadata: result.metadata,
+        imageLoading: result.imageLoading,
         heap: {
             beforeOpen: result.memory.beforeOpen.jsHeapUsedBytes,
             firstOpen: result.memory.firstOpen.jsHeapUsedBytes,

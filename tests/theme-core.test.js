@@ -11,6 +11,7 @@ require('../src/theme-transfer.js');
 require('../src/theme-metadata.js');
 require('../src/editor-draft.js');
 require('../src/image-tools.js');
+require('../src/image-loader.js');
 require('../src/theme-pairs.js');
 require('../src/theme-series.js');
 require('../src/theme-bindings.js');
@@ -1990,6 +1991,49 @@ test('preview asset prefers a full-composition thumbnail for a v2 focus view', (
 
     assert.equal(asset.src, 'full-composition-thumb.jpg');
     assert.deepEqual(asset.view, view);
+});
+
+test('quality preview mode prefers imageData without changing the responsive view', () => {
+    const view = { version: 2, mode: 'focus', zoom: 1.4, posX: 30, posY: 70 };
+    const asset = imageTools.resolvePreviewAsset({
+        imageData: 'full-image.jpg',
+        thumbData: 'thumbnail.jpg',
+        crop: view,
+    }, 'quality');
+
+    assert.equal(asset.src, 'full-image.jpg');
+    assert.deepEqual(asset.view, view);
+});
+
+test('preview presentation exposes layout state without exposing the image payload', () => {
+    const presentation = imageTools.resolvePreviewPresentation({
+        imageData: 'data:image/png;base64,VERY_LONG_PAYLOAD',
+        thumbData: 'data:image/png;base64,THUMBNAIL',
+        crop: { version: 2, mode: 'focus', zoom: 1.3, posX: 40, posY: 60 },
+    });
+
+    assert.equal(presentation.hasImage, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(presentation, 'src'), false);
+    assert.deepEqual(presentation.view, { version: 2, mode: 'focus', zoom: 1.3, posX: 40, posY: 60 });
+});
+
+test('invalid preview quality falls back to performance mode', () => {
+    const asset = imageTools.resolvePreviewAsset({
+        imageData: 'full-image.jpg',
+        thumbData: 'thumbnail.jpg',
+        crop: { version: 2, mode: 'focus', zoom: 1, posX: 50, posY: 50 },
+    }, 'unknown');
+
+    assert.equal(asset.src, 'thumbnail.jpg');
+    assert.equal(imageTools.normalizePreviewImageQuality('unknown'), 'performance');
+});
+
+test('preview source falls back across imageData thumbData and legacy previewData', () => {
+    assert.equal(imageTools.resolvePreviewAsset({ imageData: 'full.jpg' }, 'quality').src, 'full.jpg');
+    assert.equal(imageTools.resolvePreviewAsset({ thumbData: 'thumb.jpg' }, 'quality').src, 'thumb.jpg');
+    assert.equal(imageTools.resolvePreviewAsset({ previewData: 'legacy.jpg' }, 'performance').src, 'legacy.jpg');
+    assert.equal(imageTools.hasPreviewImage({ previewData: 'legacy.jpg' }), true);
+    assert.equal(imageTools.resolvePreviewAsset({}, 'quality').src, '');
 });
 
 test('preview asset gives a legacy thumbnail the default view when no full image exists', () => {

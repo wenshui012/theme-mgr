@@ -45,6 +45,7 @@
             'src/theme-appearance.js',
             'src/storage.js',
             'src/image-tools.js',
+            'src/image-loader.js',
             'src/styles.js',
             'src/backgrounds.js',
             'src/ui-sheets.js',

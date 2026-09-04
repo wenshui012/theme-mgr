@@ -99,22 +99,47 @@
         });
     }
 
-    function resolvePreviewAsset(meta) {
+    function normalizePreviewImageQuality(value) {
+        return value === 'quality' ? 'quality' : 'performance';
+    }
+
+    function imageField(meta, key) {
+        return typeof meta[key] === 'string' && meta[key] ? meta[key] : '';
+    }
+
+    function resolvePreviewPresentation(meta) {
         meta = meta && typeof meta === 'object' ? meta : {};
-        var imageData = typeof meta.imageData === 'string' && meta.imageData ? meta.imageData : '';
-        var thumbData = typeof meta.thumbData === 'string' && meta.thumbData ? meta.thumbData : '';
+        var imageData = imageField(meta, 'imageData');
+        var hasFallback = Boolean(imageField(meta, 'thumbData') || imageField(meta, 'previewData'));
+        var isResponsive = isResponsivePreviewView(meta.crop);
+        return {
+            hasImage: Boolean(imageData || hasFallback),
+            view: imageData
+                ? resolvePreviewView(meta.crop)
+                : (isResponsive ? normalizePreviewView(meta.crop) : normalizePreviewView(null)),
+            responsive: imageData ? true : isResponsive,
+        };
+    }
+
+    function resolvePreviewAsset(meta, quality) {
+        meta = meta && typeof meta === 'object' ? meta : {};
+        quality = normalizePreviewImageQuality(quality);
+        var imageData = imageField(meta, 'imageData');
+        var thumbData = imageField(meta, 'thumbData');
+        var previewData = imageField(meta, 'previewData');
+        var presentation = resolvePreviewPresentation(meta);
         var isResponsive = isResponsivePreviewView(meta.crop);
         if (imageData) {
             return {
-                src: isResponsive && thumbData ? thumbData : imageData,
-                view: resolvePreviewView(meta.crop),
-                responsive: true,
+                src: quality === 'quality' ? imageData : (isResponsive && thumbData ? thumbData : imageData),
+                view: presentation.view,
+                responsive: presentation.responsive,
             };
         }
         return {
-            src: thumbData,
-            view: isResponsive ? normalizePreviewView(meta.crop) : normalizePreviewView(null),
-            responsive: isResponsive,
+            src: thumbData || previewData,
+            view: presentation.view,
+            responsive: presentation.responsive,
         };
     }
 
@@ -123,7 +148,8 @@
             meta &&
             typeof meta === 'object' &&
             ((typeof meta.imageData === 'string' && meta.imageData) ||
-                (typeof meta.thumbData === 'string' && meta.thumbData))
+                (typeof meta.thumbData === 'string' && meta.thumbData) ||
+                (typeof meta.previewData === 'string' && meta.previewData))
         );
     }
 
@@ -131,6 +157,7 @@
         if (!target || typeof target !== 'object' || hasPreviewImage(target) || !hasPreviewImage(incoming)) return false;
         target.imageData = typeof incoming.imageData === 'string' && incoming.imageData ? incoming.imageData : null;
         target.thumbData = typeof incoming.thumbData === 'string' && incoming.thumbData ? incoming.thumbData : null;
+        if (typeof incoming.previewData === 'string' && incoming.previewData) target.previewData = incoming.previewData;
         target.crop = incoming.crop && typeof incoming.crop === 'object'
             ? Object.assign({}, incoming.crop)
             : null;
@@ -142,7 +169,10 @@
         normalizePreviewView: normalizePreviewView,
         isResponsivePreviewView: isResponsivePreviewView,
         resolvePreviewView: resolvePreviewView,
+        resolvePreviewPresentation: resolvePreviewPresentation,
         resolvePreviewAsset: resolvePreviewAsset,
+        normalizePreviewImageQuality: normalizePreviewImageQuality,
+        hasPreviewImage: hasPreviewImage,
         mergeMissingPreview: mergeMissingPreview,
 
         compressImage: function (dataUrl, cb, opts) {
