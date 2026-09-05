@@ -132,6 +132,32 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const gridUsesThumb = gridImage && gridImage.src === persisted.thumbData && gridImage.src !== persisted.imageData;
                 const imageOnlyCard = Boolean(document.querySelector('.tm-avatar-page-card .tm-avatar-page-thumb')) &&
                     !document.querySelector('.tm-avatar-page-name') && Boolean(document.querySelector('[data-avatar-action="menu"]'));
+                let pickerSelection = '';
+                const pickerSheet = await pageController.openPicker({ selectedId:avatarId, onSelect:(chosen) => { pickerSelection = chosen.id; } });
+                const pickerCard = pickerSheet.querySelector(`[data-avatar-pick-id="${avatarId}"]`);
+                const pickerUsesLoader = Boolean(pickerCard && pickerCard.querySelector('img'));
+                pickerCard.click();
+                const libraryPicker = pickerSelection === avatarId && !pickerSheet.isConnected && pickerUsesLoader;
+
+                const stressIds = [];
+                for (let index = 0; index < 24; index++) {
+                    const id = `grid-stress-${index}`;
+                    stressIds.push(id);
+                    await store.putAsset({ ...persisted, id, name:id, createdAt:new Date(Date.now()+index+1).toISOString(), updatedAt:new Date(Date.now()+index+1).toISOString() });
+                }
+                await pageController.refresh();
+                await frame();
+                const stressCards = [...document.querySelectorAll('.tm-avatar-page-card')].map((card) => card.getBoundingClientRect());
+                const squareCards = stressCards.length === 25 && stressCards.every((rect) => Math.abs(rect.width - rect.height) < 1 && rect.width > 0);
+                const nonOverlappingRows = stressCards.every((rect, index) => stressCards.slice(index + 1).every((other) => {
+                    const horizontalOverlap = Math.min(rect.right, other.right) - Math.max(rect.left, other.left) > 1;
+                    const differentRows = Math.abs(rect.top - other.top) > 1;
+                    return !horizontalOverlap || !differentRows || other.top >= rect.bottom - 1 || rect.top >= other.bottom - 1;
+                }));
+                const gridStable = squareCards && nonOverlappingRows;
+                for (const id of stressIds) await store.deleteAsset(id);
+                await pageController.refresh();
+                await frame();
 
                 document.querySelector('[data-avatar-action="view"]').click();
                 for (let attempt = 0; attempt < 20 && !document.querySelector('.tm-lightbox'); attempt++) await delay(10);
@@ -339,6 +365,54 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const otherTargetSurvivesEdit = characterImages.every((image) => image.src.startsWith('data:image/') && image.style.getPropertyValue('object-view-box'));
                 await runtime.cancelEdit();
                 const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image) => image.src.startsWith('data:image/') && image.style.getPropertyValue('object-view-box')) && userImages.every((image) => image.src === persisted.imageData);
+
+                function coloredAsset(id, color) {
+                    const canvas = document.createElement('canvas'); canvas.width = 24; canvas.height = 24;
+                    const context2d = canvas.getContext('2d'); context2d.fillStyle = color; context2d.fillRect(0, 0, 24, 24);
+                    const data = canvas.toDataURL('image/png');
+                    return { ...persisted, id, name:id, imageData:data, thumbData:data, mimeType:'image/png', width:24, height:24 };
+                }
+                const themeAAsset = coloredAsset('theme-user-a', '#b02030');
+                const themeBAsset = coloredAsset('theme-user-b', '#2040b0');
+                const temporaryAsset = coloredAsset('theme-user-temp', '#20a050');
+                await store.putAsset(themeAAsset); await store.putAsset(themeBAsset); await store.putAsset(temporaryAsset);
+                await store.putBinding({ themeKey:'theme-name:A', targetKey:'user:global', avatarId:themeAAsset.id, view:{x:.1} });
+                await store.putBinding({ themeKey:'theme-name:B', targetKey:'user:global', avatarId:themeBAsset.id, view:{y:.1} });
+                const characterBeforeThemeBindings = characterImages.map((image) => ({ src:image.src, crop:image.style.getPropertyValue('object-view-box') }));
+                document.querySelector('#themes').value='A'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
+                const appliedA = userImages.every((image) => image.src === themeAAsset.imageData);
+                const boundAssetMenu = await pageController.openAssetMenu(avatarId);
+                boundAssetMenu.querySelector('[data-avatar-menu-action="apply-user"]').click();
+                await delay(20);
+                const choiceSheet = document.querySelector('[data-avatar-menu-action="temporary-user"]')?.closest('.tm-sheet-overlay');
+                const manualChoicePrompt = Boolean(choiceSheet && choiceSheet.querySelector('[data-avatar-menu-action="update-theme-user"]'));
+                if (choiceSheet) sheets.closeSheet(choiceSheet);
+                document.querySelector('#themes').value='B'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
+                const appliedB = userImages.every((image) => image.src === themeBAsset.imageData);
+                const optionC = document.createElement('option'); optionC.value='C'; optionC.textContent='C'; document.querySelector('#themes').appendChild(optionC);
+                document.querySelector('#themes').value='C'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
+                const unboundUsesGlobal = userImages.every((image) => image.src === persisted.imageData);
+                const themeSwitching = appliedA && appliedB && unboundUsesGlobal;
+
+                document.querySelector('#themes').value='A'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
+                await runtime.beginEdit({ kind:'user', avatarId:temporaryAsset.id, bindingMode:'temporary', themeName:'A' });
+                runtime.setScale(1.35); await runtime.saveEdit();
+                const themeBindingBeforeSwitch = await store.getBinding('theme-name:A','user:global');
+                const temporaryApplied = userImages.every((image) => image.src === temporaryAsset.imageData) && themeBindingBeforeSwitch.avatarId === themeAAsset.id;
+                document.querySelector('#themes').value='B'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
+                document.querySelector('#themes').value='A'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
+                const temporaryReset = userImages.every((image) => image.src === themeAAsset.imageData);
+                const temporarySemantics = temporaryApplied && temporaryReset;
+
+                await runtime.beginEdit({ kind:'user', avatarId:temporaryAsset.id, bindingMode:'theme', themeName:'A' });
+                runtime.setScale(1.2); await runtime.saveEdit();
+                const modifiedThemeBinding = await store.getBinding('theme-name:A','user:global');
+                const themeBindingModified = modifiedThemeBinding.avatarId === temporaryAsset.id && modifiedThemeBinding.view.scale === 1.2;
+                await runtime.clearThemeUserBinding('A');
+                const themeClearFallback = userImages.every((image) => image.src === persisted.imageData);
+                const characterIsolation = characterImages.every((image,index) => image.src === characterBeforeThemeBindings[index].src && image.style.getPropertyValue('object-view-box') === characterBeforeThemeBindings[index].crop);
+                await runtime.clearThemeUserBinding('B');
+                await store.deleteAsset(themeAAsset.id); await store.deleteAsset(themeBAsset.id); await store.deleteAsset(temporaryAsset.id);
                 await runtime.clearBinding('user');
                 const restoredUser = userImages.every((image) => image.src.includes('R0lGOD'));
                 const resetNativeSheet = await pageController.openNativeMenu();
@@ -374,9 +448,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     L_rerender:rerenderApplied, M_themeSwitch:themesIsolated, N_circle:visualsPreserved,
                     O_clip:visualsPreserved, P_mask:visualsPreserved, Q_transform:visualsPreserved,
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
-                    gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
+                    gridUsesThumb, gridStable, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
-                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete, nativeInputHandlingMs, nativeResponsiveInputs,
+                    emptyLayout, fullPreview, sharedThemePreview, libraryPicker, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, manualChoicePrompt, temporarySemantics, themeBindingModified, themeClearFallback, characterIsolation, menuDelete, nativeInputHandlingMs, nativeResponsiveInputs,
                     nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
                     hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
@@ -384,7 +458,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','libraryPicker','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','manualChoicePrompt','temporarySemantics','themeBindingModified','themeClearFallback','characterIsolation','menuDelete','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

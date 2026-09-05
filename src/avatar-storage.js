@@ -3,7 +3,7 @@
     var DB_NAME = 'theme_mgr_avatar_db';
     var DB_VERSION = 1;
     var LIBRARY_VERSION = 1;
-    var BINDINGS_VERSION = 3;
+    var BINDINGS_VERSION = 4;
     var NATIVE_VIEWS_VERSION = 1;
     var STORES = { assets: 'assets', main: 'main-images', thumbs: 'thumbnails', bindings: 'bindings', meta: 'meta' };
 
@@ -87,8 +87,10 @@
         var targetKey = cleanText(binding.targetKey);
         var avatarId = cleanText(binding.avatarId);
         if (!themeKey || !targetKey || !avatarId) throw makeError('AVATAR_BINDING_INVALID', '头像绑定数据无效');
+        var bindingVersion = Math.round(finite(binding.version, BINDINGS_VERSION));
+        bindingVersion = Math.max(1, Math.min(BINDINGS_VERSION, bindingVersion));
         return {
-            version: BINDINGS_VERSION,
+            version: bindingVersion,
             id: bindingId(themeKey, targetKey),
             themeKey: themeKey,
             targetKey: targetKey,

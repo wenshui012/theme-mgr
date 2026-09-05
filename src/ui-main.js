@@ -5469,6 +5469,21 @@
                 '<span class="tm-theme-bind-copy"><strong>角色 / 聊天绑定</strong><small>' + summary + '</small></span>' +
                 '<i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i>';
         }
+        function buildUserAvatarBindingHtml(binding, asset) {
+            if (!binding) {
+                return '<button type="button" class="tm-user-avatar-bind-card" data-user-avatar-action="choose">' +
+                    '<span class="tm-user-avatar-bind-thumb empty"><i class="fa-regular fa-user"></i></span>' +
+                    '<span class="tm-user-avatar-bind-copy"><strong>沿用全局 User 头像</strong><small>此美化尚无专属绑定</small></span>' +
+                    '<i class="fa-solid fa-chevron-right"></i></button>';
+            }
+            var preview = asset && (asset.thumbData || asset.imageData) || '';
+            return '<button type="button" class="tm-user-avatar-bind-card" data-user-avatar-action="choose">' +
+                '<span class="tm-user-avatar-bind-thumb"' + (preview ? ' style="background-image:url(&quot;' + esc(preview) + '&quot;)"' : '') + '></span>' +
+                '<span class="tm-user-avatar-bind-copy"><strong>' + esc(asset && asset.name || '已绑定头像') + '</strong><small>当前美化专属 User 头像</small></span>' +
+                '<i class="fa-solid fa-chevron-right"></i></button>' +
+                '<div class="tm-user-avatar-bind-actions"><button type="button" class="tm-btn tm-btn-outline" data-user-avatar-action="adjust"><i class="fa-solid fa-sliders"></i> 调整</button>' +
+                '<button type="button" class="tm-btn tm-btn-danger" data-user-avatar-action="clear">解除绑定</button></div>';
+        }
         var catOpts = '<option value="">无分类</option>' +
             d.categories.map(function (c) { return '<option value="' + esc(c) + '"' + (meta.category === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
 
@@ -5482,6 +5497,7 @@
             '<div class="tm-field"><label>分类</label><div class="tm-frow"><select id="tm-dcat">' + catOpts + '</select><button class="tm-btn tm-btn-outline" id="tm-dnewcat" style="white-space:nowrap;font-size:.8em;padding:7px 10px">+ 新建</button></div></div>',
             '<div class="tm-field"><label>绑定背景</label><button type="button" class="tm-bg-bind-card" id="tm-bg-bind">' + buildBackgroundBindHtml(editBackgroundName) + '</button></div>',
             '<div class="tm-field"><label>绑定范围</label><button type="button" class="tm-theme-bind-card" id="tm-theme-bind-overview">' + buildBindingsOverviewHtml() + '</button></div>',
+            '<div class="tm-field"><label>User 头像绑定</label><div class="tm-user-avatar-bind" id="tm-user-avatar-bind"><div class="tm-user-avatar-bind-loading">正在读取头像绑定…</div></div></div>',
             '<div class="tm-field"><label>作者</label><input type="text" id="tm-dauthor" placeholder="主题作者名" value="' + esc(meta.author || '') + '" /></div>',
             '<div class="tm-field"><label>备注</label><textarea id="tm-ddesc" rows="2" placeholder="主题特点、适用场景等">' + esc(meta.description || '') + '</textarea></div>',
             '<div class="tm-field"><label>标签</label><div class="tm-tags-wrap" id="tm-tags-wrap"></div>' +
@@ -5510,6 +5526,69 @@
         sheet.querySelector('#tm-theme-bind-overview').addEventListener('click', function () {
             openBindingsOverviewSheet(item.key, renderBindingsOverview);
         });
+        var userAvatarBindingToken = 0;
+        var currentUserAvatarBinding = null;
+        function renderUserAvatarBinding() {
+            var token = ++userAvatarBindingToken;
+            var bindingThemeName = themeName;
+            var host = sheet.querySelector('#tm-user-avatar-bind');
+            if (!host || !avatarRuntime || !avatarStore) return;
+            host.innerHTML = '<div class="tm-user-avatar-bind-loading">正在读取头像绑定…</div>';
+            avatarRuntime.getThemeUserBinding(bindingThemeName).then(function (binding) {
+                if (!binding) return [null, null];
+                return avatarStore.getAsset(binding.avatarId).then(function (asset) { return [binding, asset]; });
+            }).then(function (parts) {
+                if (token !== userAvatarBindingToken || bindingThemeName !== themeName || !host.parentNode) return;
+                currentUserAvatarBinding = parts[0];
+                host.innerHTML = buildUserAvatarBindingHtml(parts[0], parts[1]);
+            }).catch(function (error) {
+                if (token !== userAvatarBindingToken || !host.parentNode) return;
+                host.innerHTML = '<div class="tm-user-avatar-bind-loading">头像绑定读取失败</div>';
+                console.warn('[头像管理] 美化专属 User 绑定读取失败:', error);
+            });
+        }
+        function beginThemeUserAvatarEdit(bindingThemeName, avatarId) {
+            if (!bindingThemeName || !avatarId) return;
+            if (closePopup() === false) return;
+            function openEditor() {
+                setTimeout(function () {
+                    avatarRuntime.beginEdit({
+                        kind: 'user',
+                        avatarId: avatarId,
+                        bindingMode: 'theme',
+                        themeName: bindingThemeName,
+                    }).catch(function (error) { toast(error.message || '无法启动 User 头像调整', true); });
+                }, 32);
+            }
+            if (getCurrentThemeName() === bindingThemeName) { openEditor(); return; }
+            applyManualTheme(bindingThemeName, function (ok, reason) {
+                if (ok) openEditor();
+                else if (reason !== 'superseded') toast('无法应用目标美化，User 头像调整未启动', true);
+            });
+        }
+        var userAvatarBindingHost = sheet.querySelector('#tm-user-avatar-bind');
+        userAvatarBindingHost.addEventListener('click', function (event) {
+            var button = event.target && event.target.closest ? event.target.closest('[data-user-avatar-action]') : null;
+            if (!button || !userAvatarBindingHost.contains(button)) return;
+            var action = button.getAttribute('data-user-avatar-action');
+            var bindingThemeName = themeName;
+            if (action === 'choose') {
+                avatarPageController.openPicker({
+                    title: currentUserAvatarBinding ? '更换当前美化的 User 头像' : '绑定当前美化的 User 头像',
+                    selectedId: currentUserAvatarBinding && currentUserAvatarBinding.avatarId,
+                    onSelect: function (asset) { beginThemeUserAvatarEdit(bindingThemeName, asset.id); },
+                }).catch(function (error) { toast(error.message || '头像选择器无法打开', true); });
+            } else if (action === 'adjust' && currentUserAvatarBinding) {
+                beginThemeUserAvatarEdit(bindingThemeName, currentUserAvatarBinding.avatarId);
+            } else if (action === 'clear' && currentUserAvatarBinding) {
+                avatarRuntime.clearThemeUserBinding(bindingThemeName).then(function () {
+                    currentUserAvatarBinding = null;
+                    renderUserAvatarBinding();
+                    toast('已解除当前美化的 User 头像绑定，将沿用全局头像');
+                }).catch(function (error) { toast(error.message || '解除 User 头像绑定失败', true); });
+            }
+        });
+        renderUserAvatarBinding();
 
         // 标签
         function renderTagChips() {
@@ -5574,6 +5653,7 @@
             editCrop = draft.crop || null;
             renderBackgroundBind();
             setImg(editImgData, editThumbData, editCrop);
+            renderUserAvatarBinding();
             sheet.querySelectorAll('.tm-day-night-toggle button').forEach(function (button) {
                 button.classList.toggle('on', button.dataset.variant === variant);
             });

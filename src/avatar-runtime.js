@@ -11,6 +11,7 @@
     var TARGET_CLASS = 'tm-avatar-editor-target';
     var AVATAR_CLASS = 'tm-avatar-editor-selected';
     var DEFAULT_BINDING_KEY = 'avatar-default';
+    var THEME_BINDING_VERSION = 4;
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -249,12 +250,16 @@
         var editorRenderFrame = null;
         var activePointer = null;
         var dragOrigin = null;
+        var temporaryUserOverride = null;
 
         function contextSafe() {
             try { return getContext() || {}; } catch (_) { return {}; }
         }
         function currentThemeKey() { return themeKey(getThemeName()); }
         function targets() { return getContextInfo(contextSafe()); }
+        function isDedicatedThemeBinding(binding) {
+            return Boolean(binding && /^theme-name:/.test(binding.themeKey || '') && Number(binding.version) >= THEME_BINDING_VERSION);
+        }
         function ensureSourceCache(asset) {
             var cached = rotatedSources.get(asset.id);
             if (!cached || cached.imageData !== asset.imageData) {
@@ -412,27 +417,46 @@
                 return asset;
             });
         }
-        function getBindingForTarget(target) {
+        function getDefaultBinding(target) {
             return store.getBinding(DEFAULT_BINDING_KEY, target.key).then(function (binding) {
                 if (binding) {
                     promotedBindings.set(target.key, binding);
                     return binding;
                 }
                 if (promotedBindings.has(target.key)) return promotedBindings.get(target.key);
-                var legacyKey = currentThemeKey();
-                if (!legacyKey) return null;
-                return store.getBinding(legacyKey, target.key).then(function (legacy) {
-                    if (!legacy) return null;
-                    var promoted = Object.assign({}, legacy, { themeKey: DEFAULT_BINDING_KEY });
-                    delete promoted.id;
-                    return store.putBinding(promoted).then(function (saved) {
-                        promotedBindings.set(target.key, saved);
-                        return saved;
-                    }).catch(function (error) {
-                        onError(error);
-                        promotedBindings.set(target.key, promoted);
-                        return promoted;
-                    });
+                return null;
+            });
+        }
+        function promoteLegacyBinding(target, legacy) {
+            if (!legacy || isDedicatedThemeBinding(legacy)) return Promise.resolve(null);
+            var promoted = Object.assign({}, legacy, { themeKey: DEFAULT_BINDING_KEY });
+            delete promoted.id;
+            delete promoted.version;
+            return store.putBinding(promoted).then(function (saved) {
+                promotedBindings.set(target.key, saved);
+                return saved;
+            }).catch(function (error) {
+                onError(error);
+                promotedBindings.set(target.key, promoted);
+                return promoted;
+            });
+        }
+        function getBindingForTarget(target, requestedThemeKey) {
+            requestedThemeKey = requestedThemeKey || '';
+            if (target.kind === 'user' && temporaryUserOverride) {
+                if (temporaryUserOverride.themeKey === requestedThemeKey && temporaryUserOverride.targetKey === target.key) {
+                    return Promise.resolve(temporaryUserOverride);
+                }
+                temporaryUserOverride = null;
+            }
+            var themed = requestedThemeKey
+                ? store.getBinding(requestedThemeKey, target.key)
+                : Promise.resolve(null);
+            return themed.then(function (themeBinding) {
+                if (target.kind === 'user' && isDedicatedThemeBinding(themeBinding)) return themeBinding;
+                return getDefaultBinding(target).then(function (binding) {
+                    if (binding) return binding;
+                    return promoteLegacyBinding(target, themeBinding);
                 });
             });
         }
@@ -457,18 +481,33 @@
                 else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
             });
         }
-        function resolveRuntimeDesired() {
+        function resolveRuntimeDesired(requestedThemeKey) {
             var info = targets();
             var targetList = [info.character, info.user].filter(Boolean);
             var foundBinding = false;
             return Promise.all(targetList.map(function (target) {
-                return getBindingForTarget(target).then(function (binding) {
+                return getBindingForTarget(target, requestedThemeKey).then(function (binding) {
                     if (binding) {
                         foundBinding = true;
                         return getAsset(binding.avatarId).then(function (asset) {
                             if (!asset) {
-                                promotedBindings.delete(target.key);
-                                return store.deleteBinding(DEFAULT_BINDING_KEY, target.key).then(function () { return null; });
+                                if (binding.themeKey === DEFAULT_BINDING_KEY) promotedBindings.delete(target.key);
+                                var wasTemporary = binding === temporaryUserOverride;
+                                if (wasTemporary) temporaryUserOverride = null;
+                                var removeMissing = wasTemporary
+                                    ? Promise.resolve()
+                                    : store.deleteBinding(binding.themeKey, target.key);
+                                return removeMissing.then(function () {
+                                    if (binding.themeKey !== DEFAULT_BINDING_KEY) {
+                                        return getDefaultBinding(target).then(function (fallback) {
+                                            if (!fallback) return null;
+                                            return getAsset(fallback.avatarId).then(function (fallbackAsset) {
+                                                return fallbackAsset ? { target: target, binding: fallback, asset: fallbackAsset, native: false } : null;
+                                            });
+                                        });
+                                    }
+                                    return null;
+                                });
                             }
                             return { target: target, binding: binding, asset: asset, native: false };
                         });
@@ -532,9 +571,10 @@
         }
         function reconcile() {
             var request = ++sequence;
+            var requestedThemeKey = currentThemeKey();
             if (editor) { syncEditorInstances(); return Promise.resolve({ editing: true }); }
-            return Promise.resolve(store.ready).then(resolveRuntimeDesired).then(function (desired) {
-                if (request !== sequence || editor) return { superseded: true };
+            return Promise.resolve(store.ready).then(function () { return resolveRuntimeDesired(requestedThemeKey); }).then(function (desired) {
+                if (request !== sequence || editor || requestedThemeKey !== currentThemeKey()) return { superseded: true };
                 hasRuntimeBinding = desired.hasBinding;
                 bindingPlans = desired.plans;
                 try { applyDesired(desired.items); observeChat(); }
@@ -545,6 +585,10 @@
         function scheduleReconcile(delay) {
             if (reconcileTimer) win.clearTimeout(reconcileTimer);
             reconcileTimer = win.setTimeout(function () { reconcileTimer = null; reconcile(); }, delay == null ? 40 : delay);
+        }
+        function invalidateAndScheduleReconcile(delay) {
+            sequence += 1;
+            scheduleReconcile(delay);
         }
         function observeChat() {
             var chat = doc.getElementById && doc.getElementById('chat');
@@ -563,13 +607,13 @@
         }
         function contextChanged() {
             if (editor) cancelEdit('context-changed');
-            else { observeChat(); scheduleReconcile(20); }
+            else { observeChat(); invalidateAndScheduleReconcile(20); }
         }
         function contentChanged() { if (editor || hasRuntimeBinding) { observeChat(); scheduleReconcile(20); } }
         function onThemeControlChange(event) {
             if (!event.target || event.target.id !== 'themes') return;
             if (editor) cancelEdit('theme-changed');
-            else scheduleReconcile(80);
+            else invalidateAndScheduleReconcile(80);
         }
         function start() {
             if (started) return Promise.resolve(false);
@@ -598,6 +642,7 @@
             started = false;
             hasRuntimeBinding = false;
             bindingPlans = [];
+            temporaryUserOverride = null;
             nativeImageCache.clear();
             sequence += 1;
             restoreAll();
@@ -767,14 +812,27 @@
             if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
             var kind = input.target && input.target.kind || input.kind;
             var cap = capability(kind);
-            var key = DEFAULT_BINDING_KEY;
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
-            return Promise.all([getAsset(input.avatarId), getBindingForTarget(cap.target)]).then(function (parts) {
+            var bindingMode = kind === 'user' && (input.bindingMode === 'theme' || input.bindingMode === 'temporary')
+                ? input.bindingMode
+                : 'global';
+            var requestedThemeKey = bindingMode === 'global' ? DEFAULT_BINDING_KEY : themeKey(input.themeName || getThemeName());
+            if (bindingMode !== 'global' && !requestedThemeKey) {
+                return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            }
+            var previousPromise = bindingMode === 'temporary'
+                ? getBindingForTarget(cap.target, requestedThemeKey)
+                : store.getBinding(requestedThemeKey, cap.target.key).then(function (binding) {
+                    if (bindingMode === 'theme' && !isDedicatedThemeBinding(binding)) return null;
+                    return binding;
+                });
+            return Promise.all([getAsset(input.avatarId), previousPromise]).then(function (parts) {
                 var asset = parts[0];
                 if (!asset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
                 editor = {
                     mode: 'library',
-                    themeKey: key,
+                    bindingMode: bindingMode,
+                    themeKey: requestedThemeKey,
                     target: cap.target,
                     avatarId: asset.id,
                     asset: asset,
@@ -938,6 +996,11 @@
         }
         function saveEdit() {
             if (!editor || editorClosing) return Promise.resolve(null);
+            if (editor.mode === 'library' && editor.bindingMode !== 'global' && editor.themeKey !== currentThemeKey()) {
+                return cancelEdit('superseded').then(function () {
+                    throw Object.assign(new Error('当前美化已切换，头像修改未保存'), { code: 'superseded' });
+                });
+            }
             editorClosing = true;
             if (editor.mode === 'native') {
                 var nativeRecord = {
@@ -966,8 +1029,22 @@
                 view: normalizeView(editor.view),
             };
             var diagnostics = clone(editor.diagnostics);
+            if (editor.bindingMode === 'temporary') {
+                var savedTemporary = Object.assign({ version: THEME_BINDING_VERSION, temporary: true }, binding);
+                temporaryUserOverride = savedTemporary;
+                finishEditorUi();
+                editor = null;
+                sequence += 1;
+                return reconcile().then(function () {
+                    editorClosing = false;
+                    return { saved: true, temporary: true, binding: clone(savedTemporary), diagnostics: diagnostics };
+                }, function (error) { editorClosing = false; throw error; });
+            }
             return store.putBinding(binding).then(function (saved) {
-                promotedBindings.set(binding.targetKey, saved);
+                if (binding.themeKey === DEFAULT_BINDING_KEY) promotedBindings.set(binding.targetKey, saved);
+                if (binding.themeKey !== DEFAULT_BINDING_KEY && temporaryUserOverride && temporaryUserOverride.targetKey === binding.targetKey) {
+                    temporaryUserOverride = null;
+                }
                 finishEditorUi();
                 editor = null;
                 sequence += 1;
@@ -980,7 +1057,8 @@
         function deleteTargetBindings(targetKey) {
             return store.listBindings().then(function (bindings) {
                 var targetsToDelete = (bindings || []).filter(function (binding) {
-                    return binding.targetKey === targetKey && (binding.themeKey === DEFAULT_BINDING_KEY || /^theme-name:/.test(binding.themeKey));
+                    return binding.targetKey === targetKey && (binding.themeKey === DEFAULT_BINDING_KEY ||
+                        (/^theme-name:/.test(binding.themeKey) && !isDedicatedThemeBinding(binding)));
                 });
                 if (!targetsToDelete.some(function (binding) { return binding.themeKey === DEFAULT_BINDING_KEY; })) {
                     targetsToDelete.push({ themeKey: DEFAULT_BINDING_KEY, targetKey: targetKey });
@@ -1016,7 +1094,26 @@
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('binding-cleared').then(function () { return clearBinding(kind); });
             promotedBindings.delete(cap.target.key);
+            if (kind === 'user') temporaryUserOverride = null;
             return deleteTargetBindings(cap.target.key).then(reconcile);
+        }
+        function getThemeUserBinding(themeName) {
+            var key = themeKey(themeName || getThemeName());
+            if (!key) return Promise.resolve(null);
+            return Promise.resolve(store.ready).then(function () {
+                return store.getBinding(key, 'user:global');
+            }).then(function (binding) { return isDedicatedThemeBinding(binding) ? binding : null; });
+        }
+        function getGlobalUserBinding() {
+            return Promise.resolve(store.ready).then(function () { return getDefaultBinding(targets().user); });
+        }
+        function clearThemeUserBinding(themeName) {
+            var key = themeKey(themeName || getThemeName());
+            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            if (editor) return cancelEdit('theme-binding-cleared').then(function () { return clearThemeUserBinding(themeName); });
+            if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
+            sequence += 1;
+            return store.deleteBinding(key, 'user:global').then(reconcile);
         }
         function clearNativeView(kind) {
             var cap = capability(kind === 'user' ? 'user' : 'character');
@@ -1037,6 +1134,7 @@
                 state: 'editing',
                 mode: editor.mode,
                 themeKey: editor.themeKey,
+                bindingMode: editor.bindingMode || null,
                 target: clone(editor.target),
                 avatarId: editor.avatarId,
                 view: clone(editor.view),
@@ -1063,6 +1161,9 @@
             scaleUp: function () { return setScale(editor ? editor.view.scale + SCALE_STEP : 1); },
             scaleDown: function () { return setScale(editor ? editor.view.scale - SCALE_STEP : 1); },
             clearBinding: clearBinding,
+            getThemeUserBinding: getThemeUserBinding,
+            getGlobalUserBinding: getGlobalUserBinding,
+            clearThemeUserBinding: clearThemeUserBinding,
             deleteAsset: deleteAsset,
             notifyAssetChanged: notifyAssetChanged,
             getState: getState,
