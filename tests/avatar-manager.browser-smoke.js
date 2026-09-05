@@ -99,6 +99,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const empty = pageController.getState().count === 0 && Boolean(document.querySelector('.tm-avatar-page-empty'));
                 const emptyLayout = !document.querySelector('.tm-avatar-page h2') &&
                     !document.querySelector('[data-avatar-action="pick"]') && !document.querySelector('[data-avatar-actions]');
+                const nativeBar = document.querySelector('[data-avatar-native-bar]');
+                const nativeEntryReady = Boolean(nativeBar && !nativeBar.hidden && nativeBar.textContent.includes('Character') &&
+                    !document.querySelector('[data-avatar-action="adjust-native"]').disabled);
 
                 const source = document.createElement('canvas'); source.width = 2600; source.height = 1300;
                 const ctx = source.getContext('2d'); ctx.clearRect(0, 0, source.width, source.height); ctx.fillStyle = 'rgba(120,60,220,.72)'; ctx.fillRect(40, 40, 2400, 1100);
@@ -241,14 +244,25 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const transformB = characterImages[0].style.getPropertyValue('object-view-box');
                 const themesIsolated = transformA === transformB && characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
 
+                document.querySelector('[data-avatar-action="adjust-native"]').click();
+                for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
+                const nativeEditorOpened = runtime.getState().state === 'editing' && runtime.getState().mode === 'native';
+                runtime.setScale(1.3);
+                await frame();
+                const nativeSave = await runtime.saveEdit();
+                const persistedNativeView = await reloadedStore.getNativeView('character:char.png');
+                const nativeBindingCleared = !(await reloadedStore.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'character:char.png'));
+                const nativeSourcePreserved = characterImages.every((image) => image.src.includes('R0lGOD'));
+                const nativeCropApplied = characterImages.every((image) => image.style.getPropertyValue('object-view-box'));
+
                 await store.putBinding({ themeKey:modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey:'user:global', avatarId, view:{x:.25,y:.125,scale:1} });
                 await runtime.reconcile();
                 const responsiveCrops = userImages.map((image) => image.style.getPropertyValue('object-view-box'));
                 const responsive = responsiveCrops.every((value) => value && value === responsiveCrops[0]);
                 await runtime.beginEdit({ kind:'user', avatarId });
-                const otherTargetSurvivesEdit = characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
+                const otherTargetSurvivesEdit = characterImages.every((image) => image.src.includes('R0lGOD') && image.style.getPropertyValue('object-view-box'));
                 await runtime.cancelEdit();
-                const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image) => image.src.startsWith('data:image/svg+xml')) && userImages.every((image) => image.src === persisted.imageData);
+                const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image) => image.src.includes('R0lGOD') && image.style.getPropertyValue('object-view-box')) && userImages.every((image) => image.src === persisted.imageData);
                 await runtime.clearBinding('user');
                 const restoredUser = userImages.every((image) => image.src.includes('R0lGOD'));
                 document.querySelector('[data-avatar-action="menu"]').click();
@@ -271,19 +285,21 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 return {
                     label, A_empty:empty, B_added:imported[0].ok, C_reload:reloadCount===1, D_menu:menuOpened&&imageOnlyCard,
                     E_userApply:directUser&&highQualityApplied, F_characterApply:saveResult.saved,
-                    G_managerClose:managerClosed===1, H_drag:Math.abs(dragged.view.x-.25)<.001&&Math.abs(dragged.view.y-.125)<.001,
+                    G_managerClose:managerClosed===2, H_drag:Math.abs(dragged.view.x-.25)<.001&&Math.abs(dragged.view.y-.125)<.001,
                     I_scale:dragged.view.scale===1.05, J_cancel:cancelledToRaw, K_save:Boolean(persistedBindingAfterSave&&persistedBindingAfterSave.avatarId===avatarId),
                     L_rerender:rerenderApplied, M_themeSwitch:themesIsolated, N_circle:visualsPreserved,
                     O_clip:visualsPreserved, P_mask:visualsPreserved, Q_transform:visualsPreserved,
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
-                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
+                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete,
+                    nativeEntryReady, nativeEditorOpened, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeSourcePreserved, nativeCropApplied,
+                    hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','nativeEntryReady','nativeEditorOpened','nativeViewPersisted','nativeBindingCleared','nativeSourcePreserved','nativeCropApplied','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

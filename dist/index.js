@@ -7476,13 +7476,14 @@
 })(window);
 /* END MODULE 14/24: src/image-loader.js */
 
-/* BEGIN MODULE 15/24: src/avatar-storage.js | sha256:23eb9b04576913d0cf4968b64f71fb32d81b5211ec6f9276dfcf419b2d503f9a */
+/* BEGIN MODULE 15/24: src/avatar-storage.js | sha256:d017a65ba5f23ce2433fddc51a1ecc37941c9577c243e9aa8b6ead8d15a0dd31 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var DB_NAME = 'theme_mgr_avatar_db';
     var DB_VERSION = 1;
     var LIBRARY_VERSION = 1;
     var BINDINGS_VERSION = 3;
+    var NATIVE_VIEWS_VERSION = 1;
     var STORES = { assets: 'assets', main: 'main-images', thumbs: 'thumbnails', bindings: 'bindings', meta: 'meta' };
 
     function clone(value) {
@@ -7555,6 +7556,10 @@
         return cleanText(themeKey) + '\u001f' + cleanText(targetKey);
     }
 
+    function nativeViewId(targetKey) {
+        return 'native-view\u001f' + cleanText(targetKey);
+    }
+
     function normalizeBinding(binding) {
         binding = binding && typeof binding === 'object' ? binding : {};
         var themeKey = cleanText(binding.themeKey);
@@ -7572,6 +7577,21 @@
         };
     }
 
+    function normalizeNativeView(record) {
+        record = record && typeof record === 'object' ? record : {};
+        var targetKey = cleanText(record.targetKey);
+        var sourceKey = cleanText(record.sourceKey);
+        if (!targetKey || !sourceKey) throw makeError('AVATAR_NATIVE_VIEW_INVALID', '角色原头像调整数据无效');
+        return {
+            version: NATIVE_VIEWS_VERSION,
+            id: nativeViewId(targetKey),
+            targetKey: targetKey,
+            sourceKey: sourceKey,
+            view: normalizeView(record.view),
+            updatedAt: cleanText(record.updatedAt) || new Date().toISOString(),
+        };
+    }
+
     function metadataFromAsset(asset) {
         var result = clone(asset);
         delete result.imageData;
@@ -7585,6 +7605,7 @@
         var mains = new Map();
         var thumbs = new Map();
         var bindings = new Map();
+        var nativeViews = new Map();
         (seed.assets || []).forEach(function (raw) {
             var asset = normalizeAsset(raw);
             assets.set(asset.id, metadataFromAsset(asset));
@@ -7594,6 +7615,10 @@
         (seed.bindings || []).forEach(function (raw) {
             var binding = normalizeBinding(raw);
             if (assets.has(binding.avatarId)) bindings.set(binding.id, binding);
+        });
+        (seed.nativeViews || []).forEach(function (raw) {
+            var record = normalizeNativeView(raw);
+            nativeViews.set(record.id, record);
         });
         return {
             ready: Promise.resolve(),
@@ -7620,6 +7645,13 @@
                 return Promise.resolve(clone(binding));
             },
             deleteBinding: function (themeKey, targetKey) { return Promise.resolve(bindings.delete(bindingId(themeKey, targetKey))); },
+            getNativeView: function (targetKey) { return Promise.resolve(clone(nativeViews.get(nativeViewId(targetKey)) || null)); },
+            putNativeView: function (record) {
+                record = normalizeNativeView(record);
+                nativeViews.set(record.id, record);
+                return Promise.resolve(clone(record));
+            },
+            deleteNativeView: function (targetKey) { return Promise.resolve(nativeViews.delete(nativeViewId(targetKey))); },
             deleteAsset: function (id) {
                 id = cleanText(id);
                 var removedBindings = [];
@@ -7631,7 +7663,7 @@
                 thumbs.delete(id);
                 return Promise.resolve({ removed: removed, bindings: removedBindings });
             },
-            clear: function () { assets.clear(); mains.clear(); thumbs.clear(); bindings.clear(); return Promise.resolve(); },
+            clear: function () { assets.clear(); mains.clear(); thumbs.clear(); bindings.clear(); nativeViews.clear(); return Promise.resolve(); },
         };
     }
 
@@ -7753,6 +7785,25 @@
                     setResult(true);
                 });
             },
+            getNativeView: function (targetKey) {
+                return databasePromise.then(function (db) {
+                    var tx = db.transaction([STORES.meta], 'readonly');
+                    return requestPromise(tx.objectStore(STORES.meta).get(nativeViewId(targetKey)), 'AVATAR_IDB_READ_FAILED', '角色原头像调整读取失败');
+                }).then(function (result) { return clone(result || null); });
+            },
+            putNativeView: function (raw) {
+                var record = normalizeNativeView(raw);
+                return transaction([STORES.meta], 'readwrite', function (tx, setResult) {
+                    tx.objectStore(STORES.meta).put(record);
+                    setResult(record);
+                });
+            },
+            deleteNativeView: function (targetKey) {
+                return transaction([STORES.meta], 'readwrite', function (tx, setResult) {
+                    tx.objectStore(STORES.meta).delete(nativeViewId(targetKey));
+                    setResult(true);
+                });
+            },
             deleteAsset: function (id) {
                 id = cleanText(id);
                 return transaction([STORES.assets, STORES.main, STORES.thumbs, STORES.bindings], 'readwrite', function (tx, setResult) {
@@ -7794,9 +7845,12 @@
             getBinding: function (themeKey, targetKey) { return Promise.resolve(adapter.getBinding(themeKey, targetKey)).then(clone); },
             putBinding: function (binding) { return Promise.resolve(adapter.putBinding(normalizeBinding(binding))).then(clone); },
             deleteBinding: function (themeKey, targetKey) { return Promise.resolve(adapter.deleteBinding(themeKey, targetKey)); },
+            getNativeView: function (targetKey) { return Promise.resolve(adapter.getNativeView(targetKey)).then(clone); },
+            putNativeView: function (record) { return Promise.resolve(adapter.putNativeView(normalizeNativeView(record))).then(clone); },
+            deleteNativeView: function (targetKey) { return Promise.resolve(adapter.deleteNativeView(targetKey)); },
             deleteAsset: function (id) { return Promise.resolve(adapter.deleteAsset(id)).then(clone); },
             clear: function () { return Promise.resolve(adapter.clear()); },
-            versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION },
+            versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION, nativeViews: NATIVE_VIEWS_VERSION },
         };
     };
 
@@ -7805,11 +7859,14 @@
         DB_VERSION: DB_VERSION,
         LIBRARY_VERSION: LIBRARY_VERSION,
         BINDINGS_VERSION: BINDINGS_VERSION,
+        NATIVE_VIEWS_VERSION: NATIVE_VIEWS_VERSION,
         STORES: STORES,
         normalizeAsset: normalizeAsset,
         normalizeBinding: normalizeBinding,
+        normalizeNativeView: normalizeNativeView,
         normalizeView: normalizeView,
         bindingId: bindingId,
+        nativeViewId: nativeViewId,
         createMemoryAdapter: createMemoryAdapter,
         createIndexedDbAdapter: createIndexedDbAdapter,
         makeError: makeError,
@@ -7938,7 +7995,7 @@
 })(window);
 /* END MODULE 16/24: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:c41f0709ec5b869e05b1c96d10a9459cc7303aeb1f24b1ebe9aaa48a8ac30350 */
+/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:0b078442282b47e4690afa731d23fbf261a64bacd3d0f9ab37460fa9ea549365 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -8207,13 +8264,19 @@
             cached.sources.set(signature, source);
             return source;
         }
+        function resolvedImageSource(image, attributeSource) {
+            return clean(image && (image.currentSrc || image.src)) || clean(attributeSource);
+        }
         function captureBaseline(image) {
             var record = baselines.get(image);
             if (record) return record;
             record = {
                 src: getAttribute(image, 'src'),
+                resolvedSrc: resolvedImageSource(image, getAttribute(image, 'src')),
                 srcset: getAttribute(image, 'srcset'),
                 style: getAttribute(image, 'style'),
+                naturalWidth: Number(image.naturalWidth) || 0,
+                naturalHeight: Number(image.naturalHeight) || 0,
                 targetClass: image.classList.contains(TARGET_CLASS),
                 avatarClass: image.parentElement && image.parentElement.classList.contains(AVATAR_CLASS),
                 animation: null,
@@ -8222,6 +8285,19 @@
             };
             baselines.set(image, record);
             return record;
+        }
+        function nativeAssetForEntry(entry, target) {
+            var image = entry && entry.image;
+            var baseline = baselines.get(image);
+            var attributeSource = baseline ? baseline.src : getAttribute(image, 'src');
+            var source = baseline && baseline.resolvedSrc || resolvedImageSource(image, attributeSource);
+            var rect = rectOf(image);
+            return {
+                id: 'native:' + target.key + ':' + source,
+                imageData: source,
+                width: baseline && baseline.naturalWidth || Number(image && image.naturalWidth) || Math.max(1, Math.round(rect.width)),
+                height: baseline && baseline.naturalHeight || Number(image && image.naturalHeight) || Math.max(1, Math.round(rect.height)),
+            };
         }
         function restoreImage(image) {
             var record = baselines.get(image);
@@ -8287,6 +8363,16 @@
         function desiredForBinding(target, binding, asset) {
             return messageImages(doc, target).map(function (entry) { return { entry: entry, binding: binding, asset: asset }; });
         }
+        function desiredForNativeView(target, record) {
+            return messageImages(doc, target).map(function (entry) {
+                return { entry: entry, binding: record, asset: nativeAssetForEntry(entry, target) };
+            });
+        }
+        function desiredForPlan(plan) {
+            return plan.native
+                ? desiredForNativeView(plan.target, plan.binding)
+                : desiredForBinding(plan.target, plan.binding, plan.asset);
+        }
         function applyDesired(items) {
             var desired = new Set(items.map(function (item) { return item.entry.image; }));
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
@@ -8298,20 +8384,30 @@
             var foundBinding = false;
             return Promise.all(targetList.map(function (target) {
                 return getBindingForTarget(target).then(function (binding) {
-                    if (!binding) return null;
-                    foundBinding = true;
-                    return getAsset(binding.avatarId).then(function (asset) {
-                        if (!asset) {
-                            promotedBindings.delete(target.key);
-                            return store.deleteBinding(DEFAULT_BINDING_KEY, target.key).then(function () { return null; });
+                    if (binding) {
+                        foundBinding = true;
+                        return getAsset(binding.avatarId).then(function (asset) {
+                            if (!asset) {
+                                promotedBindings.delete(target.key);
+                                return store.deleteBinding(DEFAULT_BINDING_KEY, target.key).then(function () { return null; });
+                            }
+                            return { target: target, binding: binding, asset: asset, native: false };
+                        });
+                    }
+                    if (target.kind !== 'character') return null;
+                    return store.getNativeView(target.key).then(function (record) {
+                        if (!record) return null;
+                        if (record.sourceKey !== target.characterAvatar) {
+                            return store.deleteNativeView(target.key).then(function () { return null; });
                         }
-                        return { target: target, binding: binding, asset: asset };
+                        foundBinding = true;
+                        return { target: target, binding: record, asset: null, native: true };
                     });
                 });
             })).then(function (groups) {
                 var plans = groups.filter(Boolean);
                 return {
-                    items: plans.reduce(function (all, plan) { return all.concat(desiredForBinding(plan.target, plan.binding, plan.asset)); }, []),
+                    items: plans.reduce(function (all, plan) { return all.concat(desiredForPlan(plan)); }, []),
                     plans: plans,
                     hasBinding: foundBinding,
                 };
@@ -8327,14 +8423,17 @@
             var desired = new Set();
             bindingPlans.forEach(function (plan) {
                 if (plan.target.key === editor.target.key) return;
-                desiredForBinding(plan.target, plan.binding, plan.asset).forEach(function (item) {
+                desiredForPlan(plan).forEach(function (item) {
                     desired.add(item.entry.image);
                     applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
                 });
             });
             entries.forEach(function (entry) { desired.add(entry.image); });
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
-            entries.forEach(function (entry) { applyToEntry(entry, editor.asset, editor.view, editor.target.key); });
+            entries.forEach(function (entry) {
+                var asset = editor.mode === 'native' ? nativeAssetForEntry(entry, editor.target) : editor.asset;
+                applyToEntry(entry, asset, editor.view, editor.target.key);
+            });
             return true;
         }
         function reconcile() {
@@ -8579,6 +8678,7 @@
                 var asset = parts[0];
                 if (!asset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
                 editor = {
+                    mode: 'library',
                     themeKey: key,
                     target: cap.target,
                     avatarId: asset.id,
@@ -8593,6 +8693,42 @@
                         if (editor && editor.asset.id === asset.id) ensureSourceCache(asset);
                     }, 0);
                 }
+                if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
+                    try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
+                }
+                observeChat();
+                ensureEditorUi();
+                try {
+                    syncEditorInstances();
+                    bindRepresentative();
+                    editor.diagnostics = diagnosticsFor(editor.representative, editor.target);
+                    updateToolbar();
+                } catch (error) {
+                    finishEditorUi();
+                    editor = null;
+                    return reconcile().then(function () { throw error; });
+                }
+                return getState();
+            });
+        }
+        function beginNativeEdit() {
+            if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
+            var cap = capability('character');
+            if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
+            return Promise.all([getBindingForTarget(cap.target), store.getNativeView(cap.target.key)]).then(function (parts) {
+                var nativeView = parts[1] && parts[1].sourceKey === cap.target.characterAvatar ? parts[1] : null;
+                editor = {
+                    mode: 'native',
+                    themeKey: null,
+                    target: cap.target,
+                    avatarId: null,
+                    asset: nativeAssetForEntry(cap.representative, cap.target),
+                    previousBinding: clone(parts[0]),
+                    previousNativeView: clone(nativeView),
+                    view: normalizeView(nativeView && nativeView.view),
+                    representative: cap.representative,
+                    diagnostics: null,
+                };
                 if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
                     try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
                 }
@@ -8703,6 +8839,26 @@
         function saveEdit() {
             if (!editor || editorClosing) return Promise.resolve(null);
             editorClosing = true;
+            if (editor.mode === 'native') {
+                var nativeRecord = {
+                    targetKey: editor.target.key,
+                    sourceKey: editor.target.characterAvatar,
+                    view: normalizeView(editor.view),
+                };
+                var nativeDiagnostics = clone(editor.diagnostics);
+                return store.putNativeView(nativeRecord).then(function (saved) {
+                    promotedBindings.delete(nativeRecord.targetKey);
+                    return deleteTargetBindings(nativeRecord.targetKey).then(function () { return saved; });
+                }).then(function (saved) {
+                    finishEditorUi();
+                    editor = null;
+                    sequence += 1;
+                    return reconcile().then(function () {
+                        editorClosing = false;
+                        return { saved: true, nativeView: saved, diagnostics: nativeDiagnostics };
+                    });
+                }).catch(function (error) { editorClosing = false; throw error; });
+            }
             var binding = {
                 themeKey: editor.themeKey,
                 targetKey: editor.target.key,
@@ -8720,6 +8876,17 @@
                     return { saved: true, binding: saved, diagnostics: diagnostics };
                 });
             }).catch(function (error) { editorClosing = false; throw error; });
+        }
+        function deleteTargetBindings(targetKey) {
+            return store.listBindings().then(function (bindings) {
+                var targetsToDelete = (bindings || []).filter(function (binding) {
+                    return binding.targetKey === targetKey && (binding.themeKey === DEFAULT_BINDING_KEY || /^theme-name:/.test(binding.themeKey));
+                });
+                if (!targetsToDelete.some(function (binding) { return binding.themeKey === DEFAULT_BINDING_KEY; })) {
+                    targetsToDelete.push({ themeKey: DEFAULT_BINDING_KEY, targetKey: targetKey });
+                }
+                return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(binding.themeKey, binding.targetKey); }));
+            });
         }
         function onToolbarClick(event) {
             var stepButton = event.target && event.target.closest ? event.target.closest('[data-step-view]') : null;
@@ -8749,15 +8916,7 @@
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('binding-cleared').then(function () { return clearBinding(kind); });
             promotedBindings.delete(cap.target.key);
-            return store.listBindings().then(function (bindings) {
-                var targetsToDelete = (bindings || []).filter(function (binding) {
-                    return binding.targetKey === cap.target.key && (binding.themeKey === DEFAULT_BINDING_KEY || /^theme-name:/.test(binding.themeKey));
-                });
-                if (!targetsToDelete.some(function (binding) { return binding.themeKey === DEFAULT_BINDING_KEY; })) {
-                    targetsToDelete.push({ themeKey: DEFAULT_BINDING_KEY, targetKey: cap.target.key });
-                }
-                return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(binding.themeKey, binding.targetKey); }));
-            }).then(reconcile);
+            return deleteTargetBindings(cap.target.key).then(reconcile);
         }
         function deleteAsset(id) {
             var cancel = editor && editor.avatarId === id ? cancelEdit('avatar-deleted') : Promise.resolve();
@@ -8770,11 +8929,13 @@
         function getState() {
             return editor ? {
                 state: 'editing',
+                mode: editor.mode,
                 themeKey: editor.themeKey,
                 target: clone(editor.target),
                 avatarId: editor.avatarId,
                 view: clone(editor.view),
                 previousBinding: clone(editor.previousBinding),
+                previousNativeView: clone(editor.previousNativeView),
                 diagnostics: clone(editor.diagnostics),
             } : { state: 'idle' };
         }
@@ -8787,6 +8948,7 @@
             scheduleReconcile: scheduleReconcile,
             getCapabilities: getCapabilities,
             beginEdit: beginEdit,
+            beginNativeEdit: beginNativeEdit,
             cancelEdit: cancelEdit,
             saveEdit: saveEdit,
             reset: resetEdit,
@@ -8818,7 +8980,7 @@
 })(window);
 /* END MODULE 17/24: src/avatar-runtime.js */
 
-/* BEGIN MODULE 18/24: src/avatar-page.js | sha256:f9bcea1d02c61fc9f8a6a466b0d0d9b727f486b0624c3efe411c26837b655994 */
+/* BEGIN MODULE 18/24: src/avatar-page.js | sha256:54d60100d9dc1332266cb81e9e6d717ea8dd32f675fa38c7304e0036869125a5 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -8833,7 +8995,10 @@
         return '<div class="tm-avatar-page" data-tm-avatar-page>' +
             '<input type="file" data-avatar-file accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>' +
             '<div class="tm-avatar-page-notice" data-avatar-notice role="status" aria-live="polite" hidden></div>' +
-            '<div class="tm-avatar-page-grid" data-avatar-grid><div class="tm-avatar-page-loading">正在读取头像库…</div></div></div>';
+            '<div class="tm-avatar-page-grid" data-avatar-grid><div class="tm-avatar-page-loading">正在读取头像库…</div></div>' +
+            '<div class="tm-avatar-character-bar" data-avatar-native-bar hidden>' +
+            '<div class="tm-avatar-character-context"><i class="fa-solid fa-user" aria-hidden="true"></i><span>当前角色</span><strong data-avatar-native-label></strong></div>' +
+            '<button type="button" data-avatar-action="adjust-native"><i class="fa-solid fa-sliders" aria-hidden="true"></i>调整原头像</button></div></div>';
     }
 
     function styleText() {
@@ -8848,7 +9013,8 @@
             '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}',
             '.tm-avatar-page-empty{width:min(100%,300px);display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 16px;border:var(--tm-control-border-style,1px dashed var(--tm-control-border,rgba(127,127,127,.18)));border-radius:var(--tm-panel-radius,16px);background:var(--tm-control-bg,rgba(127,127,127,.05));box-sizing:border-box}',
             '.tm-avatar-page-empty>i{font-size:1.55em;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.62;margin-bottom:2px}.tm-avatar-page-empty>strong{font-size:.9em}.tm-avatar-page-empty>span{font-size:.76em;opacity:.52}',
-            '@media(max-width:430px){.tm-avatar-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}.tm-avatar-page-notice{margin:8px 10px 0}.tm-avatar-page-empty{padding:18px 14px}}',
+            '.tm-avatar-character-bar{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px calc(9px + env(safe-area-inset-bottom,0px));border-top:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));background:var(--tm-panel-bg,var(--SmartThemeBlurTintColor,rgba(20,20,24,.92)));color:inherit}.tm-avatar-character-bar[hidden]{display:none}.tm-avatar-character-context{min-width:0;display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;gap:6px;font-size:.78em;opacity:.82}.tm-avatar-character-context>i{color:var(--SmartThemeQuoteColor,currentColor)}.tm-avatar-character-context>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tm-avatar-character-bar>button{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:6px 11px;border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.22)));border-radius:var(--tm-control-radius,9px);background:var(--tm-control-bg,rgba(127,127,127,.1));color:inherit;font:inherit}.tm-avatar-character-bar>button:not(:disabled){border-color:color-mix(in srgb,var(--SmartThemeQuoteColor,currentColor) 44%,transparent)}.tm-avatar-character-bar>button:disabled{opacity:.42}',
+            '@media(max-width:430px){.tm-avatar-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}.tm-avatar-page-notice{margin:8px 10px 0}.tm-avatar-page-empty{padding:18px 14px}.tm-avatar-character-bar{padding-left:10px;padding-right:10px}.tm-avatar-character-context>span{display:none}}',
         ].join('');
     }
 
@@ -8935,7 +9101,24 @@
                 ? assets.map(cardHtml).join('')
                 : '<div class="tm-avatar-page-empty"><i class="fa-regular fa-image"></i><strong>还没有头像</strong><span>点击顶栏的＋添加图片</span></div>';
             setupGridLoader();
+            renderCharacterBar();
             setImporting(importing);
+        }
+        function renderCharacterBar() {
+            if (!root) return;
+            var bar = root.querySelector('[data-avatar-native-bar]');
+            if (!bar) return;
+            var caps = runtime.getCapabilities();
+            var cap = caps && caps.character || {};
+            if (!cap.target) { bar.hidden = true; return; }
+            bar.hidden = false;
+            var label = bar.querySelector('[data-avatar-native-label]');
+            var button = bar.querySelector('[data-avatar-action="adjust-native"]');
+            if (label) label.textContent = cap.target.label || '未命名角色';
+            if (button) {
+                button.disabled = !cap.available;
+                button.title = cap.available ? '调整角色卡自带头像的显示位置' : (cap.reason || '当前无法调整');
+            }
         }
         function refresh() {
             var token = ++refreshToken;
@@ -8987,6 +9170,16 @@
             global.setTimeout(function () {
                 runtime.beginEdit({ kind: kind, avatarId: avatarId }).catch(function (error) {
                     toast(error.message || '无法启动头像调整', true);
+                });
+            }, 32);
+        }
+        function beginNativeEdit() {
+            var cap = runtime.getCapabilities().character;
+            if (!cap || !cap.available) { setNotice(cap && cap.reason || '当前角色原头像无法调整'); return; }
+            closeManager();
+            global.setTimeout(function () {
+                runtime.beginNativeEdit().catch(function (error) {
+                    toast(error.message || '无法启动角色原头像调整', true);
                 });
             }, 32);
         }
@@ -9061,6 +9254,7 @@
                 else if (name === 'view') viewAsset(action.getAttribute('data-avatar-id')).catch(function (error) {
                     reportError('avatar preview failed', error); setNotice(error.message || '头像大图无法打开', 'error');
                 });
+                else if (name === 'adjust-native') beginNativeEdit();
                 return;
             }
         }

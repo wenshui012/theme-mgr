@@ -4,6 +4,7 @@
     var DB_VERSION = 1;
     var LIBRARY_VERSION = 1;
     var BINDINGS_VERSION = 3;
+    var NATIVE_VIEWS_VERSION = 1;
     var STORES = { assets: 'assets', main: 'main-images', thumbs: 'thumbnails', bindings: 'bindings', meta: 'meta' };
 
     function clone(value) {
@@ -76,6 +77,10 @@
         return cleanText(themeKey) + '\u001f' + cleanText(targetKey);
     }
 
+    function nativeViewId(targetKey) {
+        return 'native-view\u001f' + cleanText(targetKey);
+    }
+
     function normalizeBinding(binding) {
         binding = binding && typeof binding === 'object' ? binding : {};
         var themeKey = cleanText(binding.themeKey);
@@ -93,6 +98,21 @@
         };
     }
 
+    function normalizeNativeView(record) {
+        record = record && typeof record === 'object' ? record : {};
+        var targetKey = cleanText(record.targetKey);
+        var sourceKey = cleanText(record.sourceKey);
+        if (!targetKey || !sourceKey) throw makeError('AVATAR_NATIVE_VIEW_INVALID', '角色原头像调整数据无效');
+        return {
+            version: NATIVE_VIEWS_VERSION,
+            id: nativeViewId(targetKey),
+            targetKey: targetKey,
+            sourceKey: sourceKey,
+            view: normalizeView(record.view),
+            updatedAt: cleanText(record.updatedAt) || new Date().toISOString(),
+        };
+    }
+
     function metadataFromAsset(asset) {
         var result = clone(asset);
         delete result.imageData;
@@ -106,6 +126,7 @@
         var mains = new Map();
         var thumbs = new Map();
         var bindings = new Map();
+        var nativeViews = new Map();
         (seed.assets || []).forEach(function (raw) {
             var asset = normalizeAsset(raw);
             assets.set(asset.id, metadataFromAsset(asset));
@@ -115,6 +136,10 @@
         (seed.bindings || []).forEach(function (raw) {
             var binding = normalizeBinding(raw);
             if (assets.has(binding.avatarId)) bindings.set(binding.id, binding);
+        });
+        (seed.nativeViews || []).forEach(function (raw) {
+            var record = normalizeNativeView(raw);
+            nativeViews.set(record.id, record);
         });
         return {
             ready: Promise.resolve(),
@@ -141,6 +166,13 @@
                 return Promise.resolve(clone(binding));
             },
             deleteBinding: function (themeKey, targetKey) { return Promise.resolve(bindings.delete(bindingId(themeKey, targetKey))); },
+            getNativeView: function (targetKey) { return Promise.resolve(clone(nativeViews.get(nativeViewId(targetKey)) || null)); },
+            putNativeView: function (record) {
+                record = normalizeNativeView(record);
+                nativeViews.set(record.id, record);
+                return Promise.resolve(clone(record));
+            },
+            deleteNativeView: function (targetKey) { return Promise.resolve(nativeViews.delete(nativeViewId(targetKey))); },
             deleteAsset: function (id) {
                 id = cleanText(id);
                 var removedBindings = [];
@@ -152,7 +184,7 @@
                 thumbs.delete(id);
                 return Promise.resolve({ removed: removed, bindings: removedBindings });
             },
-            clear: function () { assets.clear(); mains.clear(); thumbs.clear(); bindings.clear(); return Promise.resolve(); },
+            clear: function () { assets.clear(); mains.clear(); thumbs.clear(); bindings.clear(); nativeViews.clear(); return Promise.resolve(); },
         };
     }
 
@@ -274,6 +306,25 @@
                     setResult(true);
                 });
             },
+            getNativeView: function (targetKey) {
+                return databasePromise.then(function (db) {
+                    var tx = db.transaction([STORES.meta], 'readonly');
+                    return requestPromise(tx.objectStore(STORES.meta).get(nativeViewId(targetKey)), 'AVATAR_IDB_READ_FAILED', '角色原头像调整读取失败');
+                }).then(function (result) { return clone(result || null); });
+            },
+            putNativeView: function (raw) {
+                var record = normalizeNativeView(raw);
+                return transaction([STORES.meta], 'readwrite', function (tx, setResult) {
+                    tx.objectStore(STORES.meta).put(record);
+                    setResult(record);
+                });
+            },
+            deleteNativeView: function (targetKey) {
+                return transaction([STORES.meta], 'readwrite', function (tx, setResult) {
+                    tx.objectStore(STORES.meta).delete(nativeViewId(targetKey));
+                    setResult(true);
+                });
+            },
             deleteAsset: function (id) {
                 id = cleanText(id);
                 return transaction([STORES.assets, STORES.main, STORES.thumbs, STORES.bindings], 'readwrite', function (tx, setResult) {
@@ -315,9 +366,12 @@
             getBinding: function (themeKey, targetKey) { return Promise.resolve(adapter.getBinding(themeKey, targetKey)).then(clone); },
             putBinding: function (binding) { return Promise.resolve(adapter.putBinding(normalizeBinding(binding))).then(clone); },
             deleteBinding: function (themeKey, targetKey) { return Promise.resolve(adapter.deleteBinding(themeKey, targetKey)); },
+            getNativeView: function (targetKey) { return Promise.resolve(adapter.getNativeView(targetKey)).then(clone); },
+            putNativeView: function (record) { return Promise.resolve(adapter.putNativeView(normalizeNativeView(record))).then(clone); },
+            deleteNativeView: function (targetKey) { return Promise.resolve(adapter.deleteNativeView(targetKey)); },
             deleteAsset: function (id) { return Promise.resolve(adapter.deleteAsset(id)).then(clone); },
             clear: function () { return Promise.resolve(adapter.clear()); },
-            versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION },
+            versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION, nativeViews: NATIVE_VIEWS_VERSION },
         };
     };
 
@@ -326,11 +380,14 @@
         DB_VERSION: DB_VERSION,
         LIBRARY_VERSION: LIBRARY_VERSION,
         BINDINGS_VERSION: BINDINGS_VERSION,
+        NATIVE_VIEWS_VERSION: NATIVE_VIEWS_VERSION,
         STORES: STORES,
         normalizeAsset: normalizeAsset,
         normalizeBinding: normalizeBinding,
+        normalizeNativeView: normalizeNativeView,
         normalizeView: normalizeView,
         bindingId: bindingId,
+        nativeViewId: nativeViewId,
         createMemoryAdapter: createMemoryAdapter,
         createIndexedDbAdapter: createIndexedDbAdapter,
         makeError: makeError,

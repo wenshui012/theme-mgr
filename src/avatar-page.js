@@ -12,7 +12,10 @@
         return '<div class="tm-avatar-page" data-tm-avatar-page>' +
             '<input type="file" data-avatar-file accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>' +
             '<div class="tm-avatar-page-notice" data-avatar-notice role="status" aria-live="polite" hidden></div>' +
-            '<div class="tm-avatar-page-grid" data-avatar-grid><div class="tm-avatar-page-loading">正在读取头像库…</div></div></div>';
+            '<div class="tm-avatar-page-grid" data-avatar-grid><div class="tm-avatar-page-loading">正在读取头像库…</div></div>' +
+            '<div class="tm-avatar-character-bar" data-avatar-native-bar hidden>' +
+            '<div class="tm-avatar-character-context"><i class="fa-solid fa-user" aria-hidden="true"></i><span>当前角色</span><strong data-avatar-native-label></strong></div>' +
+            '<button type="button" data-avatar-action="adjust-native"><i class="fa-solid fa-sliders" aria-hidden="true"></i>调整原头像</button></div></div>';
     }
 
     function styleText() {
@@ -27,7 +30,8 @@
             '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}',
             '.tm-avatar-page-empty{width:min(100%,300px);display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 16px;border:var(--tm-control-border-style,1px dashed var(--tm-control-border,rgba(127,127,127,.18)));border-radius:var(--tm-panel-radius,16px);background:var(--tm-control-bg,rgba(127,127,127,.05));box-sizing:border-box}',
             '.tm-avatar-page-empty>i{font-size:1.55em;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.62;margin-bottom:2px}.tm-avatar-page-empty>strong{font-size:.9em}.tm-avatar-page-empty>span{font-size:.76em;opacity:.52}',
-            '@media(max-width:430px){.tm-avatar-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}.tm-avatar-page-notice{margin:8px 10px 0}.tm-avatar-page-empty{padding:18px 14px}}',
+            '.tm-avatar-character-bar{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px calc(9px + env(safe-area-inset-bottom,0px));border-top:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));background:var(--tm-panel-bg,var(--SmartThemeBlurTintColor,rgba(20,20,24,.92)));color:inherit}.tm-avatar-character-bar[hidden]{display:none}.tm-avatar-character-context{min-width:0;display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;gap:6px;font-size:.78em;opacity:.82}.tm-avatar-character-context>i{color:var(--SmartThemeQuoteColor,currentColor)}.tm-avatar-character-context>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tm-avatar-character-bar>button{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:6px 11px;border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.22)));border-radius:var(--tm-control-radius,9px);background:var(--tm-control-bg,rgba(127,127,127,.1));color:inherit;font:inherit}.tm-avatar-character-bar>button:not(:disabled){border-color:color-mix(in srgb,var(--SmartThemeQuoteColor,currentColor) 44%,transparent)}.tm-avatar-character-bar>button:disabled{opacity:.42}',
+            '@media(max-width:430px){.tm-avatar-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}.tm-avatar-page-notice{margin:8px 10px 0}.tm-avatar-page-empty{padding:18px 14px}.tm-avatar-character-bar{padding-left:10px;padding-right:10px}.tm-avatar-character-context>span{display:none}}',
         ].join('');
     }
 
@@ -114,7 +118,24 @@
                 ? assets.map(cardHtml).join('')
                 : '<div class="tm-avatar-page-empty"><i class="fa-regular fa-image"></i><strong>还没有头像</strong><span>点击顶栏的＋添加图片</span></div>';
             setupGridLoader();
+            renderCharacterBar();
             setImporting(importing);
+        }
+        function renderCharacterBar() {
+            if (!root) return;
+            var bar = root.querySelector('[data-avatar-native-bar]');
+            if (!bar) return;
+            var caps = runtime.getCapabilities();
+            var cap = caps && caps.character || {};
+            if (!cap.target) { bar.hidden = true; return; }
+            bar.hidden = false;
+            var label = bar.querySelector('[data-avatar-native-label]');
+            var button = bar.querySelector('[data-avatar-action="adjust-native"]');
+            if (label) label.textContent = cap.target.label || '未命名角色';
+            if (button) {
+                button.disabled = !cap.available;
+                button.title = cap.available ? '调整角色卡自带头像的显示位置' : (cap.reason || '当前无法调整');
+            }
         }
         function refresh() {
             var token = ++refreshToken;
@@ -166,6 +187,16 @@
             global.setTimeout(function () {
                 runtime.beginEdit({ kind: kind, avatarId: avatarId }).catch(function (error) {
                     toast(error.message || '无法启动头像调整', true);
+                });
+            }, 32);
+        }
+        function beginNativeEdit() {
+            var cap = runtime.getCapabilities().character;
+            if (!cap || !cap.available) { setNotice(cap && cap.reason || '当前角色原头像无法调整'); return; }
+            closeManager();
+            global.setTimeout(function () {
+                runtime.beginNativeEdit().catch(function (error) {
+                    toast(error.message || '无法启动角色原头像调整', true);
                 });
             }, 32);
         }
@@ -240,6 +271,7 @@
                 else if (name === 'view') viewAsset(action.getAttribute('data-avatar-id')).catch(function (error) {
                     reportError('avatar preview failed', error); setNotice(error.message || '头像大图无法打开', 'error');
                 });
+                else if (name === 'adjust-native') beginNativeEdit();
                 return;
             }
         }

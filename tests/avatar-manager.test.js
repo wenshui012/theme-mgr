@@ -358,3 +358,69 @@ test('49 mirror flags normalize safely and survive binding persistence', async (
     assert.deepEqual(saved.view, { x: 0, y: 0, scale: 1, rotate: 0, flipX: true, flipY: true });
     assert.deepEqual(JSON.parse(JSON.stringify(modules.avatarRuntime.normalizeView({ flipX: 'true', flipY: 1 }))), { x: 0, y: 0, scale: 1, rotate: 0, flipX: false, flipY: false });
 });
+test('50 native character views persist without copying the original image into the avatar library', async () => {
+    const { adapter, store } = memoryStore();
+    await store.putNativeView({ targetKey: 'character:char.png', sourceKey: 'char.png', view: { x: .2, scale: 1.4 } });
+    const reloaded = modules.createAvatarStore({ adapter });
+    const saved = await reloaded.getNativeView('character:char.png');
+    assert.equal((await reloaded.listAssets()).length, 0);
+    assert.equal(saved.sourceKey, 'char.png');
+    assert.deepEqual(saved.view, { x: .2, y: 0, scale: 1.4, rotate: 0, flipX: false, flipY: false });
+});
+test('51 native editor previews the original character image and Cancel restores an existing replacement', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset()], bindings: [
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:char.png', avatarId: 'a', view: {} },
+    ] } });
+    await f.runtime.start();
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src').includes('main-a')));
+    const state = await f.runtime.beginNativeEdit();
+    assert.equal(state.mode, 'native');
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src').includes('raw-char.png')));
+    await f.runtime.cancelEdit();
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src').includes('main-a')));
+});
+test('52 saving native character adjustment clears replacement binding and restores the original source with crop', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset()], bindings: [
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:char.png', avatarId: 'a', view: {} },
+    ] } });
+    await f.runtime.start();
+    await f.runtime.beginNativeEdit();
+    f.runtime.setScale(1.35);
+    const result = await f.runtime.saveEdit();
+    const stored = await f.store.getNativeView('character:char.png');
+    assert.equal(result.nativeView.view.scale, 1.35);
+    assert.equal(stored.sourceKey, 'char.png');
+    assert.equal(await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'character:char.png'), null);
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src').includes('raw-char.png')));
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('style').includes('object-view-box:inset(')));
+});
+test('53 persisted native character adjustment reapplies after reload and across theme changes', async () => {
+    const f = runtimeFixture({ seed: { nativeViews: [
+        { targetKey: 'character:char.png', sourceKey: 'char.png', view: { x: .15, y: -.1, scale: 1.2 } },
+    ] } });
+    await f.runtime.start();
+    const first = f.chars[0].image.getAttribute('style');
+    assert.ok(first.includes(modules.avatarRuntime.objectViewBoxForView({ x: .15, y: -.1, scale: 1.2 })));
+    f.setTheme('B');
+    await f.runtime.reconcile();
+    assert.ok(f.chars[0].image.getAttribute('style').includes(modules.avatarRuntime.objectViewBoxForView({ x: .15, y: -.1, scale: 1.2 })));
+    assert.ok(first.includes(modules.avatarRuntime.objectViewBoxForView({ x: .15, y: -.1, scale: 1.2 })));
+    assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+});
+test('54 a different character avatar identity does not inherit the previous original-image adjustment', async () => {
+    const context = { characters: [{ avatar: 'new-char.png', name: 'Char' }], characterId: 0, groupId: null, name1: 'User', eventSource: { on() {}, removeListener() {} }, eventTypes: {} };
+    const f = runtimeFixture({ context, seed: { nativeViews: [
+        { targetKey: 'character:old-char.png', sourceKey: 'old-char.png', view: { scale: 2 } },
+    ] } });
+    await f.runtime.start();
+    assert.equal(f.chars[0].image.getAttribute('src'), 'raw-char.png');
+    assert.equal(f.chars[0].image.getAttribute('style'), 'opacity:.99');
+});
+test('55 Avatar Page includes a themed current-character original-avatar adjustment entry', () => {
+    const html = modules.avatarPage.buildPageHtml('placeholder');
+    const css = modules.avatarPage.styleText();
+    assert.match(html, /data-avatar-native-bar/);
+    assert.match(html, /data-avatar-action="adjust-native"/);
+    assert.match(html, /调整原头像/);
+    assert.match(css, /SmartThemeQuoteColor/);
+});

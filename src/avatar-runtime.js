@@ -266,13 +266,19 @@
             cached.sources.set(signature, source);
             return source;
         }
+        function resolvedImageSource(image, attributeSource) {
+            return clean(image && (image.currentSrc || image.src)) || clean(attributeSource);
+        }
         function captureBaseline(image) {
             var record = baselines.get(image);
             if (record) return record;
             record = {
                 src: getAttribute(image, 'src'),
+                resolvedSrc: resolvedImageSource(image, getAttribute(image, 'src')),
                 srcset: getAttribute(image, 'srcset'),
                 style: getAttribute(image, 'style'),
+                naturalWidth: Number(image.naturalWidth) || 0,
+                naturalHeight: Number(image.naturalHeight) || 0,
                 targetClass: image.classList.contains(TARGET_CLASS),
                 avatarClass: image.parentElement && image.parentElement.classList.contains(AVATAR_CLASS),
                 animation: null,
@@ -281,6 +287,19 @@
             };
             baselines.set(image, record);
             return record;
+        }
+        function nativeAssetForEntry(entry, target) {
+            var image = entry && entry.image;
+            var baseline = baselines.get(image);
+            var attributeSource = baseline ? baseline.src : getAttribute(image, 'src');
+            var source = baseline && baseline.resolvedSrc || resolvedImageSource(image, attributeSource);
+            var rect = rectOf(image);
+            return {
+                id: 'native:' + target.key + ':' + source,
+                imageData: source,
+                width: baseline && baseline.naturalWidth || Number(image && image.naturalWidth) || Math.max(1, Math.round(rect.width)),
+                height: baseline && baseline.naturalHeight || Number(image && image.naturalHeight) || Math.max(1, Math.round(rect.height)),
+            };
         }
         function restoreImage(image) {
             var record = baselines.get(image);
@@ -346,6 +365,16 @@
         function desiredForBinding(target, binding, asset) {
             return messageImages(doc, target).map(function (entry) { return { entry: entry, binding: binding, asset: asset }; });
         }
+        function desiredForNativeView(target, record) {
+            return messageImages(doc, target).map(function (entry) {
+                return { entry: entry, binding: record, asset: nativeAssetForEntry(entry, target) };
+            });
+        }
+        function desiredForPlan(plan) {
+            return plan.native
+                ? desiredForNativeView(plan.target, plan.binding)
+                : desiredForBinding(plan.target, plan.binding, plan.asset);
+        }
         function applyDesired(items) {
             var desired = new Set(items.map(function (item) { return item.entry.image; }));
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
@@ -357,20 +386,30 @@
             var foundBinding = false;
             return Promise.all(targetList.map(function (target) {
                 return getBindingForTarget(target).then(function (binding) {
-                    if (!binding) return null;
-                    foundBinding = true;
-                    return getAsset(binding.avatarId).then(function (asset) {
-                        if (!asset) {
-                            promotedBindings.delete(target.key);
-                            return store.deleteBinding(DEFAULT_BINDING_KEY, target.key).then(function () { return null; });
+                    if (binding) {
+                        foundBinding = true;
+                        return getAsset(binding.avatarId).then(function (asset) {
+                            if (!asset) {
+                                promotedBindings.delete(target.key);
+                                return store.deleteBinding(DEFAULT_BINDING_KEY, target.key).then(function () { return null; });
+                            }
+                            return { target: target, binding: binding, asset: asset, native: false };
+                        });
+                    }
+                    if (target.kind !== 'character') return null;
+                    return store.getNativeView(target.key).then(function (record) {
+                        if (!record) return null;
+                        if (record.sourceKey !== target.characterAvatar) {
+                            return store.deleteNativeView(target.key).then(function () { return null; });
                         }
-                        return { target: target, binding: binding, asset: asset };
+                        foundBinding = true;
+                        return { target: target, binding: record, asset: null, native: true };
                     });
                 });
             })).then(function (groups) {
                 var plans = groups.filter(Boolean);
                 return {
-                    items: plans.reduce(function (all, plan) { return all.concat(desiredForBinding(plan.target, plan.binding, plan.asset)); }, []),
+                    items: plans.reduce(function (all, plan) { return all.concat(desiredForPlan(plan)); }, []),
                     plans: plans,
                     hasBinding: foundBinding,
                 };
@@ -386,14 +425,17 @@
             var desired = new Set();
             bindingPlans.forEach(function (plan) {
                 if (plan.target.key === editor.target.key) return;
-                desiredForBinding(plan.target, plan.binding, plan.asset).forEach(function (item) {
+                desiredForPlan(plan).forEach(function (item) {
                     desired.add(item.entry.image);
                     applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
                 });
             });
             entries.forEach(function (entry) { desired.add(entry.image); });
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
-            entries.forEach(function (entry) { applyToEntry(entry, editor.asset, editor.view, editor.target.key); });
+            entries.forEach(function (entry) {
+                var asset = editor.mode === 'native' ? nativeAssetForEntry(entry, editor.target) : editor.asset;
+                applyToEntry(entry, asset, editor.view, editor.target.key);
+            });
             return true;
         }
         function reconcile() {
@@ -638,6 +680,7 @@
                 var asset = parts[0];
                 if (!asset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
                 editor = {
+                    mode: 'library',
                     themeKey: key,
                     target: cap.target,
                     avatarId: asset.id,
@@ -652,6 +695,42 @@
                         if (editor && editor.asset.id === asset.id) ensureSourceCache(asset);
                     }, 0);
                 }
+                if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
+                    try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
+                }
+                observeChat();
+                ensureEditorUi();
+                try {
+                    syncEditorInstances();
+                    bindRepresentative();
+                    editor.diagnostics = diagnosticsFor(editor.representative, editor.target);
+                    updateToolbar();
+                } catch (error) {
+                    finishEditorUi();
+                    editor = null;
+                    return reconcile().then(function () { throw error; });
+                }
+                return getState();
+            });
+        }
+        function beginNativeEdit() {
+            if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
+            var cap = capability('character');
+            if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
+            return Promise.all([getBindingForTarget(cap.target), store.getNativeView(cap.target.key)]).then(function (parts) {
+                var nativeView = parts[1] && parts[1].sourceKey === cap.target.characterAvatar ? parts[1] : null;
+                editor = {
+                    mode: 'native',
+                    themeKey: null,
+                    target: cap.target,
+                    avatarId: null,
+                    asset: nativeAssetForEntry(cap.representative, cap.target),
+                    previousBinding: clone(parts[0]),
+                    previousNativeView: clone(nativeView),
+                    view: normalizeView(nativeView && nativeView.view),
+                    representative: cap.representative,
+                    diagnostics: null,
+                };
                 if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
                     try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
                 }
@@ -762,6 +841,26 @@
         function saveEdit() {
             if (!editor || editorClosing) return Promise.resolve(null);
             editorClosing = true;
+            if (editor.mode === 'native') {
+                var nativeRecord = {
+                    targetKey: editor.target.key,
+                    sourceKey: editor.target.characterAvatar,
+                    view: normalizeView(editor.view),
+                };
+                var nativeDiagnostics = clone(editor.diagnostics);
+                return store.putNativeView(nativeRecord).then(function (saved) {
+                    promotedBindings.delete(nativeRecord.targetKey);
+                    return deleteTargetBindings(nativeRecord.targetKey).then(function () { return saved; });
+                }).then(function (saved) {
+                    finishEditorUi();
+                    editor = null;
+                    sequence += 1;
+                    return reconcile().then(function () {
+                        editorClosing = false;
+                        return { saved: true, nativeView: saved, diagnostics: nativeDiagnostics };
+                    });
+                }).catch(function (error) { editorClosing = false; throw error; });
+            }
             var binding = {
                 themeKey: editor.themeKey,
                 targetKey: editor.target.key,
@@ -779,6 +878,17 @@
                     return { saved: true, binding: saved, diagnostics: diagnostics };
                 });
             }).catch(function (error) { editorClosing = false; throw error; });
+        }
+        function deleteTargetBindings(targetKey) {
+            return store.listBindings().then(function (bindings) {
+                var targetsToDelete = (bindings || []).filter(function (binding) {
+                    return binding.targetKey === targetKey && (binding.themeKey === DEFAULT_BINDING_KEY || /^theme-name:/.test(binding.themeKey));
+                });
+                if (!targetsToDelete.some(function (binding) { return binding.themeKey === DEFAULT_BINDING_KEY; })) {
+                    targetsToDelete.push({ themeKey: DEFAULT_BINDING_KEY, targetKey: targetKey });
+                }
+                return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(binding.themeKey, binding.targetKey); }));
+            });
         }
         function onToolbarClick(event) {
             var stepButton = event.target && event.target.closest ? event.target.closest('[data-step-view]') : null;
@@ -808,15 +918,7 @@
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('binding-cleared').then(function () { return clearBinding(kind); });
             promotedBindings.delete(cap.target.key);
-            return store.listBindings().then(function (bindings) {
-                var targetsToDelete = (bindings || []).filter(function (binding) {
-                    return binding.targetKey === cap.target.key && (binding.themeKey === DEFAULT_BINDING_KEY || /^theme-name:/.test(binding.themeKey));
-                });
-                if (!targetsToDelete.some(function (binding) { return binding.themeKey === DEFAULT_BINDING_KEY; })) {
-                    targetsToDelete.push({ themeKey: DEFAULT_BINDING_KEY, targetKey: cap.target.key });
-                }
-                return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(binding.themeKey, binding.targetKey); }));
-            }).then(reconcile);
+            return deleteTargetBindings(cap.target.key).then(reconcile);
         }
         function deleteAsset(id) {
             var cancel = editor && editor.avatarId === id ? cancelEdit('avatar-deleted') : Promise.resolve();
@@ -829,11 +931,13 @@
         function getState() {
             return editor ? {
                 state: 'editing',
+                mode: editor.mode,
                 themeKey: editor.themeKey,
                 target: clone(editor.target),
                 avatarId: editor.avatarId,
                 view: clone(editor.view),
                 previousBinding: clone(editor.previousBinding),
+                previousNativeView: clone(editor.previousNativeView),
                 diagnostics: clone(editor.diagnostics),
             } : { state: 'idle' };
         }
@@ -846,6 +950,7 @@
             scheduleReconcile: scheduleReconcile,
             getCapabilities: getCapabilities,
             beginEdit: beginEdit,
+            beginNativeEdit: beginNativeEdit,
             cancelEdit: cancelEdit,
             saveEdit: saveEdit,
             reset: resetEdit,
