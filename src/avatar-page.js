@@ -24,7 +24,6 @@
             '.tm-avatar-page-grid{min-width:0;min-height:0;flex:1 1 auto;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));grid-auto-rows:max-content;align-content:start;align-items:start;gap:9px;padding:12px}',
             '.tm-avatar-page-card{min-width:0;width:100%;height:auto;aspect-ratio:1;align-self:start;position:relative;overflow:hidden;border:var(--tm-card-border-style,2px solid var(--tm-card-border,transparent));border-radius:var(--tm-card-radius,10px);background:var(--tm-card-bg,rgba(127,127,127,.06));box-shadow:var(--tm-card-shadow,none)}',
             '.tm-avatar-page-thumb{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;background:var(--tm-control-bg,rgba(127,127,127,.1))}',
-            '.tm-avatar-picker-grid{max-height:min(58vh,520px);overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));grid-auto-rows:max-content;align-content:start;align-items:start;gap:9px;padding:2px}.tm-avatar-picker-card{appearance:none;padding:0;color:inherit;cursor:pointer}.tm-avatar-picker-card.is-selected{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-avatar-picker-empty{grid-column:1/-1;padding:28px 12px;text-align:center;opacity:.58}',
             '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}',
             '.tm-avatar-page-empty{width:min(100%,300px);display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 16px;border:var(--tm-control-border-style,1px dashed var(--tm-control-border,rgba(127,127,127,.18)));border-radius:var(--tm-panel-radius,16px);background:var(--tm-control-bg,rgba(127,127,127,.05));box-sizing:border-box}',
             '.tm-avatar-page-empty>i{font-size:1.55em;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.62;margin-bottom:2px}.tm-avatar-page-empty>strong{font-size:.9em}.tm-avatar-page-empty>span{font-size:.76em;opacity:.52}',
@@ -52,7 +51,6 @@
         var root = null;
         var fileInput = null;
         var gridLoader = null;
-        var pickerLoader = null;
         var assets = [];
         var refreshToken = 0;
         var importing = false;
@@ -171,23 +169,8 @@
                 });
             }, 32);
         }
-        function openUserApplyChoice(asset, parentSheet) {
-            if (parentSheet) closeSheet(parentSheet);
-            var sheet = createSheet([
-                '<div class="tm-ctx-theme-name"><i class="fa-solid fa-user" style="margin-right:6px;opacity:.5"></i>当前美化已有 User 头像绑定</div>',
-                menuItem('temporary-user', 'fa-clock', '临时替换', false, '', false),
-                '<div class="tm-hint" style="padding:2px 12px 8px">不修改美化绑定；下次切换美化时恢复专属头像。</div>',
-                menuItem('update-theme-user', 'fa-link', '修改当前美化绑定', false, '', false),
-                '<div class="tm-hint" style="padding:2px 12px 8px">把这张头像和调整结果保存到当前美化。</div>',
-            ].join(''));
-            bindSheetAction(sheet, 'temporary-user', function () { beginEdit('user', asset.id, sheet, 'temporary'); });
-            bindSheetAction(sheet, 'update-theme-user', function () { beginEdit('user', asset.id, sheet, 'theme'); });
-        }
         function beginUserEditFromLibrary(asset, sheet) {
-            runtime.getThemeUserBinding().then(function (binding) {
-                if (binding) openUserApplyChoice(asset, sheet);
-                else beginEdit('user', asset.id, sheet, 'global');
-            }).catch(function (error) { setNotice(error.message || '无法读取 User 头像绑定', 'error'); });
+            beginEdit('user', asset.id, sheet, 'adaptive');
         }
         function beginNativeEdit(kind, sheet) {
             kind = kind === 'user' ? 'user' : 'character';
@@ -340,8 +323,6 @@
             refreshToken += 1;
             if (gridLoader) gridLoader.disconnect();
             gridLoader = null;
-            if (pickerLoader) pickerLoader.disconnect();
-            pickerLoader = null;
             if (root) {
                 root.removeEventListener('click', handleClick);
                 root.removeEventListener('keydown', handleKeydown);
@@ -350,55 +331,6 @@
             fileInput = null;
             root = null;
             removeStyle();
-        }
-
-        function openPicker(options) {
-            options = options || {};
-            if (typeof createSheet !== 'function') return Promise.reject(new Error('头像选择器不可用'));
-            return store.listAssets().then(function (items) {
-                var choices = (items || []).sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
-                ensureStyle();
-                var selectedId = String(options.selectedId || '');
-                var sheet = createSheet(
-                    '<div class="tm-sheet-title"><span><i class="fa-solid fa-user"></i>' + esc(options.title || '选择 User 头像') + '</span></div>' +
-                    '<div class="tm-avatar-picker-grid" data-avatar-picker-grid>' + (choices.length ? choices.map(function (asset) {
-                        return '<button type="button" class="tm-avatar-page-card tm-avatar-picker-card' + (asset.id === selectedId ? ' is-selected' : '') + '" data-avatar-pick-id="' + esc(asset.id) + '" aria-label="选择 ' + esc(asset.name) + '">' +
-                            '<img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" alt=""></button>';
-                    }).join('') : '<div class="tm-avatar-picker-empty">头像库为空，请先到头像管理添加图片</div>') + '</div>' +
-                    '<div class="tm-edit-foot"><button type="button" class="tm-btn tm-btn-outline" data-avatar-picker-cancel>取消</button></div>'
-                );
-                var grid = sheet.querySelector('[data-avatar-picker-grid]');
-                if (pickerLoader) pickerLoader.disconnect();
-                var loader = imageLoaderApi.createImageLoader({
-                    root: grid,
-                    rootMargin: '240px 0px',
-                    resolveSource: function (id) { return store.getThumbnail(id); },
-                });
-                pickerLoader = loader;
-                loader.observe(grid.querySelectorAll('.tm-avatar-page-thumb'));
-                function cleanupPicker() {
-                    loader.disconnect();
-                    if (pickerLoader === loader) pickerLoader = null;
-                    if (!mounted) removeStyle();
-                }
-                function closePicker() {
-                    cleanupPicker();
-                    closeSheet(sheet);
-                }
-                sheet.addEventListener('click', function (event) {
-                    if (event.target === sheet) global.setTimeout(cleanupPicker, 0);
-                });
-                sheet.querySelector('[data-avatar-picker-cancel]').addEventListener('click', closePicker);
-                sheet.querySelectorAll('[data-avatar-pick-id]').forEach(function (button) {
-                    button.addEventListener('click', function () {
-                        var asset = choices.find(function (item) { return item.id === button.getAttribute('data-avatar-pick-id'); });
-                        if (!asset) return;
-                        closePicker();
-                        if (typeof options.onSelect === 'function') options.onSelect(asset);
-                    });
-                });
-                return sheet;
-            });
         }
 
         return {
@@ -420,7 +352,6 @@
                 };
             },
             openAssetMenu: openAssetMenu,
-            openPicker: openPicker,
             viewAsset: viewAsset,
             getState: function () { return { mounted: mounted, count: assets.length, importing: importing }; },
         };

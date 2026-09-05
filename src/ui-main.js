@@ -5469,20 +5469,20 @@
                 '<span class="tm-theme-bind-copy"><strong>角色 / 聊天绑定</strong><small>' + summary + '</small></span>' +
                 '<i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i>';
         }
-        function buildUserAvatarBindingHtml(binding, asset) {
-            if (!binding) {
-                return '<button type="button" class="tm-user-avatar-bind-card" data-user-avatar-action="choose">' +
-                    '<span class="tm-user-avatar-bind-thumb empty"><i class="fa-regular fa-user"></i></span>' +
-                    '<span class="tm-user-avatar-bind-copy"><strong>沿用全局 User 头像</strong><small>此美化尚无专属绑定</small></span>' +
-                    '<i class="fa-solid fa-chevron-right"></i></button>';
+        function buildUserAvatarBindingHtml(bindingSet, items) {
+            if (!bindingSet || !items.length) {
+                return '<div class="tm-user-avatar-bind-empty"><i class="fa-regular fa-user"></i><span><strong>沿用全局 User 头像</strong><small>请从头像库选择 User 头像，调整后勾选“绑定到当前美化”</small></span></div>';
             }
-            var preview = asset && (asset.thumbData || asset.imageData) || '';
-            return '<button type="button" class="tm-user-avatar-bind-card" data-user-avatar-action="choose">' +
-                '<span class="tm-user-avatar-bind-thumb"' + (preview ? ' style="background-image:url(&quot;' + esc(preview) + '&quot;)"' : '') + '></span>' +
-                '<span class="tm-user-avatar-bind-copy"><strong>' + esc(asset && asset.name || '已绑定头像') + '</strong><small>当前美化专属 User 头像</small></span>' +
-                '<i class="fa-solid fa-chevron-right"></i></button>' +
-                '<div class="tm-user-avatar-bind-actions"><button type="button" class="tm-btn tm-btn-outline" data-user-avatar-action="adjust"><i class="fa-solid fa-sliders"></i> 调整</button>' +
-                '<button type="button" class="tm-btn tm-btn-danger" data-user-avatar-action="clear">解除绑定</button></div>';
+            return '<div class="tm-user-avatar-bind-pool">' + items.map(function (item) {
+                var active = item.binding.active;
+                return '<div class="tm-user-avatar-bind-item' + (active ? ' is-active' : '') + '">' +
+                    '<button type="button" class="tm-user-avatar-bind-choice" data-user-avatar-action="select" data-avatar-id="' + esc(item.binding.avatarId) + '">' +
+                    '<span class="tm-user-avatar-bind-thumb"><img src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(item.binding.avatarId) + '" alt=""></span>' +
+                    '<span class="tm-user-avatar-bind-copy"><strong>' + esc(item.asset && item.asset.name || '已绑定头像') + '</strong><small>' + (active ? '当前使用' : '点按切换') + '</small></span>' +
+                    (active ? '<i class="fa-solid fa-check"></i>' : '') + '</button>' +
+                    '<button type="button" class="tm-user-avatar-bind-remove" data-user-avatar-action="remove" data-avatar-id="' + esc(item.binding.avatarId) + '" aria-label="解除这个头像的绑定"><i class="fa-solid fa-link-slash"></i></button></div>';
+            }).join('') + '</div><div class="tm-user-avatar-bind-actions">' + (bindingSet.active ? '<button type="button" class="tm-btn tm-btn-outline" data-user-avatar-action="adjust"><i class="fa-solid fa-sliders"></i> 调整当前头像</button>' : '') +
+                '<button type="button" class="tm-btn tm-btn-danger" data-user-avatar-action="clear">全部解除</button></div>';
         }
         var catOpts = '<option value="">无分类</option>' +
             d.categories.map(function (c) { return '<option value="' + esc(c) + '"' + (meta.category === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
@@ -5534,13 +5534,22 @@
             var host = sheet.querySelector('#tm-user-avatar-bind');
             if (!host || !avatarRuntime || !avatarStore) return;
             host.innerHTML = '<div class="tm-user-avatar-bind-loading">正在读取头像绑定…</div>';
-            avatarRuntime.getThemeUserBinding(bindingThemeName).then(function (binding) {
-                if (!binding) return [null, null];
-                return avatarStore.getAsset(binding.avatarId).then(function (asset) { return [binding, asset]; });
-            }).then(function (parts) {
+            avatarRuntime.getThemeUserBindingSet(bindingThemeName).then(function (bindingSet) {
+                return Promise.all(bindingSet.candidates.map(function (binding) {
+                    return avatarStore.getAssetMetadata(binding.avatarId).then(function (asset) {
+                        return { binding: binding, asset: asset };
+                    });
+                })).then(function (items) { return { bindingSet: bindingSet, items: items }; });
+            }).then(function (result) {
                 if (token !== userAvatarBindingToken || bindingThemeName !== themeName || !host.parentNode) return;
-                currentUserAvatarBinding = parts[0];
-                host.innerHTML = buildUserAvatarBindingHtml(parts[0], parts[1]);
+                currentUserAvatarBinding = result.bindingSet.active;
+                host.innerHTML = buildUserAvatarBindingHtml(result.bindingSet, result.items);
+                var loader = imageLoaderApi.createImageLoader({
+                    root: host,
+                    IntersectionObserver: null,
+                    resolveSource: function (avatarId) { return avatarStore.getThumbnail(avatarId); },
+                });
+                loader.observe(host.querySelectorAll('.tm-user-avatar-bind-thumb img'));
             }).catch(function (error) {
                 if (token !== userAvatarBindingToken || !host.parentNode) return;
                 host.innerHTML = '<div class="tm-user-avatar-bind-loading">头像绑定读取失败</div>';
@@ -5572,19 +5581,24 @@
             if (!button || !userAvatarBindingHost.contains(button)) return;
             var action = button.getAttribute('data-user-avatar-action');
             var bindingThemeName = themeName;
-            if (action === 'choose') {
-                avatarPageController.openPicker({
-                    title: currentUserAvatarBinding ? '更换当前美化的 User 头像' : '绑定当前美化的 User 头像',
-                    selectedId: currentUserAvatarBinding && currentUserAvatarBinding.avatarId,
-                    onSelect: function (asset) { beginThemeUserAvatarEdit(bindingThemeName, asset.id); },
-                }).catch(function (error) { toast(error.message || '头像选择器无法打开', true); });
+            var avatarId = button.getAttribute('data-avatar-id');
+            if (action === 'select' && avatarId) {
+                avatarRuntime.setThemeUserBinding(bindingThemeName, avatarId).then(function () {
+                    renderUserAvatarBinding();
+                    toast('已切换当前美化的 User 头像');
+                }).catch(function (error) { toast(error.message || '切换 User 头像失败', true); });
+            } else if (action === 'remove' && avatarId) {
+                avatarRuntime.removeThemeUserBinding(bindingThemeName, avatarId).then(function () {
+                    renderUserAvatarBinding();
+                    toast('已解除这个头像与当前美化的绑定');
+                }).catch(function (error) { toast(error.message || '解除 User 头像绑定失败', true); });
             } else if (action === 'adjust' && currentUserAvatarBinding) {
                 beginThemeUserAvatarEdit(bindingThemeName, currentUserAvatarBinding.avatarId);
-            } else if (action === 'clear' && currentUserAvatarBinding) {
+            } else if (action === 'clear') {
                 avatarRuntime.clearThemeUserBinding(bindingThemeName).then(function () {
                     currentUserAvatarBinding = null;
                     renderUserAvatarBinding();
-                    toast('已解除当前美化的 User 头像绑定，将沿用全局头像');
+                    toast('已解除当前美化的全部 User 头像绑定，将沿用全局头像');
                 }).catch(function (error) { toast(error.message || '解除 User 头像绑定失败', true); });
             }
         });

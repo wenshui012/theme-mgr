@@ -146,6 +146,7 @@
         return {
             ready: Promise.resolve(),
             listAssets: function () { return Promise.resolve(Array.from(assets.values()).map(clone)); },
+            getAssetMetadata: function (id) { return Promise.resolve(clone(assets.get(cleanText(id)) || null)); },
             getAsset: function (id) {
                 id = cleanText(id);
                 if (!assets.has(id)) return Promise.resolve(null);
@@ -248,6 +249,12 @@
         return {
             ready: databasePromise.then(function () { return true; }),
             listAssets: function () { return readonlyGetAll(STORES.assets); },
+            getAssetMetadata: function (id) {
+                return databasePromise.then(function (db) {
+                    var tx = db.transaction([STORES.assets], 'readonly');
+                    return requestPromise(tx.objectStore(STORES.assets).get(cleanText(id)), 'AVATAR_IDB_READ_FAILED', '头像元数据读取失败');
+                }).then(function (record) { return clone(record || null); });
+            },
             listBindings: function () { return readonlyGetAll(STORES.bindings); },
             getThumbnail: function (id) {
                 return databasePromise.then(function (db) {
@@ -361,6 +368,7 @@
         return {
             ready: Promise.resolve(adapter.ready),
             listAssets: function () { return Promise.resolve(adapter.listAssets()).then(function (items) { return (items || []).map(clone); }); },
+            getAssetMetadata: function (id) { return Promise.resolve(adapter.getAssetMetadata(id)).then(clone); },
             getAsset: function (id) { return Promise.resolve(adapter.getAsset(id)).then(clone); },
             getThumbnail: function (id) { return Promise.resolve(adapter.getThumbnail(id)); },
             putAsset: function (asset) { return Promise.resolve(adapter.putAsset(normalizeAsset(asset))).then(clone); },

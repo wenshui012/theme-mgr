@@ -7476,7 +7476,7 @@
 })(window);
 /* END MODULE 14/24: src/image-loader.js */
 
-/* BEGIN MODULE 15/24: src/avatar-storage.js | sha256:ef177a1ea4a0f2445e2e51c6a6d095e1dc4907dd5f62e42682b0615db3c5c2bd */
+/* BEGIN MODULE 15/24: src/avatar-storage.js | sha256:89940f9a496f22aa756b1af78bbd2a27ae8ac5283692419c2000c8b8058bd1b3 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var DB_NAME = 'theme_mgr_avatar_db';
@@ -7625,6 +7625,7 @@
         return {
             ready: Promise.resolve(),
             listAssets: function () { return Promise.resolve(Array.from(assets.values()).map(clone)); },
+            getAssetMetadata: function (id) { return Promise.resolve(clone(assets.get(cleanText(id)) || null)); },
             getAsset: function (id) {
                 id = cleanText(id);
                 if (!assets.has(id)) return Promise.resolve(null);
@@ -7727,6 +7728,12 @@
         return {
             ready: databasePromise.then(function () { return true; }),
             listAssets: function () { return readonlyGetAll(STORES.assets); },
+            getAssetMetadata: function (id) {
+                return databasePromise.then(function (db) {
+                    var tx = db.transaction([STORES.assets], 'readonly');
+                    return requestPromise(tx.objectStore(STORES.assets).get(cleanText(id)), 'AVATAR_IDB_READ_FAILED', '头像元数据读取失败');
+                }).then(function (record) { return clone(record || null); });
+            },
             listBindings: function () { return readonlyGetAll(STORES.bindings); },
             getThumbnail: function (id) {
                 return databasePromise.then(function (db) {
@@ -7840,6 +7847,7 @@
         return {
             ready: Promise.resolve(adapter.ready),
             listAssets: function () { return Promise.resolve(adapter.listAssets()).then(function (items) { return (items || []).map(clone); }); },
+            getAssetMetadata: function (id) { return Promise.resolve(adapter.getAssetMetadata(id)).then(clone); },
             getAsset: function (id) { return Promise.resolve(adapter.getAsset(id)).then(clone); },
             getThumbnail: function (id) { return Promise.resolve(adapter.getThumbnail(id)); },
             putAsset: function (asset) { return Promise.resolve(adapter.putAsset(normalizeAsset(asset))).then(clone); },
@@ -7997,7 +8005,7 @@
 })(window);
 /* END MODULE 16/24: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:3a15b483bf91bae7ee6f79ad668ca96ccc9c555152d1b2120fc6e54e54828c97 */
+/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:524c71739e32f5a582ccb3065ed29c940e5a1122c4238657a2c514d837da1116 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -8012,9 +8020,12 @@
     var AVATAR_CLASS = 'tm-avatar-editor-selected';
     var DEFAULT_BINDING_KEY = 'avatar-default';
     var THEME_BINDING_VERSION = 4;
+    var USER_TARGET_KEY = 'user:global';
+    var THEME_USER_CANDIDATE_PREFIX = USER_TARGET_KEY + ':theme-avatar:';
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
+    function themeUserCandidateTargetKey(avatarId) { return THEME_USER_CANDIDATE_PREFIX + encodeURIComponent(clean(avatarId)); }
     function round(value, precision) {
         var factor = Math.pow(10, precision == null ? 5 : precision);
         return Math.round(Number(value) * factor) / factor;
@@ -8586,6 +8597,17 @@
             if (reconcileTimer) win.clearTimeout(reconcileTimer);
             reconcileTimer = win.setTimeout(function () { reconcileTimer = null; reconcile(); }, delay == null ? 40 : delay);
         }
+        function applyCachedPlans() {
+            if (editor) return syncEditorInstances();
+            if (!bindingPlans.length) return false;
+            try {
+                applyDesired(bindingPlans.reduce(function (all, plan) { return all.concat(desiredForPlan(plan)); }, []));
+                return true;
+            } catch (error) {
+                onError(error);
+                return false;
+            }
+        }
         function invalidateAndScheduleReconcile(delay) {
             sequence += 1;
             scheduleReconcile(delay);
@@ -8597,8 +8619,11 @@
             if (chatObserver) chatObserver.disconnect();
             observedChat = chat;
             if (!chat || typeof win.MutationObserver !== 'function') return;
-            chatObserver = new win.MutationObserver(function () { scheduleReconcile(30); });
-            chatObserver.observe(chat, { childList: true, subtree: true });
+            chatObserver = new win.MutationObserver(function () {
+                applyCachedPlans();
+                scheduleReconcile(0);
+            });
+            chatObserver.observe(chat, { childList: true, subtree: true, attributes: true, attributeFilter: ['is_user', 'is_system'] });
         }
         function addEvent(source, name, handler) {
             if (!source || !name || typeof source.on !== 'function') return;
@@ -8609,7 +8634,12 @@
             if (editor) cancelEdit('context-changed');
             else { observeChat(); invalidateAndScheduleReconcile(20); }
         }
-        function contentChanged() { if (editor || hasRuntimeBinding) { observeChat(); scheduleReconcile(20); } }
+        function contentChanged() {
+            if (!editor && !hasRuntimeBinding) return;
+            observeChat();
+            applyCachedPlans();
+            scheduleReconcile(0);
+        }
         function onThemeControlChange(event) {
             if (!event.target || event.target.id !== 'themes') return;
             if (editor) cancelEdit('theme-changed');
@@ -8739,7 +8769,7 @@
                 ':host{--tm-avatar-accent:var(--SmartThemeQuoteColor,#7c6daf);--tm-avatar-text:var(--SmartThemeBodyColor,#eee);--tm-avatar-bg:var(--SmartThemeBlurTintColor,var(--SmartThemeBackgroundColor,#16161a))}',
                 '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
                 '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 44px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:.76}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}',
-                'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(5,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
+                'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-bind{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}.tm-avatar-editor-bind span{font-weight:650}.tm-avatar-editor-bind small{font-size:10px;opacity:.62;text-align:right}.tm-avatar-editor-bind.is-active{border-color:var(--tm-avatar-accent);background:color-mix(in srgb,var(--tm-avatar-accent) 18%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(5,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
                 '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:8px;font-size:12px}.tm-avatar-editor-controls{gap:3px}.tm-avatar-editor-row{grid-template-columns:30px 30px minmax(92px,1fr) 40px 30px;gap:4px;min-height:32px}button{min-height:30px;padding:4px 6px}.tm-avatar-editor-footer{gap:4px}}',
             ].join('');
             toolbarRoot.appendChild(toolbarStyle);
@@ -8752,7 +8782,9 @@
                 '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">左右</span><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="-1" aria-label="向左移动">−</button><input type="range" min="-1" max="1" step="0.01" value="0" data-view="x" aria-label="左右位置"><output class="tm-avatar-editor-value" data-view-output="x">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="1" aria-label="向右移动">+</button></div>' +
                 '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">上下</span><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="-1" aria-label="向上移动">−</button><input type="range" min="-1" max="1" step="0.01" value="0" data-view="y" aria-label="上下位置"><output class="tm-avatar-editor-value" data-view-output="y">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="1" aria-label="向下移动">+</button></div>' +
                 '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input type="range" min="-180" max="180" step="1" value="0" data-view="rotate" aria-label="倾斜角度"><output class="tm-avatar-editor-value" data-view-output="rotate">0°</output><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
-                '</div><div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">↔ 水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">↕ 垂直</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
+                '</div>' + (editor.mode === 'library' && editor.target.kind === 'user' && editor.bindingMode === 'adaptive'
+                    ? '<button type="button" class="tm-avatar-editor-bind" data-action="bind-theme" aria-pressed="false"><span>绑定到当前美化</span><small data-bind-theme-hint></small></button>'
+                    : '') + '<div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">↔ 水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">↕ 垂直</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
             toolbar.addEventListener('click', onToolbarClick);
             toolbar.addEventListener('input', onToolbarInput);
             toolbarRoot.appendChild(toolbar);
@@ -8776,6 +8808,15 @@
                 button.classList.toggle('is-active', editor.view[name]);
                 button.setAttribute('aria-pressed', editor.view[name] ? 'true' : 'false');
             });
+            var bindButton = toolbar.querySelector('[data-action="bind-theme"]');
+            if (bindButton) {
+                bindButton.classList.toggle('is-active', editor.bindToTheme === true);
+                bindButton.setAttribute('aria-pressed', editor.bindToTheme === true ? 'true' : 'false');
+                var hint = bindButton.querySelector('[data-bind-theme-hint]');
+                if (hint) hint.textContent = editor.bindToTheme
+                    ? '保存后加入并设为当前头像'
+                    : (editor.unboundSaveMode === 'temporary' ? '未绑定：仅临时替换' : '未绑定：保存为全局头像');
+            }
         }
         function bindRepresentative() {
             if (!editor || !editor.representative) return;
@@ -8813,21 +8854,42 @@
             var kind = input.target && input.target.kind || input.kind;
             var cap = capability(kind);
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
-            var bindingMode = kind === 'user' && (input.bindingMode === 'theme' || input.bindingMode === 'temporary')
+            var bindingMode = kind === 'user' && (input.bindingMode === 'theme' || input.bindingMode === 'temporary' || input.bindingMode === 'adaptive')
                 ? input.bindingMode
                 : 'global';
             var requestedThemeKey = bindingMode === 'global' ? DEFAULT_BINDING_KEY : themeKey(input.themeName || getThemeName());
             if (bindingMode !== 'global' && !requestedThemeKey) {
                 return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             }
-            var previousPromise = bindingMode === 'temporary'
-                ? getBindingForTarget(cap.target, requestedThemeKey)
-                : store.getBinding(requestedThemeKey, cap.target.key).then(function (binding) {
-                    if (bindingMode === 'theme' && !isDedicatedThemeBinding(binding)) return null;
-                    return binding;
+            var editContextPromise;
+            if (bindingMode === 'adaptive') {
+                editContextPromise = Promise.all([
+                    getThemeUserBindingSet(input.themeName || getThemeName()),
+                    getDefaultBinding(cap.target),
+                ]).then(function (parts) {
+                    var bindingSet = parts[0];
+                    var selected = bindingSet.candidates.find(function (binding) { return binding.avatarId === input.avatarId; }) || null;
+                    var globalBinding = parts[1] && parts[1].avatarId === input.avatarId ? parts[1] : null;
+                    return {
+                        previous: selected || globalBinding,
+                        bindToTheme: Boolean(selected),
+                        unboundSaveMode: bindingSet.active ? 'temporary' : 'global',
+                    };
                 });
-            return Promise.all([getAsset(input.avatarId), previousPromise]).then(function (parts) {
+            } else {
+                var previousPromise = bindingMode === 'temporary'
+                    ? getBindingForTarget(cap.target, requestedThemeKey)
+                    : store.getBinding(requestedThemeKey, cap.target.key).then(function (binding) {
+                        if (bindingMode === 'theme' && !isDedicatedThemeBinding(binding)) return null;
+                        return binding;
+                    });
+                editContextPromise = previousPromise.then(function (binding) {
+                    return { previous: binding, bindToTheme: bindingMode === 'theme', unboundSaveMode: bindingMode };
+                });
+            }
+            return Promise.all([getAsset(input.avatarId), editContextPromise]).then(function (parts) {
                 var asset = parts[0];
+                var editContext = parts[1];
                 if (!asset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
                 editor = {
                     mode: 'library',
@@ -8836,8 +8898,10 @@
                     target: cap.target,
                     avatarId: asset.id,
                     asset: asset,
-                    previousBinding: clone(parts[1]),
-                    view: normalizeView(parts[1] && parts[1].view),
+                    previousBinding: clone(editContext.previous),
+                    view: normalizeView(editContext.previous && editContext.previous.view),
+                    bindToTheme: editContext.bindToTheme,
+                    unboundSaveMode: editContext.unboundSaveMode,
                     representative: cap.representative,
                     diagnostics: null,
                 };
@@ -8979,6 +9043,13 @@
             scheduleEditorSync(); updateToolbar();
             return getState();
         }
+        function setBindToTheme(enabled) {
+            if (!editor || editor.mode !== 'library' || editor.target.kind !== 'user' || editor.bindingMode !== 'adaptive') return getState();
+            editor.bindToTheme = enabled === true;
+            updateToolbar();
+            return getState();
+        }
+        function toggleThemeBinding() { return setBindToTheme(!(editor && editor.bindToTheme)); }
         function resetEdit() {
             if (!editor) return getState();
             editor.view = normalizeView(null);
@@ -9022,14 +9093,17 @@
                     });
                 }).catch(function (error) { editorClosing = false; throw error; });
             }
+            var effectiveBindingMode = editor.bindingMode === 'adaptive'
+                ? (editor.bindToTheme ? 'theme' : editor.unboundSaveMode)
+                : editor.bindingMode;
             var binding = {
-                themeKey: editor.themeKey,
+                themeKey: effectiveBindingMode === 'global' ? DEFAULT_BINDING_KEY : editor.themeKey,
                 targetKey: editor.target.key,
                 avatarId: editor.avatarId,
                 view: normalizeView(editor.view),
             };
             var diagnostics = clone(editor.diagnostics);
-            if (editor.bindingMode === 'temporary') {
+            if (effectiveBindingMode === 'temporary') {
                 var savedTemporary = Object.assign({ version: THEME_BINDING_VERSION, temporary: true }, binding);
                 temporaryUserOverride = savedTemporary;
                 finishEditorUi();
@@ -9040,7 +9114,10 @@
                     return { saved: true, temporary: true, binding: clone(savedTemporary), diagnostics: diagnostics };
                 }, function (error) { editorClosing = false; throw error; });
             }
-            return store.putBinding(binding).then(function (saved) {
+            var saveBinding = effectiveBindingMode === 'theme'
+                ? putThemeUserBindingByKey(editor.themeKey, binding.avatarId, binding.view)
+                : store.putBinding(binding);
+            return saveBinding.then(function (saved) {
                 if (binding.themeKey === DEFAULT_BINDING_KEY) promotedBindings.set(binding.targetKey, saved);
                 if (binding.themeKey !== DEFAULT_BINDING_KEY && temporaryUserOverride && temporaryUserOverride.targetKey === binding.targetKey) {
                     temporaryUserOverride = null;
@@ -9077,6 +9154,7 @@
             var action = button.getAttribute('data-action');
             if (action === 'flip-x') toggleFlip('flipX');
             else if (action === 'flip-y') toggleFlip('flipY');
+            else if (action === 'bind-theme') toggleThemeBinding();
             else if (action === 'reset') resetEdit();
             else if (action === 'cancel') cancelEdit();
             else if (action === 'save') saveEdit().catch(onError);
@@ -9107,13 +9185,95 @@
         function getGlobalUserBinding() {
             return Promise.resolve(store.ready).then(function () { return getDefaultBinding(targets().user); });
         }
+        function getThemeUserBindingSet(themeName) {
+            var key = themeKey(themeName || getThemeName());
+            if (!key) return Promise.resolve({ themeKey: '', active: null, candidates: [] });
+            return Promise.resolve(store.ready).then(function () {
+                return Promise.all([store.getBinding(key, USER_TARGET_KEY), store.listBindings()]);
+            }).then(function (parts) {
+                var active = isDedicatedThemeBinding(parts[0]) ? parts[0] : null;
+                var candidates = (parts[1] || []).filter(function (binding) {
+                    return binding.themeKey === key && binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0 && isDedicatedThemeBinding(binding);
+                });
+                if (active && !candidates.some(function (binding) { return binding.avatarId === active.avatarId; })) {
+                    candidates.unshift(Object.assign({}, active, { targetKey: themeUserCandidateTargetKey(active.avatarId) }));
+                }
+                candidates.sort(function (a, b) {
+                    if (active && a.avatarId === active.avatarId) return -1;
+                    if (active && b.avatarId === active.avatarId) return 1;
+                    return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+                });
+                return {
+                    themeKey: key,
+                    active: clone(active),
+                    candidates: candidates.map(function (binding) {
+                        return Object.assign(clone(binding), { active: Boolean(active && active.avatarId === binding.avatarId) });
+                    }),
+                };
+            });
+        }
+        function putThemeUserBindingByKey(key, avatarId, view) {
+            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            var normalizedView = normalizeView(view);
+            var candidate = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: themeUserCandidateTargetKey(avatarId), avatarId: avatarId, view: normalizedView };
+            var active = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: avatarId, view: normalizedView };
+            return store.getBinding(key, USER_TARGET_KEY).then(function (previous) {
+                if (!isDedicatedThemeBinding(previous) || previous.avatarId === avatarId) return null;
+                return store.putBinding({
+                    version: THEME_BINDING_VERSION,
+                    themeKey: key,
+                    targetKey: themeUserCandidateTargetKey(previous.avatarId),
+                    avatarId: previous.avatarId,
+                    view: previous.view,
+                });
+            }).then(function () { return store.putBinding(candidate); }).then(function () { return store.putBinding(active); });
+        }
+        function setThemeUserBinding(themeName, avatarId) {
+            var key = themeKey(themeName || getThemeName());
+            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            return getThemeUserBindingSet(themeName).then(function (bindingSet) {
+                var candidate = bindingSet.candidates.find(function (binding) { return binding.avatarId === avatarId; });
+                if (!candidate) throw Object.assign(new Error('这个头像尚未绑定到当前美化'), { code: 'THEME_AVATAR_NOT_BOUND' });
+                return store.putBinding({ version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: candidate.avatarId, view: candidate.view });
+            }).then(function (saved) {
+                if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
+                sequence += 1;
+                return reconcile().then(function () { return saved; });
+            });
+        }
+        function removeThemeUserBinding(themeName, avatarId) {
+            var key = themeKey(themeName || getThemeName());
+            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            return getThemeUserBindingSet(themeName).then(function (bindingSet) {
+                var remaining = bindingSet.candidates.filter(function (binding) { return binding.avatarId !== avatarId; });
+                var removeCandidate = store.deleteBinding(key, themeUserCandidateTargetKey(avatarId));
+                if (!bindingSet.active || bindingSet.active.avatarId !== avatarId) return removeCandidate;
+                return removeCandidate.then(function () {
+                    if (!remaining.length) return store.deleteBinding(key, USER_TARGET_KEY);
+                    var next = remaining[0];
+                    return store.putBinding({ version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: next.avatarId, view: next.view });
+                });
+            }).then(function () {
+                if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
+                sequence += 1;
+                return reconcile();
+            });
+        }
         function clearThemeUserBinding(themeName) {
             var key = themeKey(themeName || getThemeName());
             if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             if (editor) return cancelEdit('theme-binding-cleared').then(function () { return clearThemeUserBinding(themeName); });
             if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
             sequence += 1;
-            return store.deleteBinding(key, 'user:global').then(reconcile);
+            return store.listBindings().then(function (bindings) {
+                var targetsToDelete = (bindings || []).filter(function (binding) {
+                    return binding.themeKey === key && (binding.targetKey === USER_TARGET_KEY || binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0);
+                });
+                if (!targetsToDelete.some(function (binding) { return binding.targetKey === USER_TARGET_KEY; })) {
+                    targetsToDelete.push({ targetKey: USER_TARGET_KEY });
+                }
+                return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(key, binding.targetKey); }));
+            }).then(reconcile);
         }
         function clearNativeView(kind) {
             var cap = capability(kind === 'user' ? 'user' : 'character');
@@ -9138,6 +9298,8 @@
                 target: clone(editor.target),
                 avatarId: editor.avatarId,
                 view: clone(editor.view),
+                bindToTheme: editor.bindToTheme === true,
+                unboundSaveMode: editor.unboundSaveMode || null,
                 previousBinding: clone(editor.previousBinding),
                 previousNativeView: clone(editor.previousNativeView),
                 diagnostics: clone(editor.diagnostics),
@@ -9158,11 +9320,15 @@
             saveEdit: saveEdit,
             reset: resetEdit,
             setScale: setScale,
+            setBindToTheme: setBindToTheme,
             scaleUp: function () { return setScale(editor ? editor.view.scale + SCALE_STEP : 1); },
             scaleDown: function () { return setScale(editor ? editor.view.scale - SCALE_STEP : 1); },
             clearBinding: clearBinding,
             getThemeUserBinding: getThemeUserBinding,
+            getThemeUserBindingSet: getThemeUserBindingSet,
             getGlobalUserBinding: getGlobalUserBinding,
+            setThemeUserBinding: setThemeUserBinding,
+            removeThemeUserBinding: removeThemeUserBinding,
             clearThemeUserBinding: clearThemeUserBinding,
             deleteAsset: deleteAsset,
             notifyAssetChanged: notifyAssetChanged,
@@ -9176,6 +9342,8 @@
         MAX_SCALE: MAX_SCALE,
         SCALE_STEP: SCALE_STEP,
         DEFAULT_BINDING_KEY: DEFAULT_BINDING_KEY,
+        THEME_USER_CANDIDATE_PREFIX: THEME_USER_CANDIDATE_PREFIX,
+        themeUserCandidateTargetKey: themeUserCandidateTargetKey,
         themeKey: themeKey,
         getContextInfo: getContextInfo,
         messageImages: messageImages,
@@ -9188,7 +9356,7 @@
 })(window);
 /* END MODULE 17/24: src/avatar-runtime.js */
 
-/* BEGIN MODULE 18/24: src/avatar-page.js | sha256:e8463c2c149d7a1258a0432976f356fa94076af1f4736d57e1bdc70293c00341 */
+/* BEGIN MODULE 18/24: src/avatar-page.js | sha256:6c96b741530ecc23155048328269bb5fb91a6a6fa3a62fa0703dc0154882fbdd */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -9215,7 +9383,6 @@
             '.tm-avatar-page-grid{min-width:0;min-height:0;flex:1 1 auto;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));grid-auto-rows:max-content;align-content:start;align-items:start;gap:9px;padding:12px}',
             '.tm-avatar-page-card{min-width:0;width:100%;height:auto;aspect-ratio:1;align-self:start;position:relative;overflow:hidden;border:var(--tm-card-border-style,2px solid var(--tm-card-border,transparent));border-radius:var(--tm-card-radius,10px);background:var(--tm-card-bg,rgba(127,127,127,.06));box-shadow:var(--tm-card-shadow,none)}',
             '.tm-avatar-page-thumb{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;background:var(--tm-control-bg,rgba(127,127,127,.1))}',
-            '.tm-avatar-picker-grid{max-height:min(58vh,520px);overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));grid-auto-rows:max-content;align-content:start;align-items:start;gap:9px;padding:2px}.tm-avatar-picker-card{appearance:none;padding:0;color:inherit;cursor:pointer}.tm-avatar-picker-card.is-selected{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-avatar-picker-empty{grid-column:1/-1;padding:28px 12px;text-align:center;opacity:.58}',
             '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}',
             '.tm-avatar-page-empty{width:min(100%,300px);display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 16px;border:var(--tm-control-border-style,1px dashed var(--tm-control-border,rgba(127,127,127,.18)));border-radius:var(--tm-panel-radius,16px);background:var(--tm-control-bg,rgba(127,127,127,.05));box-sizing:border-box}',
             '.tm-avatar-page-empty>i{font-size:1.55em;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.62;margin-bottom:2px}.tm-avatar-page-empty>strong{font-size:.9em}.tm-avatar-page-empty>span{font-size:.76em;opacity:.52}',
@@ -9243,7 +9410,6 @@
         var root = null;
         var fileInput = null;
         var gridLoader = null;
-        var pickerLoader = null;
         var assets = [];
         var refreshToken = 0;
         var importing = false;
@@ -9362,23 +9528,8 @@
                 });
             }, 32);
         }
-        function openUserApplyChoice(asset, parentSheet) {
-            if (parentSheet) closeSheet(parentSheet);
-            var sheet = createSheet([
-                '<div class="tm-ctx-theme-name"><i class="fa-solid fa-user" style="margin-right:6px;opacity:.5"></i>当前美化已有 User 头像绑定</div>',
-                menuItem('temporary-user', 'fa-clock', '临时替换', false, '', false),
-                '<div class="tm-hint" style="padding:2px 12px 8px">不修改美化绑定；下次切换美化时恢复专属头像。</div>',
-                menuItem('update-theme-user', 'fa-link', '修改当前美化绑定', false, '', false),
-                '<div class="tm-hint" style="padding:2px 12px 8px">把这张头像和调整结果保存到当前美化。</div>',
-            ].join(''));
-            bindSheetAction(sheet, 'temporary-user', function () { beginEdit('user', asset.id, sheet, 'temporary'); });
-            bindSheetAction(sheet, 'update-theme-user', function () { beginEdit('user', asset.id, sheet, 'theme'); });
-        }
         function beginUserEditFromLibrary(asset, sheet) {
-            runtime.getThemeUserBinding().then(function (binding) {
-                if (binding) openUserApplyChoice(asset, sheet);
-                else beginEdit('user', asset.id, sheet, 'global');
-            }).catch(function (error) { setNotice(error.message || '无法读取 User 头像绑定', 'error'); });
+            beginEdit('user', asset.id, sheet, 'adaptive');
         }
         function beginNativeEdit(kind, sheet) {
             kind = kind === 'user' ? 'user' : 'character';
@@ -9531,8 +9682,6 @@
             refreshToken += 1;
             if (gridLoader) gridLoader.disconnect();
             gridLoader = null;
-            if (pickerLoader) pickerLoader.disconnect();
-            pickerLoader = null;
             if (root) {
                 root.removeEventListener('click', handleClick);
                 root.removeEventListener('keydown', handleKeydown);
@@ -9541,55 +9690,6 @@
             fileInput = null;
             root = null;
             removeStyle();
-        }
-
-        function openPicker(options) {
-            options = options || {};
-            if (typeof createSheet !== 'function') return Promise.reject(new Error('头像选择器不可用'));
-            return store.listAssets().then(function (items) {
-                var choices = (items || []).sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
-                ensureStyle();
-                var selectedId = String(options.selectedId || '');
-                var sheet = createSheet(
-                    '<div class="tm-sheet-title"><span><i class="fa-solid fa-user"></i>' + esc(options.title || '选择 User 头像') + '</span></div>' +
-                    '<div class="tm-avatar-picker-grid" data-avatar-picker-grid>' + (choices.length ? choices.map(function (asset) {
-                        return '<button type="button" class="tm-avatar-page-card tm-avatar-picker-card' + (asset.id === selectedId ? ' is-selected' : '') + '" data-avatar-pick-id="' + esc(asset.id) + '" aria-label="选择 ' + esc(asset.name) + '">' +
-                            '<img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" alt=""></button>';
-                    }).join('') : '<div class="tm-avatar-picker-empty">头像库为空，请先到头像管理添加图片</div>') + '</div>' +
-                    '<div class="tm-edit-foot"><button type="button" class="tm-btn tm-btn-outline" data-avatar-picker-cancel>取消</button></div>'
-                );
-                var grid = sheet.querySelector('[data-avatar-picker-grid]');
-                if (pickerLoader) pickerLoader.disconnect();
-                var loader = imageLoaderApi.createImageLoader({
-                    root: grid,
-                    rootMargin: '240px 0px',
-                    resolveSource: function (id) { return store.getThumbnail(id); },
-                });
-                pickerLoader = loader;
-                loader.observe(grid.querySelectorAll('.tm-avatar-page-thumb'));
-                function cleanupPicker() {
-                    loader.disconnect();
-                    if (pickerLoader === loader) pickerLoader = null;
-                    if (!mounted) removeStyle();
-                }
-                function closePicker() {
-                    cleanupPicker();
-                    closeSheet(sheet);
-                }
-                sheet.addEventListener('click', function (event) {
-                    if (event.target === sheet) global.setTimeout(cleanupPicker, 0);
-                });
-                sheet.querySelector('[data-avatar-picker-cancel]').addEventListener('click', closePicker);
-                sheet.querySelectorAll('[data-avatar-pick-id]').forEach(function (button) {
-                    button.addEventListener('click', function () {
-                        var asset = choices.find(function (item) { return item.id === button.getAttribute('data-avatar-pick-id'); });
-                        if (!asset) return;
-                        closePicker();
-                        if (typeof options.onSelect === 'function') options.onSelect(asset);
-                    });
-                });
-                return sheet;
-            });
         }
 
         return {
@@ -9611,7 +9711,6 @@
                 };
             },
             openAssetMenu: openAssetMenu,
-            openPicker: openPicker,
             viewAsset: viewAsset,
             getState: function () { return { mounted: mounted, count: assets.length, importing: importing }; },
         };
@@ -9951,7 +10050,7 @@
 })(window);
 /* END MODULE 19/24: src/app-shell.js */
 
-/* BEGIN MODULE 20/24: src/styles.js | sha256:90d1145907dda2ad22b90d1866200f6ecf23b717022e3a4a7a0caf7ee9d3f4ef */
+/* BEGIN MODULE 20/24: src/styles.js | sha256:5f0cc979bde2253d36ef4e843179c0b33ebdcd5af3e9420a0dfe0ed2888378dc */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -10230,9 +10329,9 @@
             '.tm-theme-bind-copy strong{font-size:.86em;font-weight:650;}',
             '.tm-theme-bind-copy small{font-size:.73em;opacity:.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
             '.tm-theme-bind-chevron{font-size:.8em;opacity:.34;}',
-            '.tm-user-avatar-bind{min-width:0}.tm-user-avatar-bind-card{width:100%;box-sizing:border-box;display:grid;grid-template-columns:48px minmax(0,1fr) 18px;gap:11px;align-items:center;padding:9px 11px;border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));border-radius:var(--tm-control-radius,10px);background:var(--tm-control-bg,rgba(127,127,127,.06));color:inherit;text-align:left;cursor:pointer}.tm-user-avatar-bind-card:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.1)}',
-            '.tm-user-avatar-bind-thumb{width:48px;height:48px;border-radius:9px;background-size:cover;background-position:center;background-color:rgba(127,127,127,.08);display:grid;place-items:center}.tm-user-avatar-bind-thumb.empty{border:1px dashed rgba(127,127,127,.24)}.tm-user-avatar-bind-thumb i{opacity:.42}',
-            '.tm-user-avatar-bind-copy{display:flex;min-width:0;flex-direction:column;gap:3px}.tm-user-avatar-bind-copy strong{font-size:.86em;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tm-user-avatar-bind-copy small{font-size:.73em;opacity:.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tm-user-avatar-bind-card>i{font-size:.8em;opacity:.34}',
+            '.tm-user-avatar-bind{min-width:0}.tm-user-avatar-bind-empty{box-sizing:border-box;display:flex;gap:11px;align-items:center;padding:11px;border:var(--tm-control-border-style,1px dashed var(--tm-control-border,rgba(127,127,127,.2)));border-radius:var(--tm-control-radius,10px);background:var(--tm-control-bg,rgba(127,127,127,.04))}.tm-user-avatar-bind-empty>i{width:42px;text-align:center;font-size:1.25em;opacity:.34}.tm-user-avatar-bind-empty>span{display:flex;min-width:0;flex-direction:column;gap:3px}.tm-user-avatar-bind-empty strong{font-size:.86em}.tm-user-avatar-bind-empty small{font-size:.72em;line-height:1.35;opacity:.52}',
+            '.tm-user-avatar-bind-pool{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:7px}.tm-user-avatar-bind-item{position:relative;min-width:0;border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));border-radius:var(--tm-control-radius,10px);background:var(--tm-control-bg,rgba(127,127,127,.05));overflow:hidden}.tm-user-avatar-bind-item.is-active{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-user-avatar-bind-choice{width:100%;min-width:0;box-sizing:border-box;display:grid;grid-template-columns:42px minmax(0,1fr) 16px;gap:9px;align-items:center;padding:7px 34px 7px 7px;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer}',
+            '.tm-user-avatar-bind-thumb{width:42px;height:42px;position:relative;overflow:hidden;border-radius:8px;background:rgba(127,127,127,.08);display:grid;place-items:center}.tm-user-avatar-bind-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.tm-user-avatar-bind-thumb i{opacity:.42}.tm-user-avatar-bind-copy{display:flex;min-width:0;flex-direction:column;gap:3px}.tm-user-avatar-bind-copy strong{font-size:.82em;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tm-user-avatar-bind-copy small{font-size:.7em;opacity:.5}.tm-user-avatar-bind-choice>i{color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-user-avatar-bind-remove{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:28px;height:28px;padding:0;border:0;background:transparent;color:inherit;opacity:.42;cursor:pointer}.tm-user-avatar-bind-remove:hover{opacity:1;color:#d45c66}',
             '.tm-user-avatar-bind-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}.tm-user-avatar-bind-actions .tm-btn{font-size:.78em;padding:6px 10px}.tm-user-avatar-bind-loading{padding:12px;text-align:center;font-size:.78em;opacity:.5}',
             '.tm-bindings-all-hint{margin:-4px 0 12px;}',
             '.tm-bindings-all-section{margin:0 0 12px;}',
@@ -11063,7 +11162,7 @@
 })(window);
 /* END MODULE 23/24: src/ui-events.js */
 
-/* BEGIN MODULE 24/24: src/ui-main.js | sha256:e37e2066c9a53b905914e1edc2c07d9e322322bbe9600f4b7a577f6d3dc1a27b */
+/* BEGIN MODULE 24/24: src/ui-main.js | sha256:cb4e4eb33550e79749aeb3c2b88ba130786afe9e798447dbeb888d0deb6e3d98 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16535,20 +16634,20 @@
                 '<span class="tm-theme-bind-copy"><strong>角色 / 聊天绑定</strong><small>' + summary + '</small></span>' +
                 '<i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i>';
         }
-        function buildUserAvatarBindingHtml(binding, asset) {
-            if (!binding) {
-                return '<button type="button" class="tm-user-avatar-bind-card" data-user-avatar-action="choose">' +
-                    '<span class="tm-user-avatar-bind-thumb empty"><i class="fa-regular fa-user"></i></span>' +
-                    '<span class="tm-user-avatar-bind-copy"><strong>沿用全局 User 头像</strong><small>此美化尚无专属绑定</small></span>' +
-                    '<i class="fa-solid fa-chevron-right"></i></button>';
+        function buildUserAvatarBindingHtml(bindingSet, items) {
+            if (!bindingSet || !items.length) {
+                return '<div class="tm-user-avatar-bind-empty"><i class="fa-regular fa-user"></i><span><strong>沿用全局 User 头像</strong><small>请从头像库选择 User 头像，调整后勾选“绑定到当前美化”</small></span></div>';
             }
-            var preview = asset && (asset.thumbData || asset.imageData) || '';
-            return '<button type="button" class="tm-user-avatar-bind-card" data-user-avatar-action="choose">' +
-                '<span class="tm-user-avatar-bind-thumb"' + (preview ? ' style="background-image:url(&quot;' + esc(preview) + '&quot;)"' : '') + '></span>' +
-                '<span class="tm-user-avatar-bind-copy"><strong>' + esc(asset && asset.name || '已绑定头像') + '</strong><small>当前美化专属 User 头像</small></span>' +
-                '<i class="fa-solid fa-chevron-right"></i></button>' +
-                '<div class="tm-user-avatar-bind-actions"><button type="button" class="tm-btn tm-btn-outline" data-user-avatar-action="adjust"><i class="fa-solid fa-sliders"></i> 调整</button>' +
-                '<button type="button" class="tm-btn tm-btn-danger" data-user-avatar-action="clear">解除绑定</button></div>';
+            return '<div class="tm-user-avatar-bind-pool">' + items.map(function (item) {
+                var active = item.binding.active;
+                return '<div class="tm-user-avatar-bind-item' + (active ? ' is-active' : '') + '">' +
+                    '<button type="button" class="tm-user-avatar-bind-choice" data-user-avatar-action="select" data-avatar-id="' + esc(item.binding.avatarId) + '">' +
+                    '<span class="tm-user-avatar-bind-thumb"><img src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(item.binding.avatarId) + '" alt=""></span>' +
+                    '<span class="tm-user-avatar-bind-copy"><strong>' + esc(item.asset && item.asset.name || '已绑定头像') + '</strong><small>' + (active ? '当前使用' : '点按切换') + '</small></span>' +
+                    (active ? '<i class="fa-solid fa-check"></i>' : '') + '</button>' +
+                    '<button type="button" class="tm-user-avatar-bind-remove" data-user-avatar-action="remove" data-avatar-id="' + esc(item.binding.avatarId) + '" aria-label="解除这个头像的绑定"><i class="fa-solid fa-link-slash"></i></button></div>';
+            }).join('') + '</div><div class="tm-user-avatar-bind-actions">' + (bindingSet.active ? '<button type="button" class="tm-btn tm-btn-outline" data-user-avatar-action="adjust"><i class="fa-solid fa-sliders"></i> 调整当前头像</button>' : '') +
+                '<button type="button" class="tm-btn tm-btn-danger" data-user-avatar-action="clear">全部解除</button></div>';
         }
         var catOpts = '<option value="">无分类</option>' +
             d.categories.map(function (c) { return '<option value="' + esc(c) + '"' + (meta.category === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
@@ -16600,13 +16699,22 @@
             var host = sheet.querySelector('#tm-user-avatar-bind');
             if (!host || !avatarRuntime || !avatarStore) return;
             host.innerHTML = '<div class="tm-user-avatar-bind-loading">正在读取头像绑定…</div>';
-            avatarRuntime.getThemeUserBinding(bindingThemeName).then(function (binding) {
-                if (!binding) return [null, null];
-                return avatarStore.getAsset(binding.avatarId).then(function (asset) { return [binding, asset]; });
-            }).then(function (parts) {
+            avatarRuntime.getThemeUserBindingSet(bindingThemeName).then(function (bindingSet) {
+                return Promise.all(bindingSet.candidates.map(function (binding) {
+                    return avatarStore.getAssetMetadata(binding.avatarId).then(function (asset) {
+                        return { binding: binding, asset: asset };
+                    });
+                })).then(function (items) { return { bindingSet: bindingSet, items: items }; });
+            }).then(function (result) {
                 if (token !== userAvatarBindingToken || bindingThemeName !== themeName || !host.parentNode) return;
-                currentUserAvatarBinding = parts[0];
-                host.innerHTML = buildUserAvatarBindingHtml(parts[0], parts[1]);
+                currentUserAvatarBinding = result.bindingSet.active;
+                host.innerHTML = buildUserAvatarBindingHtml(result.bindingSet, result.items);
+                var loader = imageLoaderApi.createImageLoader({
+                    root: host,
+                    IntersectionObserver: null,
+                    resolveSource: function (avatarId) { return avatarStore.getThumbnail(avatarId); },
+                });
+                loader.observe(host.querySelectorAll('.tm-user-avatar-bind-thumb img'));
             }).catch(function (error) {
                 if (token !== userAvatarBindingToken || !host.parentNode) return;
                 host.innerHTML = '<div class="tm-user-avatar-bind-loading">头像绑定读取失败</div>';
@@ -16638,19 +16746,24 @@
             if (!button || !userAvatarBindingHost.contains(button)) return;
             var action = button.getAttribute('data-user-avatar-action');
             var bindingThemeName = themeName;
-            if (action === 'choose') {
-                avatarPageController.openPicker({
-                    title: currentUserAvatarBinding ? '更换当前美化的 User 头像' : '绑定当前美化的 User 头像',
-                    selectedId: currentUserAvatarBinding && currentUserAvatarBinding.avatarId,
-                    onSelect: function (asset) { beginThemeUserAvatarEdit(bindingThemeName, asset.id); },
-                }).catch(function (error) { toast(error.message || '头像选择器无法打开', true); });
+            var avatarId = button.getAttribute('data-avatar-id');
+            if (action === 'select' && avatarId) {
+                avatarRuntime.setThemeUserBinding(bindingThemeName, avatarId).then(function () {
+                    renderUserAvatarBinding();
+                    toast('已切换当前美化的 User 头像');
+                }).catch(function (error) { toast(error.message || '切换 User 头像失败', true); });
+            } else if (action === 'remove' && avatarId) {
+                avatarRuntime.removeThemeUserBinding(bindingThemeName, avatarId).then(function () {
+                    renderUserAvatarBinding();
+                    toast('已解除这个头像与当前美化的绑定');
+                }).catch(function (error) { toast(error.message || '解除 User 头像绑定失败', true); });
             } else if (action === 'adjust' && currentUserAvatarBinding) {
                 beginThemeUserAvatarEdit(bindingThemeName, currentUserAvatarBinding.avatarId);
-            } else if (action === 'clear' && currentUserAvatarBinding) {
+            } else if (action === 'clear') {
                 avatarRuntime.clearThemeUserBinding(bindingThemeName).then(function () {
                     currentUserAvatarBinding = null;
                     renderUserAvatarBinding();
-                    toast('已解除当前美化的 User 头像绑定，将沿用全局头像');
+                    toast('已解除当前美化的全部 User 头像绑定，将沿用全局头像');
                 }).catch(function (error) { toast(error.message || '解除 User 头像绑定失败', true); });
             }
         });

@@ -132,12 +132,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const gridUsesThumb = gridImage && gridImage.src === persisted.thumbData && gridImage.src !== persisted.imageData;
                 const imageOnlyCard = Boolean(document.querySelector('.tm-avatar-page-card .tm-avatar-page-thumb')) &&
                     !document.querySelector('.tm-avatar-page-name') && Boolean(document.querySelector('[data-avatar-action="menu"]'));
-                let pickerSelection = '';
-                const pickerSheet = await pageController.openPicker({ selectedId:avatarId, onSelect:(chosen) => { pickerSelection = chosen.id; } });
-                const pickerCard = pickerSheet.querySelector(`[data-avatar-pick-id="${avatarId}"]`);
-                const pickerUsesLoader = Boolean(pickerCard && pickerCard.querySelector('img'));
-                pickerCard.click();
-                const libraryPicker = pickerSelection === avatarId && !pickerSheet.isConnected && pickerUsesLoader;
+                const fullLibraryPickerRemoved = typeof pageController.openPicker === 'undefined';
 
                 const stressIds = [];
                 for (let index = 0; index < 24; index++) {
@@ -202,6 +197,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const viewportBottom = viewportTop + (visualViewport ? visualViewport.height : innerHeight);
                 const toolbarVisible = Boolean(toolbarRect && toolbarRect.width > 0 && toolbarRect.height > 0 && toolbarRect.top >= viewportTop && toolbarRect.bottom <= viewportBottom);
                 const toolbarIsolated = Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="save"]'));
+                const bindAfterAdjustControl = Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="bind-theme"]')) &&
+                    runtime.getState().bindingMode === 'adaptive' && runtime.getState().unboundSaveMode === 'global';
                 const userImages = [...document.querySelectorAll('.mes[is_user="true"] .avatar img')];
                 const highQualityApplied = userImages.every((image) => image.src === persisted.imageData);
                 const userBoxBeforeSliders = userImages.map((image) => image.getBoundingClientRect().toJSON());
@@ -381,12 +378,20 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const characterBeforeThemeBindings = characterImages.map((image) => ({ src:image.src, crop:image.style.getPropertyValue('object-view-box') }));
                 document.querySelector('#themes').value='A'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
                 const appliedA = userImages.every((image) => image.src === themeAAsset.imageData);
+                const freshUserMessage = document.createElement('div');
+                freshUserMessage.className='mes'; freshUserMessage.setAttribute('is_user','true'); freshUserMessage.setAttribute('is_system','false');
+                freshUserMessage.innerHTML='<div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div>';
+                document.querySelector('#chat').appendChild(freshUserMessage);
+                await Promise.resolve();
+                const seamlessNewMessage = freshUserMessage.querySelector('img').src === themeAAsset.imageData;
+                freshUserMessage.remove();
                 const boundAssetMenu = await pageController.openAssetMenu(avatarId);
                 boundAssetMenu.querySelector('[data-avatar-menu-action="apply-user"]').click();
-                await delay(20);
-                const choiceSheet = document.querySelector('[data-avatar-menu-action="temporary-user"]')?.closest('.tm-sheet-overlay');
-                const manualChoicePrompt = Boolean(choiceSheet && choiceSheet.querySelector('[data-avatar-menu-action="update-theme-user"]'));
-                if (choiceSheet) sheets.closeSheet(choiceSheet);
+                for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
+                const adaptiveToolbar = document.querySelector('#tm-avatar-editor-toolbar')?.shadowRoot;
+                const bindChoiceAfterAdjust = runtime.getState().bindingMode === 'adaptive' && runtime.getState().unboundSaveMode === 'temporary' &&
+                    Boolean(adaptiveToolbar && adaptiveToolbar.querySelector('[data-action="bind-theme"]'));
+                await runtime.cancelEdit();
                 document.querySelector('#themes').value='B'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
                 const appliedB = userImages.every((image) => image.src === themeBAsset.imageData);
                 const optionC = document.createElement('option'); optionC.value='C'; optionC.textContent='C'; document.querySelector('#themes').appendChild(optionC);
@@ -408,6 +413,13 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 runtime.setScale(1.2); await runtime.saveEdit();
                 const modifiedThemeBinding = await store.getBinding('theme-name:A','user:global');
                 const themeBindingModified = modifiedThemeBinding.avatarId === temporaryAsset.id && modifiedThemeBinding.view.scale === 1.2;
+                let themeBindingSet = await runtime.getThemeUserBindingSet('A');
+                const themePoolCreated = themeBindingSet.candidates.length === 2;
+                await runtime.setThemeUserBinding('A', themeAAsset.id);
+                const switchedToExisting = userImages.every((image) => image.src === themeAAsset.imageData);
+                await runtime.setThemeUserBinding('A', temporaryAsset.id);
+                themeBindingSet = await runtime.getThemeUserBindingSet('A');
+                const boundPoolSwitching = themePoolCreated && switchedToExisting && themeBindingSet.active.avatarId === temporaryAsset.id;
                 await runtime.clearThemeUserBinding('A');
                 const themeClearFallback = userImages.every((image) => image.src === persisted.imageData);
                 const characterIsolation = characterImages.every((image,index) => image.src === characterBeforeThemeBindings[index].src && image.style.getPropertyValue('object-view-box') === characterBeforeThemeBindings[index].crop);
@@ -443,14 +455,14 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 return {
                     label, A_empty:empty, B_added:imported[0].ok, C_reload:reloadCount===1, D_menu:menuOpened&&imageOnlyCard,
                     E_userApply:directUser&&highQualityApplied, F_characterApply:saveResult.saved,
-                    G_managerClose:managerClosed===3, H_drag:Math.abs(dragged.view.x-.25)<.001&&Math.abs(dragged.view.y-.125)<.001,
+                    G_managerClose:managerClosed===4, H_drag:Math.abs(dragged.view.x-.25)<.001&&Math.abs(dragged.view.y-.125)<.001,
                     I_scale:dragged.view.scale===1.05, J_cancel:cancelledToRaw, K_save:Boolean(persistedBindingAfterSave&&persistedBindingAfterSave.avatarId===avatarId),
                     L_rerender:rerenderApplied, M_themeSwitch:themesIsolated, N_circle:visualsPreserved,
                     O_clip:visualsPreserved, P_mask:visualsPreserved, Q_transform:visualsPreserved,
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, gridStable, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
-                    emptyLayout, fullPreview, sharedThemePreview, libraryPicker, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, manualChoicePrompt, temporarySemantics, themeBindingModified, themeClearFallback, characterIsolation, menuDelete, nativeInputHandlingMs, nativeResponsiveInputs,
+                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, bindAfterAdjustControl, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, seamlessNewMessage, bindChoiceAfterAdjust, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, menuDelete, nativeInputHandlingMs, nativeResponsiveInputs,
                     nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
                     hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
@@ -458,7 +470,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','libraryPicker','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','manualChoicePrompt','temporarySemantics','themeBindingModified','themeClearFallback','characterIsolation','menuDelete','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','bindAfterAdjustControl','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','seamlessNewMessage','bindChoiceAfterAdjust','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','menuDelete','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

@@ -12,9 +12,12 @@
     var AVATAR_CLASS = 'tm-avatar-editor-selected';
     var DEFAULT_BINDING_KEY = 'avatar-default';
     var THEME_BINDING_VERSION = 4;
+    var USER_TARGET_KEY = 'user:global';
+    var THEME_USER_CANDIDATE_PREFIX = USER_TARGET_KEY + ':theme-avatar:';
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
+    function themeUserCandidateTargetKey(avatarId) { return THEME_USER_CANDIDATE_PREFIX + encodeURIComponent(clean(avatarId)); }
     function round(value, precision) {
         var factor = Math.pow(10, precision == null ? 5 : precision);
         return Math.round(Number(value) * factor) / factor;
@@ -586,6 +589,17 @@
             if (reconcileTimer) win.clearTimeout(reconcileTimer);
             reconcileTimer = win.setTimeout(function () { reconcileTimer = null; reconcile(); }, delay == null ? 40 : delay);
         }
+        function applyCachedPlans() {
+            if (editor) return syncEditorInstances();
+            if (!bindingPlans.length) return false;
+            try {
+                applyDesired(bindingPlans.reduce(function (all, plan) { return all.concat(desiredForPlan(plan)); }, []));
+                return true;
+            } catch (error) {
+                onError(error);
+                return false;
+            }
+        }
         function invalidateAndScheduleReconcile(delay) {
             sequence += 1;
             scheduleReconcile(delay);
@@ -597,8 +611,11 @@
             if (chatObserver) chatObserver.disconnect();
             observedChat = chat;
             if (!chat || typeof win.MutationObserver !== 'function') return;
-            chatObserver = new win.MutationObserver(function () { scheduleReconcile(30); });
-            chatObserver.observe(chat, { childList: true, subtree: true });
+            chatObserver = new win.MutationObserver(function () {
+                applyCachedPlans();
+                scheduleReconcile(0);
+            });
+            chatObserver.observe(chat, { childList: true, subtree: true, attributes: true, attributeFilter: ['is_user', 'is_system'] });
         }
         function addEvent(source, name, handler) {
             if (!source || !name || typeof source.on !== 'function') return;
@@ -609,7 +626,12 @@
             if (editor) cancelEdit('context-changed');
             else { observeChat(); invalidateAndScheduleReconcile(20); }
         }
-        function contentChanged() { if (editor || hasRuntimeBinding) { observeChat(); scheduleReconcile(20); } }
+        function contentChanged() {
+            if (!editor && !hasRuntimeBinding) return;
+            observeChat();
+            applyCachedPlans();
+            scheduleReconcile(0);
+        }
         function onThemeControlChange(event) {
             if (!event.target || event.target.id !== 'themes') return;
             if (editor) cancelEdit('theme-changed');
@@ -739,7 +761,7 @@
                 ':host{--tm-avatar-accent:var(--SmartThemeQuoteColor,#7c6daf);--tm-avatar-text:var(--SmartThemeBodyColor,#eee);--tm-avatar-bg:var(--SmartThemeBlurTintColor,var(--SmartThemeBackgroundColor,#16161a))}',
                 '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
                 '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 44px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:.76}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}',
-                'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(5,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
+                'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-bind{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}.tm-avatar-editor-bind span{font-weight:650}.tm-avatar-editor-bind small{font-size:10px;opacity:.62;text-align:right}.tm-avatar-editor-bind.is-active{border-color:var(--tm-avatar-accent);background:color-mix(in srgb,var(--tm-avatar-accent) 18%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(5,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
                 '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:8px;font-size:12px}.tm-avatar-editor-controls{gap:3px}.tm-avatar-editor-row{grid-template-columns:30px 30px minmax(92px,1fr) 40px 30px;gap:4px;min-height:32px}button{min-height:30px;padding:4px 6px}.tm-avatar-editor-footer{gap:4px}}',
             ].join('');
             toolbarRoot.appendChild(toolbarStyle);
@@ -752,7 +774,9 @@
                 '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">左右</span><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="-1" aria-label="向左移动">−</button><input type="range" min="-1" max="1" step="0.01" value="0" data-view="x" aria-label="左右位置"><output class="tm-avatar-editor-value" data-view-output="x">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="1" aria-label="向右移动">+</button></div>' +
                 '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">上下</span><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="-1" aria-label="向上移动">−</button><input type="range" min="-1" max="1" step="0.01" value="0" data-view="y" aria-label="上下位置"><output class="tm-avatar-editor-value" data-view-output="y">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="1" aria-label="向下移动">+</button></div>' +
                 '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input type="range" min="-180" max="180" step="1" value="0" data-view="rotate" aria-label="倾斜角度"><output class="tm-avatar-editor-value" data-view-output="rotate">0°</output><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
-                '</div><div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">↔ 水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">↕ 垂直</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
+                '</div>' + (editor.mode === 'library' && editor.target.kind === 'user' && editor.bindingMode === 'adaptive'
+                    ? '<button type="button" class="tm-avatar-editor-bind" data-action="bind-theme" aria-pressed="false"><span>绑定到当前美化</span><small data-bind-theme-hint></small></button>'
+                    : '') + '<div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">↔ 水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">↕ 垂直</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
             toolbar.addEventListener('click', onToolbarClick);
             toolbar.addEventListener('input', onToolbarInput);
             toolbarRoot.appendChild(toolbar);
@@ -776,6 +800,15 @@
                 button.classList.toggle('is-active', editor.view[name]);
                 button.setAttribute('aria-pressed', editor.view[name] ? 'true' : 'false');
             });
+            var bindButton = toolbar.querySelector('[data-action="bind-theme"]');
+            if (bindButton) {
+                bindButton.classList.toggle('is-active', editor.bindToTheme === true);
+                bindButton.setAttribute('aria-pressed', editor.bindToTheme === true ? 'true' : 'false');
+                var hint = bindButton.querySelector('[data-bind-theme-hint]');
+                if (hint) hint.textContent = editor.bindToTheme
+                    ? '保存后加入并设为当前头像'
+                    : (editor.unboundSaveMode === 'temporary' ? '未绑定：仅临时替换' : '未绑定：保存为全局头像');
+            }
         }
         function bindRepresentative() {
             if (!editor || !editor.representative) return;
@@ -813,21 +846,42 @@
             var kind = input.target && input.target.kind || input.kind;
             var cap = capability(kind);
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
-            var bindingMode = kind === 'user' && (input.bindingMode === 'theme' || input.bindingMode === 'temporary')
+            var bindingMode = kind === 'user' && (input.bindingMode === 'theme' || input.bindingMode === 'temporary' || input.bindingMode === 'adaptive')
                 ? input.bindingMode
                 : 'global';
             var requestedThemeKey = bindingMode === 'global' ? DEFAULT_BINDING_KEY : themeKey(input.themeName || getThemeName());
             if (bindingMode !== 'global' && !requestedThemeKey) {
                 return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             }
-            var previousPromise = bindingMode === 'temporary'
-                ? getBindingForTarget(cap.target, requestedThemeKey)
-                : store.getBinding(requestedThemeKey, cap.target.key).then(function (binding) {
-                    if (bindingMode === 'theme' && !isDedicatedThemeBinding(binding)) return null;
-                    return binding;
+            var editContextPromise;
+            if (bindingMode === 'adaptive') {
+                editContextPromise = Promise.all([
+                    getThemeUserBindingSet(input.themeName || getThemeName()),
+                    getDefaultBinding(cap.target),
+                ]).then(function (parts) {
+                    var bindingSet = parts[0];
+                    var selected = bindingSet.candidates.find(function (binding) { return binding.avatarId === input.avatarId; }) || null;
+                    var globalBinding = parts[1] && parts[1].avatarId === input.avatarId ? parts[1] : null;
+                    return {
+                        previous: selected || globalBinding,
+                        bindToTheme: Boolean(selected),
+                        unboundSaveMode: bindingSet.active ? 'temporary' : 'global',
+                    };
                 });
-            return Promise.all([getAsset(input.avatarId), previousPromise]).then(function (parts) {
+            } else {
+                var previousPromise = bindingMode === 'temporary'
+                    ? getBindingForTarget(cap.target, requestedThemeKey)
+                    : store.getBinding(requestedThemeKey, cap.target.key).then(function (binding) {
+                        if (bindingMode === 'theme' && !isDedicatedThemeBinding(binding)) return null;
+                        return binding;
+                    });
+                editContextPromise = previousPromise.then(function (binding) {
+                    return { previous: binding, bindToTheme: bindingMode === 'theme', unboundSaveMode: bindingMode };
+                });
+            }
+            return Promise.all([getAsset(input.avatarId), editContextPromise]).then(function (parts) {
                 var asset = parts[0];
+                var editContext = parts[1];
                 if (!asset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
                 editor = {
                     mode: 'library',
@@ -836,8 +890,10 @@
                     target: cap.target,
                     avatarId: asset.id,
                     asset: asset,
-                    previousBinding: clone(parts[1]),
-                    view: normalizeView(parts[1] && parts[1].view),
+                    previousBinding: clone(editContext.previous),
+                    view: normalizeView(editContext.previous && editContext.previous.view),
+                    bindToTheme: editContext.bindToTheme,
+                    unboundSaveMode: editContext.unboundSaveMode,
                     representative: cap.representative,
                     diagnostics: null,
                 };
@@ -979,6 +1035,13 @@
             scheduleEditorSync(); updateToolbar();
             return getState();
         }
+        function setBindToTheme(enabled) {
+            if (!editor || editor.mode !== 'library' || editor.target.kind !== 'user' || editor.bindingMode !== 'adaptive') return getState();
+            editor.bindToTheme = enabled === true;
+            updateToolbar();
+            return getState();
+        }
+        function toggleThemeBinding() { return setBindToTheme(!(editor && editor.bindToTheme)); }
         function resetEdit() {
             if (!editor) return getState();
             editor.view = normalizeView(null);
@@ -1022,14 +1085,17 @@
                     });
                 }).catch(function (error) { editorClosing = false; throw error; });
             }
+            var effectiveBindingMode = editor.bindingMode === 'adaptive'
+                ? (editor.bindToTheme ? 'theme' : editor.unboundSaveMode)
+                : editor.bindingMode;
             var binding = {
-                themeKey: editor.themeKey,
+                themeKey: effectiveBindingMode === 'global' ? DEFAULT_BINDING_KEY : editor.themeKey,
                 targetKey: editor.target.key,
                 avatarId: editor.avatarId,
                 view: normalizeView(editor.view),
             };
             var diagnostics = clone(editor.diagnostics);
-            if (editor.bindingMode === 'temporary') {
+            if (effectiveBindingMode === 'temporary') {
                 var savedTemporary = Object.assign({ version: THEME_BINDING_VERSION, temporary: true }, binding);
                 temporaryUserOverride = savedTemporary;
                 finishEditorUi();
@@ -1040,7 +1106,10 @@
                     return { saved: true, temporary: true, binding: clone(savedTemporary), diagnostics: diagnostics };
                 }, function (error) { editorClosing = false; throw error; });
             }
-            return store.putBinding(binding).then(function (saved) {
+            var saveBinding = effectiveBindingMode === 'theme'
+                ? putThemeUserBindingByKey(editor.themeKey, binding.avatarId, binding.view)
+                : store.putBinding(binding);
+            return saveBinding.then(function (saved) {
                 if (binding.themeKey === DEFAULT_BINDING_KEY) promotedBindings.set(binding.targetKey, saved);
                 if (binding.themeKey !== DEFAULT_BINDING_KEY && temporaryUserOverride && temporaryUserOverride.targetKey === binding.targetKey) {
                     temporaryUserOverride = null;
@@ -1077,6 +1146,7 @@
             var action = button.getAttribute('data-action');
             if (action === 'flip-x') toggleFlip('flipX');
             else if (action === 'flip-y') toggleFlip('flipY');
+            else if (action === 'bind-theme') toggleThemeBinding();
             else if (action === 'reset') resetEdit();
             else if (action === 'cancel') cancelEdit();
             else if (action === 'save') saveEdit().catch(onError);
@@ -1107,13 +1177,95 @@
         function getGlobalUserBinding() {
             return Promise.resolve(store.ready).then(function () { return getDefaultBinding(targets().user); });
         }
+        function getThemeUserBindingSet(themeName) {
+            var key = themeKey(themeName || getThemeName());
+            if (!key) return Promise.resolve({ themeKey: '', active: null, candidates: [] });
+            return Promise.resolve(store.ready).then(function () {
+                return Promise.all([store.getBinding(key, USER_TARGET_KEY), store.listBindings()]);
+            }).then(function (parts) {
+                var active = isDedicatedThemeBinding(parts[0]) ? parts[0] : null;
+                var candidates = (parts[1] || []).filter(function (binding) {
+                    return binding.themeKey === key && binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0 && isDedicatedThemeBinding(binding);
+                });
+                if (active && !candidates.some(function (binding) { return binding.avatarId === active.avatarId; })) {
+                    candidates.unshift(Object.assign({}, active, { targetKey: themeUserCandidateTargetKey(active.avatarId) }));
+                }
+                candidates.sort(function (a, b) {
+                    if (active && a.avatarId === active.avatarId) return -1;
+                    if (active && b.avatarId === active.avatarId) return 1;
+                    return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+                });
+                return {
+                    themeKey: key,
+                    active: clone(active),
+                    candidates: candidates.map(function (binding) {
+                        return Object.assign(clone(binding), { active: Boolean(active && active.avatarId === binding.avatarId) });
+                    }),
+                };
+            });
+        }
+        function putThemeUserBindingByKey(key, avatarId, view) {
+            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            var normalizedView = normalizeView(view);
+            var candidate = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: themeUserCandidateTargetKey(avatarId), avatarId: avatarId, view: normalizedView };
+            var active = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: avatarId, view: normalizedView };
+            return store.getBinding(key, USER_TARGET_KEY).then(function (previous) {
+                if (!isDedicatedThemeBinding(previous) || previous.avatarId === avatarId) return null;
+                return store.putBinding({
+                    version: THEME_BINDING_VERSION,
+                    themeKey: key,
+                    targetKey: themeUserCandidateTargetKey(previous.avatarId),
+                    avatarId: previous.avatarId,
+                    view: previous.view,
+                });
+            }).then(function () { return store.putBinding(candidate); }).then(function () { return store.putBinding(active); });
+        }
+        function setThemeUserBinding(themeName, avatarId) {
+            var key = themeKey(themeName || getThemeName());
+            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            return getThemeUserBindingSet(themeName).then(function (bindingSet) {
+                var candidate = bindingSet.candidates.find(function (binding) { return binding.avatarId === avatarId; });
+                if (!candidate) throw Object.assign(new Error('这个头像尚未绑定到当前美化'), { code: 'THEME_AVATAR_NOT_BOUND' });
+                return store.putBinding({ version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: candidate.avatarId, view: candidate.view });
+            }).then(function (saved) {
+                if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
+                sequence += 1;
+                return reconcile().then(function () { return saved; });
+            });
+        }
+        function removeThemeUserBinding(themeName, avatarId) {
+            var key = themeKey(themeName || getThemeName());
+            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            return getThemeUserBindingSet(themeName).then(function (bindingSet) {
+                var remaining = bindingSet.candidates.filter(function (binding) { return binding.avatarId !== avatarId; });
+                var removeCandidate = store.deleteBinding(key, themeUserCandidateTargetKey(avatarId));
+                if (!bindingSet.active || bindingSet.active.avatarId !== avatarId) return removeCandidate;
+                return removeCandidate.then(function () {
+                    if (!remaining.length) return store.deleteBinding(key, USER_TARGET_KEY);
+                    var next = remaining[0];
+                    return store.putBinding({ version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: next.avatarId, view: next.view });
+                });
+            }).then(function () {
+                if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
+                sequence += 1;
+                return reconcile();
+            });
+        }
         function clearThemeUserBinding(themeName) {
             var key = themeKey(themeName || getThemeName());
             if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             if (editor) return cancelEdit('theme-binding-cleared').then(function () { return clearThemeUserBinding(themeName); });
             if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
             sequence += 1;
-            return store.deleteBinding(key, 'user:global').then(reconcile);
+            return store.listBindings().then(function (bindings) {
+                var targetsToDelete = (bindings || []).filter(function (binding) {
+                    return binding.themeKey === key && (binding.targetKey === USER_TARGET_KEY || binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0);
+                });
+                if (!targetsToDelete.some(function (binding) { return binding.targetKey === USER_TARGET_KEY; })) {
+                    targetsToDelete.push({ targetKey: USER_TARGET_KEY });
+                }
+                return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(key, binding.targetKey); }));
+            }).then(reconcile);
         }
         function clearNativeView(kind) {
             var cap = capability(kind === 'user' ? 'user' : 'character');
@@ -1138,6 +1290,8 @@
                 target: clone(editor.target),
                 avatarId: editor.avatarId,
                 view: clone(editor.view),
+                bindToTheme: editor.bindToTheme === true,
+                unboundSaveMode: editor.unboundSaveMode || null,
                 previousBinding: clone(editor.previousBinding),
                 previousNativeView: clone(editor.previousNativeView),
                 diagnostics: clone(editor.diagnostics),
@@ -1158,11 +1312,15 @@
             saveEdit: saveEdit,
             reset: resetEdit,
             setScale: setScale,
+            setBindToTheme: setBindToTheme,
             scaleUp: function () { return setScale(editor ? editor.view.scale + SCALE_STEP : 1); },
             scaleDown: function () { return setScale(editor ? editor.view.scale - SCALE_STEP : 1); },
             clearBinding: clearBinding,
             getThemeUserBinding: getThemeUserBinding,
+            getThemeUserBindingSet: getThemeUserBindingSet,
             getGlobalUserBinding: getGlobalUserBinding,
+            setThemeUserBinding: setThemeUserBinding,
+            removeThemeUserBinding: removeThemeUserBinding,
             clearThemeUserBinding: clearThemeUserBinding,
             deleteAsset: deleteAsset,
             notifyAssetChanged: notifyAssetChanged,
@@ -1176,6 +1334,8 @@
         MAX_SCALE: MAX_SCALE,
         SCALE_STEP: SCALE_STEP,
         DEFAULT_BINDING_KEY: DEFAULT_BINDING_KEY,
+        THEME_USER_CANDIDATE_PREFIX: THEME_USER_CANDIDATE_PREFIX,
+        themeUserCandidateTargetKey: themeUserCandidateTargetKey,
         themeKey: themeKey,
         getContextInfo: getContextInfo,
         messageImages: messageImages,

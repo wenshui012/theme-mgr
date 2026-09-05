@@ -165,7 +165,12 @@ class Element extends Events {
     get innerHTML() { return this._html; }
     closest(selector) { if (selector === '[data-action]' && this.getAttribute('data-action')) return this; return null; }
 }
-class MutationObserver { constructor(fn) { this.fn = fn; } observe() {} disconnect() {} }
+class MutationObserver {
+    static instances = [];
+    constructor(fn) { this.fn = fn; MutationObserver.instances.push(this); }
+    observe() {}
+    disconnect() {}
+}
 class Document extends Events {
     constructor() { super(); this.head = new Element('head'); this.body = new Element('body'); this.head._root = true; this.body._root = true; }
     createElement(tag) { return new Element(tag); }
@@ -577,10 +582,16 @@ test('64 avatar grids use definite square items without implicit-row compression
     assert.match(css, /tm-avatar-page-thumb\{[^}]*position:absolute[^}]*inset:0/);
 });
 
-test('65 the theme editor owns User avatar binding management and reuses the library picker', () => {
+test('65 the theme editor only manages already-bound User avatars and never opens the full library', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     assert.match(source, /User 头像绑定/);
-    assert.match(source, /avatarPageController\.openPicker/);
+    assert.doesNotMatch(source, /avatarPageController\.openPicker/);
+    assert.match(source, /getThemeUserBindingSet/);
+    assert.match(source, /setThemeUserBinding/);
+    assert.match(source, /removeThemeUserBinding/);
+    assert.match(source, /avatarStore\.getAssetMetadata/);
+    assert.doesNotMatch(source, /avatarStore\.listAssets/);
+    assert.match(source, /IntersectionObserver: null[\s\S]*avatarStore\.getThumbnail/);
     assert.match(source, /bindingMode: 'theme'/);
     assert.match(source, /clearThemeUserBinding/);
 });
@@ -613,4 +624,81 @@ test('68 a theme-scoped record can never affect Character avatars', async () => 
     await f.runtime.start();
     assert.ok(f.chars.every((entry) => entry.image.getAttribute('src') === 'raw-char.png'));
     assert.equal(await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'character:char.png'), null);
+});
+
+test('69 adaptive User editing exposes the bind-after-adjust choice and saves global fallback when no theme binding exists', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a')] } });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'a', bindingMode: 'adaptive', themeName: 'A' });
+    assert.equal(f.runtime.getState().bindToTheme, false);
+    assert.equal(f.runtime.getState().unboundSaveMode, 'global');
+    await f.runtime.saveEdit();
+    assert.equal((await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'user:global')).avatarId, 'a');
+    assert.equal(await f.store.getBinding('theme-name:A', 'user:global'), null);
+});
+
+test('70 adaptive User editing stays temporary when the theme already has a binding and bind is not selected', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('global'), asset('a'), asset('temp')], bindings: [
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
+        { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: {} },
+    ] } });
+    await f.runtime.start();
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'temp', bindingMode: 'adaptive', themeName: 'A' });
+    assert.equal(f.runtime.getState().unboundSaveMode, 'temporary');
+    const result = await f.runtime.saveEdit();
+    assert.equal(result.temporary, true);
+    assert.equal((await f.store.getBinding('theme-name:A', 'user:global')).avatarId, 'a');
+    assert.match(f.user.image.getAttribute('src'), /main-temp/);
+});
+
+test('71 bind-after-adjust adds a candidate and makes it the active theme User avatar', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('global'), asset('a')], bindings: [
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
+    ] } });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'a', bindingMode: 'adaptive', themeName: 'A' });
+    f.runtime.setBindToTheme(true);
+    f.runtime.setScale(1.35);
+    await f.runtime.saveEdit();
+    const bindingSet = await f.runtime.getThemeUserBindingSet('A');
+    assert.equal(bindingSet.active.avatarId, 'a');
+    assert.equal(bindingSet.candidates.length, 1);
+    assert.equal(bindingSet.candidates[0].view.scale, 1.35);
+    assert.match(f.user.image.getAttribute('src'), /main-a/);
+});
+
+test('72 a theme can switch among only its bound User avatar candidates and preserve each adjustment', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a'), asset('b')] } });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'a', bindingMode: 'theme', themeName: 'A' });
+    f.runtime.setScale(1.2); await f.runtime.saveEdit();
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'b', bindingMode: 'theme', themeName: 'A' });
+    f.runtime.setScale(1.5); await f.runtime.saveEdit();
+    let bindingSet = await f.runtime.getThemeUserBindingSet('A');
+    assert.equal(bindingSet.candidates.length, 2);
+    await f.runtime.setThemeUserBinding('A', 'a');
+    bindingSet = await f.runtime.getThemeUserBindingSet('A');
+    assert.equal(bindingSet.active.avatarId, 'a');
+    assert.equal(bindingSet.active.view.scale, 1.2);
+    await f.runtime.removeThemeUserBinding('A', 'a');
+    bindingSet = await f.runtime.getThemeUserBindingSet('A');
+    assert.equal(bindingSet.active.avatarId, 'b');
+    assert.equal(bindingSet.candidates.length, 1);
+});
+
+test('73 newly inserted message avatars receive cached bindings synchronously from the observer callback', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a')], bindings: [
+        { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: {} },
+    ] } });
+    await f.runtime.start();
+    const next = message('user', { x: 20, y: 350, width: 60, height: 60 }, 'raw-user-new.png');
+    f.chat.appendChild(next.mes);
+    const observer = MutationObserver.instances[MutationObserver.instances.length - 1];
+    observer.fn([{ type: 'childList', addedNodes: [next.mes] }]);
+    assert.match(next.image.getAttribute('src'), /main-a/);
+});
+
+test('74 bound-avatar metadata lookup does not load full-size or thumbnail payloads', async () => {
+    const { store } = memoryStore({ assets: [asset('a')] });
+    const metadata = await store.getAssetMetadata('a');
+    assert.equal(metadata.id, 'a');
+    assert.equal(Object.hasOwn(metadata, 'imageData'), false);
+    assert.equal(Object.hasOwn(metadata, 'thumbData'), false);
 });
