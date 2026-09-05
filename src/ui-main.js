@@ -3479,14 +3479,17 @@
             pages: [
                 { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
                 { id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
-                    avatarPageController.mount().catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
+                    avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
                 }, unmount: function () { avatarPageController.unmount(); } },
                 { id: 'backgrounds', label: '背景管理', icon: 'fa-image' },
             ],
             beforeChange: function () {
                 return !uiSheetsApi || uiSheetsApi.requestCloseAll(overlay, 'page-change');
             },
-            onChange: function (activePage) { lastAppPage = activePage; },
+            onChange: function (activePage) {
+                lastAppPage = activePage;
+                if (activePage === 'avatars') renderAvatarBottomStatus();
+            },
         });
         return appShellController;
     }
@@ -3585,6 +3588,7 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
+            '<button type="button" class="tm-bottom-status tm-avatars-only" id="tm-avatar-bottom-status" title="调整当前角色卡原头像"></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i></button>' +
@@ -3595,7 +3599,7 @@
         document.body.appendChild(ov);
         createAppShellController(ov);
         if (lastAppPage === 'avatars') {
-            avatarPageController.mount().catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
+            avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
         } else if (lastAppPage === 'themes') {
             bindSeriesResizeListener();
         }
@@ -3720,6 +3724,14 @@
             renderGrid();
         });
         ov.querySelector('#tm-bottom-settings').addEventListener('click', function () { openSettingsSheet(); });
+        ov.querySelector('#tm-avatar-bottom-status').addEventListener('click', function () {
+            var status = avatarPageController && avatarPageController.getNativeStatus();
+            if (!status || !status.available) {
+                toast(status && status.reason || '当前角色原头像无法调整', true);
+                return;
+            }
+            avatarPageController.beginNativeEdit();
+        });
         ov.querySelector('#tm-bottom-status').addEventListener('click', function () {
             var curTheme = getCurrentThemeName();
             if (!curTheme) return;
@@ -5040,6 +5052,17 @@
         var item = curTheme ? getLogicalItem(curTheme, load()) : null;
         var text = item ? item.name : (curTheme || '未选择主题');
         el.innerHTML = '<div class="tm-status-dot ' + dotClass + '"></div><span class="tm-status-text">' + esc(text) + '</span>';
+    }
+
+    function renderAvatarBottomStatus() {
+        var el = document.getElementById('tm-avatar-bottom-status'); if (!el || !avatarPageController) return;
+        var status = avatarPageController.getNativeStatus();
+        var available = !!(status && status.available);
+        var hasTarget = !!(status && status.targetKey);
+        var text = status && status.label || '未进入角色卡';
+        el.innerHTML = '<div class="tm-status-dot ' + (hasTarget ? 'green' : 'gray') + '"></div><span class="tm-status-text">' + esc(text) + '</span>';
+        el.title = available ? '调整「' + text + '」的原头像' : (status && status.reason || '当前角色原头像无法调整');
+        el.setAttribute('aria-label', el.title);
     }
 
     // ── 操作菜单 ─────────────────────────────────────────────

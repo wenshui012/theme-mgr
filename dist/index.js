@@ -7995,7 +7995,7 @@
 })(window);
 /* END MODULE 16/24: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:0b078442282b47e4690afa731d23fbf261a64bacd3d0f9ab37460fa9ea549365 */
+/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:be937006cc0da16c8813ed632bbc372a9f96437b911d9432a2b843324eab732f */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -8329,6 +8329,42 @@
             record.targetKey = targetKey || '';
             activeImages.add(image);
         }
+        function applyNativeToEntry(entry, view, targetKey) {
+            var image = entry.image;
+            var record = captureBaseline(image);
+            if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
+            var normalized = normalizeView(view);
+            var asset = nativeAssetForEntry(entry, targets().character || { key: targetKey });
+            var transformsSource = normalized.rotate !== 0 || normalized.flipX || normalized.flipY;
+
+            // Native SillyTavern avatars can be shaped by selectors that inspect their
+            // original src/srcset. Keep those attributes byte-for-byte intact whenever
+            // the bitmap itself does not need rotation or mirroring.
+            setExactAttribute(image, 'src', record.src);
+            setExactAttribute(image, 'srcset', record.srcset);
+            setExactAttribute(image, 'style', record.style);
+            if (transformsSource) {
+                var computed = win.getComputedStyle(image);
+                var frame = {
+                    borderRadius: computed.borderRadius,
+                    clipPath: computed.clipPath,
+                    webkitMaskImage: computed.webkitMaskImage,
+                    maskImage: computed.maskImage,
+                };
+                setExactAttribute(image, 'srcset', null);
+                setExactAttribute(image, 'src', sourceForView(asset, normalized));
+                if (frame.borderRadius) setImportantStyle(image, 'border-radius', frame.borderRadius);
+                if (frame.clipPath && frame.clipPath !== 'none') setImportantStyle(image, 'clip-path', frame.clipPath);
+                if (frame.webkitMaskImage && frame.webkitMaskImage !== 'none') setImportantStyle(image, '-webkit-mask-image', frame.webkitMaskImage);
+                if (frame.maskImage && frame.maskImage !== 'none') setImportantStyle(image, 'mask-image', frame.maskImage);
+            }
+            if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
+                throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
+            }
+            setImportantStyle(image, 'object-view-box', objectViewBoxForView(normalized));
+            record.targetKey = targetKey || '';
+            activeImages.add(image);
+        }
         function getAsset(id) {
             if (assetCache.has(id)) return Promise.resolve(assetCache.get(id));
             return store.getAsset(id).then(function (asset) {
@@ -8365,7 +8401,7 @@
         }
         function desiredForNativeView(target, record) {
             return messageImages(doc, target).map(function (entry) {
-                return { entry: entry, binding: record, asset: nativeAssetForEntry(entry, target) };
+                return { entry: entry, binding: record, asset: null, native: true };
             });
         }
         function desiredForPlan(plan) {
@@ -8376,7 +8412,10 @@
         function applyDesired(items) {
             var desired = new Set(items.map(function (item) { return item.entry.image; }));
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
-            items.forEach(function (item) { applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey); });
+            items.forEach(function (item) {
+                if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.binding.targetKey);
+                else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
+            });
         }
         function resolveRuntimeDesired() {
             var info = targets();
@@ -8425,14 +8464,15 @@
                 if (plan.target.key === editor.target.key) return;
                 desiredForPlan(plan).forEach(function (item) {
                     desired.add(item.entry.image);
-                    applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
+                    if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.binding.targetKey);
+                    else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
                 });
             });
             entries.forEach(function (entry) { desired.add(entry.image); });
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
             entries.forEach(function (entry) {
-                var asset = editor.mode === 'native' ? nativeAssetForEntry(entry, editor.target) : editor.asset;
-                applyToEntry(entry, asset, editor.view, editor.target.key);
+                if (editor.mode === 'native') applyNativeToEntry(entry, editor.view, editor.target.key);
+                else applyToEntry(entry, editor.asset, editor.view, editor.target.key);
             });
             return true;
         }
@@ -8980,7 +9020,7 @@
 })(window);
 /* END MODULE 17/24: src/avatar-runtime.js */
 
-/* BEGIN MODULE 18/24: src/avatar-page.js | sha256:54d60100d9dc1332266cb81e9e6d717ea8dd32f675fa38c7304e0036869125a5 */
+/* BEGIN MODULE 18/24: src/avatar-page.js | sha256:1a44699e68dce657470b400905960c1271893e7d4eba188fd42f6172fcbbf45f */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -8995,10 +9035,7 @@
         return '<div class="tm-avatar-page" data-tm-avatar-page>' +
             '<input type="file" data-avatar-file accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>' +
             '<div class="tm-avatar-page-notice" data-avatar-notice role="status" aria-live="polite" hidden></div>' +
-            '<div class="tm-avatar-page-grid" data-avatar-grid><div class="tm-avatar-page-loading">正在读取头像库…</div></div>' +
-            '<div class="tm-avatar-character-bar" data-avatar-native-bar hidden>' +
-            '<div class="tm-avatar-character-context"><i class="fa-solid fa-user" aria-hidden="true"></i><span>当前角色</span><strong data-avatar-native-label></strong></div>' +
-            '<button type="button" data-avatar-action="adjust-native"><i class="fa-solid fa-sliders" aria-hidden="true"></i>调整原头像</button></div></div>';
+            '<div class="tm-avatar-page-grid" data-avatar-grid><div class="tm-avatar-page-loading">正在读取头像库…</div></div></div>';
     }
 
     function styleText() {
@@ -9013,8 +9050,7 @@
             '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}',
             '.tm-avatar-page-empty{width:min(100%,300px);display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 16px;border:var(--tm-control-border-style,1px dashed var(--tm-control-border,rgba(127,127,127,.18)));border-radius:var(--tm-panel-radius,16px);background:var(--tm-control-bg,rgba(127,127,127,.05));box-sizing:border-box}',
             '.tm-avatar-page-empty>i{font-size:1.55em;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.62;margin-bottom:2px}.tm-avatar-page-empty>strong{font-size:.9em}.tm-avatar-page-empty>span{font-size:.76em;opacity:.52}',
-            '.tm-avatar-character-bar{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px calc(9px + env(safe-area-inset-bottom,0px));border-top:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));background:var(--tm-panel-bg,var(--SmartThemeBlurTintColor,rgba(20,20,24,.92)));color:inherit}.tm-avatar-character-bar[hidden]{display:none}.tm-avatar-character-context{min-width:0;display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;gap:6px;font-size:.78em;opacity:.82}.tm-avatar-character-context>i{color:var(--SmartThemeQuoteColor,currentColor)}.tm-avatar-character-context>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tm-avatar-character-bar>button{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:6px 11px;border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.22)));border-radius:var(--tm-control-radius,9px);background:var(--tm-control-bg,rgba(127,127,127,.1));color:inherit;font:inherit}.tm-avatar-character-bar>button:not(:disabled){border-color:color-mix(in srgb,var(--SmartThemeQuoteColor,currentColor) 44%,transparent)}.tm-avatar-character-bar>button:disabled{opacity:.42}',
-            '@media(max-width:430px){.tm-avatar-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}.tm-avatar-page-notice{margin:8px 10px 0}.tm-avatar-page-empty{padding:18px 14px}.tm-avatar-character-bar{padding-left:10px;padding-right:10px}.tm-avatar-character-context>span{display:none}}',
+            '@media(max-width:430px){.tm-avatar-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}.tm-avatar-page-notice{margin:8px 10px 0}.tm-avatar-page-empty{padding:18px 14px}}',
         ].join('');
     }
 
@@ -9101,24 +9137,7 @@
                 ? assets.map(cardHtml).join('')
                 : '<div class="tm-avatar-page-empty"><i class="fa-regular fa-image"></i><strong>还没有头像</strong><span>点击顶栏的＋添加图片</span></div>';
             setupGridLoader();
-            renderCharacterBar();
             setImporting(importing);
-        }
-        function renderCharacterBar() {
-            if (!root) return;
-            var bar = root.querySelector('[data-avatar-native-bar]');
-            if (!bar) return;
-            var caps = runtime.getCapabilities();
-            var cap = caps && caps.character || {};
-            if (!cap.target) { bar.hidden = true; return; }
-            bar.hidden = false;
-            var label = bar.querySelector('[data-avatar-native-label]');
-            var button = bar.querySelector('[data-avatar-action="adjust-native"]');
-            if (label) label.textContent = cap.target.label || '未命名角色';
-            if (button) {
-                button.disabled = !cap.available;
-                button.title = cap.available ? '调整角色卡自带头像的显示位置' : (cap.reason || '当前无法调整');
-            }
         }
         function refresh() {
             var token = ++refreshToken;
@@ -9254,7 +9273,6 @@
                 else if (name === 'view') viewAsset(action.getAttribute('data-avatar-id')).catch(function (error) {
                     reportError('avatar preview failed', error); setNotice(error.message || '头像大图无法打开', 'error');
                 });
-                else if (name === 'adjust-native') beginNativeEdit();
                 return;
             }
         }
@@ -9309,6 +9327,16 @@
             refresh: refresh,
             importFiles: importFiles,
             pickFiles: function () { if (!mounted || !fileInput || importing) return false; fileInput.click(); return true; },
+            beginNativeEdit: beginNativeEdit,
+            getNativeStatus: function () {
+                var cap = runtime.getCapabilities().character || {};
+                return {
+                    available: !!cap.available,
+                    reason: cap.reason || '',
+                    label: cap.target && cap.target.label || '',
+                    targetKey: cap.target && cap.target.key || '',
+                };
+            },
             openAssetMenu: openAssetMenu,
             viewAsset: viewAsset,
             getState: function () { return { mounted: mounted, count: assets.length, importing: importing }; },
@@ -9649,7 +9677,7 @@
 })(window);
 /* END MODULE 19/24: src/app-shell.js */
 
-/* BEGIN MODULE 20/24: src/styles.js | sha256:68da0e3e10faebd34055bd6a0317ecb2afb9ed18c50609dea20bcc9d1b9a2763 */
+/* BEGIN MODULE 20/24: src/styles.js | sha256:d751ba941b1aea21a5a149aa3b9a4b6affb66a38ded370ab3ca673b13348790b */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -9801,7 +9829,7 @@
             '.tm-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:40px 20px;opacity:.35;font-size:.9em;text-align:center;}',
             '.tm-empty i{font-size:2.6em;}',
             '.tm-bottombar{position:relative;overflow:hidden;display:flex !important;align-items:center;gap:6px;padding:10px 14px;padding-bottom:max(10px, env(safe-area-inset-bottom, 10px));flex-shrink:0;border-top:1px solid var(--tm-border,rgba(127,127,127,.1));background:var(--tm-head-bg,rgba(0,0,0,.12));backdrop-filter:blur(14px);}',
-            '.tm-bottom-status{flex:1;min-width:0;display:flex;align-items:center;gap:7px;cursor:pointer;border-radius:var(--tm-control-radius,8px);padding:5px 7px;transition:.15s;border:1px solid transparent;}',
+            '.tm-bottom-status{appearance:none;flex:1;min-width:0;display:flex;align-items:center;gap:7px;cursor:pointer;border-radius:var(--tm-control-radius,8px);padding:5px 7px;transition:.15s;border:1px solid transparent;background:transparent;color:inherit;font:inherit;text-align:left;}',
             '.tm-bottom-status:hover{background:rgba(127,127,127,.08);border-color:rgba(127,127,127,.12);}',
             '.tm-status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}',
             '.tm-status-dot.gray{background:rgba(127,127,127,.5);}',
@@ -10757,7 +10785,7 @@
 })(window);
 /* END MODULE 23/24: src/ui-events.js */
 
-/* BEGIN MODULE 24/24: src/ui-main.js | sha256:d298aa794133279b69e6bbd50bb7d40958d663468d7853950c33ce0d34a610a1 */
+/* BEGIN MODULE 24/24: src/ui-main.js | sha256:161e3b36a1b3778d08d8ad8627df19510fd4fa4512405656a47a17e684ba4652 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -14239,14 +14267,17 @@
             pages: [
                 { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
                 { id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
-                    avatarPageController.mount().catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
+                    avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
                 }, unmount: function () { avatarPageController.unmount(); } },
                 { id: 'backgrounds', label: '背景管理', icon: 'fa-image' },
             ],
             beforeChange: function () {
                 return !uiSheetsApi || uiSheetsApi.requestCloseAll(overlay, 'page-change');
             },
-            onChange: function (activePage) { lastAppPage = activePage; },
+            onChange: function (activePage) {
+                lastAppPage = activePage;
+                if (activePage === 'avatars') renderAvatarBottomStatus();
+            },
         });
         return appShellController;
     }
@@ -14345,6 +14376,7 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
+            '<button type="button" class="tm-bottom-status tm-avatars-only" id="tm-avatar-bottom-status" title="调整当前角色卡原头像"></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i></button>' +
@@ -14355,7 +14387,7 @@
         document.body.appendChild(ov);
         createAppShellController(ov);
         if (lastAppPage === 'avatars') {
-            avatarPageController.mount().catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
+            avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
         } else if (lastAppPage === 'themes') {
             bindSeriesResizeListener();
         }
@@ -14480,6 +14512,14 @@
             renderGrid();
         });
         ov.querySelector('#tm-bottom-settings').addEventListener('click', function () { openSettingsSheet(); });
+        ov.querySelector('#tm-avatar-bottom-status').addEventListener('click', function () {
+            var status = avatarPageController && avatarPageController.getNativeStatus();
+            if (!status || !status.available) {
+                toast(status && status.reason || '当前角色原头像无法调整', true);
+                return;
+            }
+            avatarPageController.beginNativeEdit();
+        });
         ov.querySelector('#tm-bottom-status').addEventListener('click', function () {
             var curTheme = getCurrentThemeName();
             if (!curTheme) return;
@@ -15800,6 +15840,17 @@
         var item = curTheme ? getLogicalItem(curTheme, load()) : null;
         var text = item ? item.name : (curTheme || '未选择主题');
         el.innerHTML = '<div class="tm-status-dot ' + dotClass + '"></div><span class="tm-status-text">' + esc(text) + '</span>';
+    }
+
+    function renderAvatarBottomStatus() {
+        var el = document.getElementById('tm-avatar-bottom-status'); if (!el || !avatarPageController) return;
+        var status = avatarPageController.getNativeStatus();
+        var available = !!(status && status.available);
+        var hasTarget = !!(status && status.targetKey);
+        var text = status && status.label || '未进入角色卡';
+        el.innerHTML = '<div class="tm-status-dot ' + (hasTarget ? 'green' : 'gray') + '"></div><span class="tm-status-text">' + esc(text) + '</span>';
+        el.title = available ? '调整「' + text + '」的原头像' : (status && status.reason || '当前角色原头像无法调整');
+        el.setAttribute('aria-label', el.title);
     }
 
     // ── 操作菜单 ─────────────────────────────────────────────

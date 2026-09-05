@@ -331,6 +331,42 @@
             record.targetKey = targetKey || '';
             activeImages.add(image);
         }
+        function applyNativeToEntry(entry, view, targetKey) {
+            var image = entry.image;
+            var record = captureBaseline(image);
+            if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
+            var normalized = normalizeView(view);
+            var asset = nativeAssetForEntry(entry, targets().character || { key: targetKey });
+            var transformsSource = normalized.rotate !== 0 || normalized.flipX || normalized.flipY;
+
+            // Native SillyTavern avatars can be shaped by selectors that inspect their
+            // original src/srcset. Keep those attributes byte-for-byte intact whenever
+            // the bitmap itself does not need rotation or mirroring.
+            setExactAttribute(image, 'src', record.src);
+            setExactAttribute(image, 'srcset', record.srcset);
+            setExactAttribute(image, 'style', record.style);
+            if (transformsSource) {
+                var computed = win.getComputedStyle(image);
+                var frame = {
+                    borderRadius: computed.borderRadius,
+                    clipPath: computed.clipPath,
+                    webkitMaskImage: computed.webkitMaskImage,
+                    maskImage: computed.maskImage,
+                };
+                setExactAttribute(image, 'srcset', null);
+                setExactAttribute(image, 'src', sourceForView(asset, normalized));
+                if (frame.borderRadius) setImportantStyle(image, 'border-radius', frame.borderRadius);
+                if (frame.clipPath && frame.clipPath !== 'none') setImportantStyle(image, 'clip-path', frame.clipPath);
+                if (frame.webkitMaskImage && frame.webkitMaskImage !== 'none') setImportantStyle(image, '-webkit-mask-image', frame.webkitMaskImage);
+                if (frame.maskImage && frame.maskImage !== 'none') setImportantStyle(image, 'mask-image', frame.maskImage);
+            }
+            if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
+                throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
+            }
+            setImportantStyle(image, 'object-view-box', objectViewBoxForView(normalized));
+            record.targetKey = targetKey || '';
+            activeImages.add(image);
+        }
         function getAsset(id) {
             if (assetCache.has(id)) return Promise.resolve(assetCache.get(id));
             return store.getAsset(id).then(function (asset) {
@@ -367,7 +403,7 @@
         }
         function desiredForNativeView(target, record) {
             return messageImages(doc, target).map(function (entry) {
-                return { entry: entry, binding: record, asset: nativeAssetForEntry(entry, target) };
+                return { entry: entry, binding: record, asset: null, native: true };
             });
         }
         function desiredForPlan(plan) {
@@ -378,7 +414,10 @@
         function applyDesired(items) {
             var desired = new Set(items.map(function (item) { return item.entry.image; }));
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
-            items.forEach(function (item) { applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey); });
+            items.forEach(function (item) {
+                if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.binding.targetKey);
+                else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
+            });
         }
         function resolveRuntimeDesired() {
             var info = targets();
@@ -427,14 +466,15 @@
                 if (plan.target.key === editor.target.key) return;
                 desiredForPlan(plan).forEach(function (item) {
                     desired.add(item.entry.image);
-                    applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
+                    if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.binding.targetKey);
+                    else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
                 });
             });
             entries.forEach(function (entry) { desired.add(entry.image); });
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
             entries.forEach(function (entry) {
-                var asset = editor.mode === 'native' ? nativeAssetForEntry(entry, editor.target) : editor.asset;
-                applyToEntry(entry, asset, editor.view, editor.target.key);
+                if (editor.mode === 'native') applyNativeToEntry(entry, editor.view, editor.target.key);
+                else applyToEntry(entry, editor.asset, editor.view, editor.target.key);
             });
             return true;
         }

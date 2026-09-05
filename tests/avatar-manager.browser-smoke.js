@@ -39,7 +39,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 html,body{margin:0;width:100%;height:100%;font-family:system-ui;overflow-x:hidden}
                 #themes{position:fixed;left:-999px}.tm-app-page{width:100%;height:470px;box-sizing:border-box}
                 #chat{padding:16px;display:grid;gap:12px}.mes{display:flex}.avatar{width:72px;height:72px;overflow:visible}.avatar img{width:100%;height:100%;object-fit:cover;object-position:35% 50%}
-                .circle .avatar img{border-radius:50%}.clipped .avatar img{clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
+                .circle .avatar img{border-radius:50%}.native-sensitive .avatar img[src="/avatar.gif"]{clip-path:ellipse(44% 36%)}.clipped .avatar img{clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
                 .masked .avatar img{-webkit-mask-image:radial-gradient(circle,#000 60%,transparent 61%);mask-image:radial-gradient(circle,#000 60%,transparent 61%)}
                 .transformed .avatar img{transform:rotate(9deg) translateX(4px);translate:3px 2px;scale:1.08;rotate:4deg;transform-origin:30% 40%}
                 .responsive .avatar{width:120px;height:96px;overflow:hidden}.responsive-small .avatar{width:60px;height:48px;overflow:hidden}
@@ -47,7 +47,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 <select id="themes"><option selected>A</option><option>B</option></select>
                 <section class="tm-app-page tm-app-page-avatars" data-tm-page="avatars"></section>
                 <div id="chat">
-                    <div class="mes circle" is_user="false" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" style="opacity:.99"></div></div>
+                    <div class="mes circle native-sensitive" is_user="false" is_system="false"><div class="avatar"><img src="/avatar.gif" style="opacity:.99"></div></div>
                     <div class="mes clipped" is_user="false" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></div>
                     <div class="mes masked transformed" is_user="false" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></div>
                     <div class="mes responsive" is_user="true" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></div>
@@ -99,9 +99,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const empty = pageController.getState().count === 0 && Boolean(document.querySelector('.tm-avatar-page-empty'));
                 const emptyLayout = !document.querySelector('.tm-avatar-page h2') &&
                     !document.querySelector('[data-avatar-action="pick"]') && !document.querySelector('[data-avatar-actions]');
-                const nativeBar = document.querySelector('[data-avatar-native-bar]');
-                const nativeEntryReady = Boolean(nativeBar && !nativeBar.hidden && nativeBar.textContent.includes('Character') &&
-                    !document.querySelector('[data-avatar-action="adjust-native"]').disabled);
+                const nativeStatus = pageController.getNativeStatus();
+                const nativeEntryReady = nativeStatus.available && nativeStatus.label === 'Character' &&
+                    !document.querySelector('[data-avatar-native-bar]');
 
                 const source = document.createElement('canvas'); source.width = 2600; source.height = 1300;
                 const ctx = source.getContext('2d'); ctx.clearRect(0, 0, source.width, source.height); ctx.fillStyle = 'rgba(120,60,220,.72)'; ctx.fillRect(40, 40, 2400, 1100);
@@ -131,6 +131,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 document.querySelector('.tm-lightbox .tm-lb-close').click();
 
                 const avatarElements = [...document.querySelectorAll('#chat .avatar')];
+                const originalCharacterSources = [...document.querySelectorAll('.mes[is_user="false"] .avatar img')].map((image) => ({
+                    src:image.getAttribute('src'), srcset:image.getAttribute('srcset'),
+                }));
                 const originalAvatarRects = avatarElements.map((element) => element.getBoundingClientRect.bind(element));
                 let offscreenScrolls = 0;
                 avatarElements.forEach((element) => {
@@ -244,25 +247,27 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const transformB = characterImages[0].style.getPropertyValue('object-view-box');
                 const themesIsolated = transformA === transformB && characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
 
-                document.querySelector('[data-avatar-action="adjust-native"]').click();
+                pageController.beginNativeEdit();
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
                 const nativeEditorOpened = runtime.getState().state === 'editing' && runtime.getState().mode === 'native';
+                const nativeShapeDuringEdit = getComputedStyle(characterImages[0]).clipPath === 'ellipse(44% 36%)';
                 runtime.setScale(1.3);
                 await frame();
                 const nativeSave = await runtime.saveEdit();
                 const persistedNativeView = await reloadedStore.getNativeView('character:char.png');
                 const nativeBindingCleared = !(await reloadedStore.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'character:char.png'));
-                const nativeSourcePreserved = characterImages.every((image) => image.src.includes('R0lGOD'));
+                const nativeSourcePreserved = characterImages.every((image,index) => image.getAttribute('src') === originalCharacterSources[index].src && image.getAttribute('srcset') === originalCharacterSources[index].srcset);
                 const nativeCropApplied = characterImages.every((image) => image.style.getPropertyValue('object-view-box'));
+                const nativeShapePreserved = nativeShapeDuringEdit && getComputedStyle(characterImages[0]).clipPath === 'ellipse(44% 36%)';
 
                 await store.putBinding({ themeKey:modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey:'user:global', avatarId, view:{x:.25,y:.125,scale:1} });
                 await runtime.reconcile();
                 const responsiveCrops = userImages.map((image) => image.style.getPropertyValue('object-view-box'));
                 const responsive = responsiveCrops.every((value) => value && value === responsiveCrops[0]);
                 await runtime.beginEdit({ kind:'user', avatarId });
-                const otherTargetSurvivesEdit = characterImages.every((image) => image.src.includes('R0lGOD') && image.style.getPropertyValue('object-view-box'));
+                const otherTargetSurvivesEdit = characterImages.every((image,index) => image.getAttribute('src') === originalCharacterSources[index].src && image.style.getPropertyValue('object-view-box'));
                 await runtime.cancelEdit();
-                const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image) => image.src.includes('R0lGOD') && image.style.getPropertyValue('object-view-box')) && userImages.every((image) => image.src === persisted.imageData);
+                const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image,index) => image.getAttribute('src') === originalCharacterSources[index].src && image.style.getPropertyValue('object-view-box')) && userImages.every((image) => image.src === persisted.imageData);
                 await runtime.clearBinding('user');
                 const restoredUser = userImages.every((image) => image.src.includes('R0lGOD'));
                 document.querySelector('[data-avatar-action="menu"]').click();
@@ -293,13 +298,13 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
                     emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete,
-                    nativeEntryReady, nativeEditorOpened, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeSourcePreserved, nativeCropApplied,
+                    nativeEntryReady, nativeEditorOpened, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeSourcePreserved, nativeCropApplied, nativeShapePreserved,
                     hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','nativeEntryReady','nativeEditorOpened','nativeViewPersisted','nativeBindingCleared','nativeSourcePreserved','nativeCropApplied','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','nativeEntryReady','nativeEditorOpened','nativeViewPersisted','nativeBindingCleared','nativeSourcePreserved','nativeCropApplied','nativeShapePreserved','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

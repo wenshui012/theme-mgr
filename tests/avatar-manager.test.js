@@ -296,6 +296,9 @@ test('44 avatar cards are image-only and expose a three-dot menu instead of dele
 test('45 shared header owns the only Avatar add entry and remembers the last app page', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     assert.match(source, /id="tm-avatar-add"/);
+    assert.match(source, /id="tm-avatar-bottom-status"/);
+    assert.match(source, /avatarPageController\.beginNativeEdit\(\)/);
+    assert.match(source, /renderAvatarBottomStatus/);
     assert.match(source, /avatarPageController\.pickFiles\(\)/);
     assert.match(source, /defaultPage: lastAppPage/);
     assert.match(source, /lastAppPage = appShellController\.getActivePage\(\)/);
@@ -383,6 +386,7 @@ test('52 saving native character adjustment clears replacement binding and resto
     const f = runtimeFixture({ seed: { assets: [asset()], bindings: [
         { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:char.png', avatarId: 'a', view: {} },
     ] } });
+    f.chars[0].image.setAttribute('srcset', 'raw-char@2x.png 2x');
     await f.runtime.start();
     await f.runtime.beginNativeEdit();
     f.runtime.setScale(1.35);
@@ -392,6 +396,7 @@ test('52 saving native character adjustment clears replacement binding and resto
     assert.equal(stored.sourceKey, 'char.png');
     assert.equal(await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'character:char.png'), null);
     assert.ok(f.chars.every((entry) => entry.image.getAttribute('src').includes('raw-char.png')));
+    assert.equal(f.chars[0].image.getAttribute('srcset'), 'raw-char@2x.png 2x');
     assert.ok(f.chars.every((entry) => entry.image.getAttribute('style').includes('object-view-box:inset(')));
 });
 test('53 persisted native character adjustment reapplies after reload and across theme changes', async () => {
@@ -416,11 +421,11 @@ test('54 a different character avatar identity does not inherit the previous ori
     assert.equal(f.chars[0].image.getAttribute('src'), 'raw-char.png');
     assert.equal(f.chars[0].image.getAttribute('style'), 'opacity:.99');
 });
-test('55 Avatar Page includes a themed current-character original-avatar adjustment entry', () => {
+test('55 Avatar Page keeps the grid for library assets and exposes current-character status for the shared bottom bar', () => {
     const html = modules.avatarPage.buildPageHtml('placeholder');
-    const css = modules.avatarPage.styleText();
-    assert.match(html, /data-avatar-native-bar/);
-    assert.match(html, /data-avatar-action="adjust-native"/);
-    assert.match(html, /调整原头像/);
-    assert.match(css, /SmartThemeQuoteColor/);
+    assert.doesNotMatch(html, /data-avatar-native-bar|data-avatar-action="adjust-native"|调整原头像/);
+    const f = pageFixture();
+    const status = f.page.getNativeStatus();
+    assert.equal(status.available, true);
+    assert.equal(status.targetKey, 'character:c');
 });
