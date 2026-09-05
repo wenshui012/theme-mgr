@@ -266,10 +266,29 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 pageController.beginNativeEdit();
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
                 const nativeEditorOpened = runtime.getState().state === 'editing' && runtime.getState().mode === 'native';
-                const nativeShapeDuringEdit = getComputedStyle(characterImages[0]).clipPath === 'ellipse(44% 36%)';
+                const nativeSourcesBeforeInput = characterImages.map((image) => image.src);
+                const nativePreviewFrame = document.querySelector('.tm-avatar-native-live-preview');
+                const nativePreviewImage = nativePreviewFrame && nativePreviewFrame.querySelector('img');
+                const nativePreviewOriginal = nativePreviewFrame && nativePreviewFrame.parentElement.querySelector(':scope > img');
+                const nativePreviewFrameStyle = nativePreviewFrame && getComputedStyle(nativePreviewFrame);
+                const nativePreviewOriginalStyle = nativePreviewOriginal && getComputedStyle(nativePreviewOriginal);
+                const nativeShapeDuringEdit = Boolean(nativePreviewFrame && nativePreviewImage && nativePreviewOriginal &&
+                    nativePreviewFrameStyle.borderRadius === nativePreviewOriginalStyle.borderRadius &&
+                    nativePreviewFrameStyle.clipPath === nativePreviewOriginalStyle.clipPath &&
+                    nativePreviewFrameStyle.maskImage === nativePreviewOriginalStyle.maskImage);
+                const nativeRotateSlider = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot.querySelector('[data-view="rotate"]');
+                const nativeInputStart = performance.now();
+                for (let angle = 1; angle <= 60; angle++) { nativeRotateSlider.value = String(angle); nativeRotateSlider.dispatchEvent(new Event('input',{bubbles:true})); }
+                const nativeInputHandlingMs = Math.round((performance.now() - nativeInputStart) * 100) / 100;
+                nativeRotateSlider.value = '0'; nativeRotateSlider.dispatchEvent(new Event('input',{bubbles:true}));
+                const nativeResponsiveInputs = nativeInputHandlingMs < 80;
                 runtime.setScale(1.3);
                 await frame();
-                await Promise.all(characterImages.map((image) => image.decode()));
+                await nativePreviewImage.decode();
+                const nativePreviewView = runtime.getState().view;
+                const nativeLightweightPreview = characterImages.every((image,index) => image.src === nativeSourcesBeforeInput[index]) &&
+                    Boolean(nativePreviewImage.style.getPropertyValue('transform')) && nativePreviewView.scale === 1.3 &&
+                    document.querySelectorAll('.tm-avatar-native-live-preview').length === 1;
                 const nativeSave = await runtime.saveEdit();
                 const persistedNativeView = await reloadedStore.getNativeView('character:char.png');
                 const nativeBindingCleared = !(await reloadedStore.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'character:char.png'));
@@ -285,10 +304,17 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 pageController.beginNativeEdit('user');
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
                 const nativeUserEditorOpened = runtime.getState().state === 'editing' && runtime.getState().mode === 'native' && runtime.getState().target.kind === 'user';
+                const nativeUserSourcesBeforeInput = userImages.map((image) => image.src);
                 const nativeUserX = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot.querySelector('[data-view="x"]');
                 nativeUserX.value = '.2'; nativeUserX.dispatchEvent(new Event('input',{bubbles:true}));
                 runtime.setScale(1.25);
                 await frame();
+                const nativeUserPreviewImage = document.querySelector('.tm-avatar-native-live-preview img');
+                const nativeUserPreviewView = runtime.getState().view;
+                const nativeUserLightweightPreview = Boolean(nativeUserPreviewImage) &&
+                    userImages.every((image,index) => image.src === nativeUserSourcesBeforeInput[index]) &&
+                    Boolean(nativeUserPreviewImage.style.getPropertyValue('transform')) &&
+                    nativeUserPreviewView.x === .2 && nativeUserPreviewView.scale === 1.25;
                 const nativeUserSave = await runtime.saveEdit();
                 const persistedUserNativeView = await reloadedStore.getNativeView('user:global');
                 const nativeUserMoved = runtime.getState().state === 'idle' && userImages.every((image) => image.src.startsWith('data:image/svg+xml') && decodeURIComponent(image.src).includes('scale(1.25 1.25)'));
@@ -340,15 +366,15 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
-                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete,
-                    nativeEntryReady, nativeEditorOpened, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeAvoidsObjectViewBox, nativeShapePreserved,
-                    nativeMenuCombined, nativeUserEditorOpened, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
+                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete, nativeInputHandlingMs, nativeResponsiveInputs,
+                    nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeAvoidsObjectViewBox, nativeShapePreserved,
+                    nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
                     hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','nativeEntryReady','nativeEditorOpened','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeAvoidsObjectViewBox','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeAvoidsObjectViewBox','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

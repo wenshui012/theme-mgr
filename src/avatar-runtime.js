@@ -10,6 +10,7 @@
     var STYLE_ID = 'tm-avatar-editor-style';
     var TARGET_CLASS = 'tm-avatar-editor-target';
     var AVATAR_CLASS = 'tm-avatar-editor-selected';
+    var NATIVE_PREVIEW_CLASS = 'tm-avatar-native-live-preview';
     var DEFAULT_BINDING_KEY = 'avatar-default';
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
@@ -426,6 +427,79 @@
             record.targetKey = target && target.key || '';
             activeImages.add(image);
         }
+        function nativePreviewTransform(view) {
+            view = normalizeView(view);
+            return 'translate(' + round(view.x * 100, 3) + '%, ' + round(view.y * 100, 3) + '%) rotate(' + view.rotate + 'deg) scale(' + round(view.scale * (view.flipX ? -1 : 1), 3) + ', ' + round(view.scale * (view.flipY ? -1 : 1), 3) + ')';
+        }
+        function copyPreviewFrameStyle(element, name, value) {
+            value = clean(value);
+            if (!value || value === 'none' || value === 'normal') return;
+            setImportantStyle(element, name, value);
+        }
+        function updateNativePreview() {
+            if (!editor || editor.mode !== 'native' || !editor.nativePreview) return false;
+            setImportantStyle(editor.nativePreview.image, 'transform', nativePreviewTransform(editor.view));
+            return true;
+        }
+        function createNativePreview() {
+            if (!editor || editor.mode !== 'native' || editor.nativePreview) return false;
+            var entry = editor.representative;
+            var host = entry && entry.avatar;
+            var original = entry && entry.image;
+            if (!host || !original || typeof host.appendChild !== 'function') return false;
+
+            var imageStyle = win.getComputedStyle(original);
+            var hostStyle = win.getComputedStyle(host);
+            var imageRect = rectOf(original);
+            var hostRect = rectOf(host);
+            var frame = doc.createElement('div');
+            var content = doc.createElement('img');
+            frame.setAttribute('class', NATIVE_PREVIEW_CLASS);
+            frame.setAttribute('aria-hidden', 'true');
+            frame.setAttribute('style', 'position:absolute!important;pointer-events:none!important;overflow:hidden!important;box-sizing:border-box!important;z-index:2!important');
+            if (hostRect.width > 0 && hostRect.height > 0 && imageRect.width > 0 && imageRect.height > 0) {
+                setImportantStyle(frame, 'left', round(imageRect.left - hostRect.left, 3) + 'px');
+                setImportantStyle(frame, 'top', round(imageRect.top - hostRect.top, 3) + 'px');
+                setImportantStyle(frame, 'width', round(imageRect.width, 3) + 'px');
+                setImportantStyle(frame, 'height', round(imageRect.height, 3) + 'px');
+            } else {
+                setImportantStyle(frame, 'inset', '0');
+            }
+            copyPreviewFrameStyle(frame, 'border-radius', imageStyle.borderRadius);
+            copyPreviewFrameStyle(frame, 'clip-path', imageStyle.clipPath);
+            copyPreviewFrameStyle(frame, '-webkit-mask-image', imageStyle.webkitMaskImage);
+            copyPreviewFrameStyle(frame, 'mask-image', imageStyle.maskImage);
+            copyPreviewFrameStyle(frame, 'filter', imageStyle.filter);
+
+            content.setAttribute('src', editor.asset.imageData);
+            content.setAttribute('draggable', 'false');
+            content.setAttribute('style', 'display:block!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;clip-path:none!important;-webkit-mask-image:none!important;mask-image:none!important;object-fit:' + (clean(imageStyle.objectFit) || 'cover') + '!important;object-position:' + (clean(imageStyle.objectPosition) || '50% 50%') + '!important;transform-origin:50% 50%!important;will-change:transform!important;pointer-events:none!important');
+            frame.appendChild(content);
+
+            var preview = {
+                frame: frame,
+                image: content,
+                host: host,
+                original: original,
+                hostStyle: getAttribute(host, 'style'),
+                originalStyle: getAttribute(original, 'style'),
+                knownImages: new Set(messageImages(doc, editor.target).map(function (item) { return item.image; })),
+            };
+            editor.nativePreview = preview;
+            if (!clean(hostStyle && hostStyle.position) || clean(hostStyle.position) === 'static') setImportantStyle(host, 'position', 'relative');
+            setImportantStyle(original, 'opacity', '0');
+            host.appendChild(frame);
+            updateNativePreview();
+            return true;
+        }
+        function removeNativePreview() {
+            if (!editor || !editor.nativePreview) return;
+            var preview = editor.nativePreview;
+            if (preview.frame && preview.frame.parentNode) preview.frame.parentNode.removeChild(preview.frame);
+            setExactAttribute(preview.host, 'style', preview.hostStyle);
+            setExactAttribute(preview.original, 'style', preview.originalStyle);
+            editor.nativePreview = null;
+        }
         function getAsset(id) {
             if (assetCache.has(id)) return Promise.resolve(assetCache.get(id));
             return store.getAsset(id).then(function (asset) {
@@ -519,6 +593,7 @@
         function syncEditorInstances() {
             if (!editor) return false;
             var entries = messageImages(doc, editor.target);
+            var lightweightNative = editor.mode === 'native' && editor.nativePreview;
             if (!editor.representative || editor.representative.image.isConnected === false) {
                 cancelEdit('target-disconnected');
                 return false;
@@ -528,13 +603,23 @@
                 if (plan.target.key === editor.target.key) return;
                 desiredForPlan(plan).forEach(function (item) {
                     desired.add(item.entry.image);
-                    if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
-                    else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
+                    if (!lightweightNative || !activeImages.has(item.entry.image)) {
+                        if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
+                        else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
+                    }
                 });
             });
             entries.forEach(function (entry) { desired.add(entry.image); });
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
             entries.forEach(function (entry) {
+                if (lightweightNative) {
+                    if (entry.image === editor.representative.image) updateNativePreview();
+                    else if (!editor.nativePreview.knownImages.has(entry.image)) {
+                        applyNativeToEntry(entry, editor.view, editor.target, editor.asset);
+                        editor.nativePreview.knownImages.add(entry.image);
+                    }
+                    return;
+                }
                 if (editor.mode === 'native') applyNativeToEntry(entry, editor.view, editor.target, editor.asset);
                 else applyToEntry(entry, editor.asset, editor.view, editor.target.key);
             });
@@ -647,7 +732,7 @@
                 avatarOverflow: avatarStyle.overflow,
                 parentClips: clips(avatarStyle),
                 themeInlineStyleBaseline: (baselines.get(entry.image) || {}).style || null,
-                strategy: editor && editor.mode === 'native' ? 'svg-native-content-transform' : 'css-object-view-box-content-crop',
+                strategy: editor && editor.mode === 'native' ? 'css-live-preview-svg-persisted' : 'css-object-view-box-content-crop',
                 coordinateModel: 'normalized-avatar-content-transform',
                 objectViewBox: entry.image.style && entry.image.style.getPropertyValue ? entry.image.style.getPropertyValue('object-view-box') : '',
             };
@@ -761,6 +846,7 @@
             if (editor.representative.avatar && (!record || !record.avatarClass)) editor.representative.avatar.classList.remove(AVATAR_CLASS);
         }
         function finishEditorUi() {
+            removeNativePreview();
             unbindRepresentative();
             unbindToolbarViewport();
             cancelEditorSync();
@@ -844,6 +930,7 @@
                 ensureEditorUi();
                 try {
                     syncEditorInstances();
+                    createNativePreview();
                     bindRepresentative();
                     editor.diagnostics = diagnosticsFor(editor.representative, editor.target);
                     updateToolbar();
@@ -906,7 +993,8 @@
             if (!editor || editorRenderFrame != null) return;
             var render = function () {
                 editorRenderFrame = null;
-                if (editor) syncEditorInstances();
+                if (editor && editor.mode === 'native' && editor.nativePreview) updateNativePreview();
+                else if (editor) syncEditorInstances();
             };
             editorRenderFrame = typeof win.requestAnimationFrame === 'function' ? win.requestAnimationFrame(render) : win.setTimeout(render, 16);
         }
