@@ -206,6 +206,24 @@
         var getContext = options.getContext || function () { return {}; };
         var getThemeName = options.getThemeName || function () { return ''; };
         var onError = options.onError || function () {};
+        var imageTools = options.imageTools || ns.imageTools;
+        var fetchImage = options.fetch || (typeof win.fetch === 'function' ? win.fetch.bind(win) : null);
+        var loadNativeImage = options.loadNativeImage || function (asset) {
+            if (/^data:image\//i.test(asset.imageData)) return Promise.resolve(asset);
+            if (!fetchImage || !imageTools || typeof imageTools.readImageFile !== 'function') {
+                return Promise.reject(Object.assign(new Error('原头像图片读取组件不可用'), { code: 'AVATAR_NATIVE_READ_UNAVAILABLE' }));
+            }
+            return Promise.resolve(fetchImage(asset.imageData, { credentials: 'same-origin', cache: 'force-cache' })).then(function (response) {
+                if (!response || !response.ok || typeof response.blob !== 'function') throw new Error('avatar image request failed');
+                return response.blob();
+            }).then(function (blob) {
+                return imageTools.readImageFile(blob);
+            }).then(function (dataUrl) {
+                return Object.assign({}, asset, { imageData: dataUrl });
+            }).catch(function (error) {
+                throw Object.assign(new Error('无法读取角色或 User 的原头像'), { code: 'AVATAR_NATIVE_READ_FAILED', cause: error });
+            });
+        };
         if (!store) throw new Error('avatar store is required');
 
         var baselines = new WeakMap();
@@ -214,6 +232,7 @@
         var bindingPlans = [];
         var promotedBindings = new Map();
         var rotatedSources = new Map();
+        var nativeImageCache = new Map();
         var listeners = [];
         var chatObserver = null;
         var observedChat = null;
@@ -266,6 +285,22 @@
             cached.sources.set(signature, source);
             return source;
         }
+        function sourceForNativeView(asset, view) {
+            view = normalizeView(view);
+            if (!view.x && !view.y && view.scale === 1 && !view.rotate && !view.flipX && !view.flipY) return asset.imageData;
+            var signature = ['native', view.x, view.y, view.scale, view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1].join(':');
+            var cached = ensureSourceCache(asset);
+            if (cached.sources.has(signature)) return cached.sources.get(signature);
+            var translateX = round(cached.centerX + view.x * cached.centerX * 2, 3);
+            var translateY = round(cached.centerY + view.y * cached.centerY * 2, 3);
+            var scaleX = round(view.scale * (view.flipX ? -1 : 1), 3);
+            var scaleY = round(view.scale * (view.flipY ? -1 : 1), 3);
+            var transform = 'translate(' + translateX + ' ' + translateY + ') rotate(' + view.rotate + ') scale(' + scaleX + ' ' + scaleY + ') translate(' + (-cached.centerX) + ' ' + (-cached.centerY) + ')';
+            var source = cached.prefix + encodeURIComponent(transform) + cached.suffix;
+            if (cached.sources.size >= SOURCE_CACHE_LIMIT) cached.sources.delete(cached.sources.keys().next().value);
+            cached.sources.set(signature, source);
+            return source;
+        }
         function resolvedImageSource(image, attributeSource) {
             return clean(image && (image.currentSrc || image.src)) || clean(attributeSource);
         }
@@ -301,6 +336,29 @@
                 height: baseline && baseline.naturalHeight || Number(image && image.naturalHeight) || Math.max(1, Math.round(rect.height)),
             };
         }
+        function nativeSourceKey(target, entry) {
+            if (target && target.kind === 'character') return clean(target.characterAvatar);
+            var image = entry && entry.image;
+            var baseline = baselines.get(image);
+            return clean(baseline && (baseline.src || baseline.resolvedSrc)) || clean(getAttribute(image, 'src')) || resolvedImageSource(image, '');
+        }
+        function embeddedNativeAsset(entry, target) {
+            var asset = nativeAssetForEntry(entry, target);
+            if (/^data:image\//i.test(asset.imageData)) return Promise.resolve(asset);
+            var cached = nativeImageCache.get(asset.id);
+            if (cached) return cached;
+            cached = Promise.resolve(loadNativeImage(asset)).then(function (embedded) {
+                if (!embedded || !/^data:image\//i.test(embedded.imageData || '')) {
+                    throw Object.assign(new Error('原头像图片读取结果无效'), { code: 'AVATAR_NATIVE_READ_FAILED' });
+                }
+                return embedded;
+            }).catch(function (error) {
+                nativeImageCache.delete(asset.id);
+                throw error;
+            });
+            nativeImageCache.set(asset.id, cached);
+            return cached;
+        }
         function restoreImage(image) {
             var record = baselines.get(image);
             if (!record) return;
@@ -331,40 +389,41 @@
             record.targetKey = targetKey || '';
             activeImages.add(image);
         }
-        function applyNativeToEntry(entry, view, targetKey) {
+        function applyNativeToEntry(entry, view, target, embeddedAsset) {
             var image = entry.image;
             var record = captureBaseline(image);
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
             var normalized = normalizeView(view);
-            var asset = nativeAssetForEntry(entry, targets().character || { key: targetKey });
-            var transformsSource = normalized.rotate !== 0 || normalized.flipX || normalized.flipY;
+            var nativeAsset = nativeAssetForEntry(entry, target);
+            var transformsSource = Boolean(normalized.x || normalized.y || normalized.scale !== 1 || normalized.rotate || normalized.flipX || normalized.flipY);
+            var source = transformsSource ? sourceForNativeView(embeddedAsset, normalized) : nativeAsset.imageData;
 
-            // Native SillyTavern avatars can be shaped by selectors that inspect their
-            // original src/srcset. Keep those attributes byte-for-byte intact whenever
-            // the bitmap itself does not need rotation or mirroring.
+            // Restore the host image before every render so its theme-defined frame can
+            // be measured intact. A transformed source changes only pixels inside that
+            // fixed frame; a neutral view keeps the original src/srcset byte-for-byte.
             setExactAttribute(image, 'src', record.src);
             setExactAttribute(image, 'srcset', record.srcset);
             setExactAttribute(image, 'style', record.style);
             if (transformsSource) {
                 var computed = win.getComputedStyle(image);
                 var frame = {
+                    objectFit: computed.objectFit,
+                    objectPosition: computed.objectPosition,
                     borderRadius: computed.borderRadius,
                     clipPath: computed.clipPath,
                     webkitMaskImage: computed.webkitMaskImage,
                     maskImage: computed.maskImage,
                 };
                 setExactAttribute(image, 'srcset', null);
-                setExactAttribute(image, 'src', sourceForView(asset, normalized));
+                setExactAttribute(image, 'src', source);
+                if (frame.objectFit) setImportantStyle(image, 'object-fit', frame.objectFit);
+                if (frame.objectPosition) setImportantStyle(image, 'object-position', frame.objectPosition);
                 if (frame.borderRadius) setImportantStyle(image, 'border-radius', frame.borderRadius);
                 if (frame.clipPath && frame.clipPath !== 'none') setImportantStyle(image, 'clip-path', frame.clipPath);
                 if (frame.webkitMaskImage && frame.webkitMaskImage !== 'none') setImportantStyle(image, '-webkit-mask-image', frame.webkitMaskImage);
                 if (frame.maskImage && frame.maskImage !== 'none') setImportantStyle(image, 'mask-image', frame.maskImage);
             }
-            if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
-                throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
-            }
-            setImportantStyle(image, 'object-view-box', objectViewBoxForView(normalized));
-            record.targetKey = targetKey || '';
+            record.targetKey = target && target.key || '';
             activeImages.add(image);
         }
         function getAsset(id) {
@@ -401,21 +460,21 @@
         function desiredForBinding(target, binding, asset) {
             return messageImages(doc, target).map(function (entry) { return { entry: entry, binding: binding, asset: asset }; });
         }
-        function desiredForNativeView(target, record) {
+        function desiredForNativeView(target, record, asset) {
             return messageImages(doc, target).map(function (entry) {
-                return { entry: entry, binding: record, asset: null, native: true };
+                return { entry: entry, binding: record, asset: asset, native: true, target: target };
             });
         }
         function desiredForPlan(plan) {
             return plan.native
-                ? desiredForNativeView(plan.target, plan.binding)
+                ? desiredForNativeView(plan.target, plan.binding, plan.asset)
                 : desiredForBinding(plan.target, plan.binding, plan.asset);
         }
         function applyDesired(items) {
             var desired = new Set(items.map(function (item) { return item.entry.image; }));
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
             items.forEach(function (item) {
-                if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.binding.targetKey);
+                if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
                 else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
             });
         }
@@ -435,14 +494,17 @@
                             return { target: target, binding: binding, asset: asset, native: false };
                         });
                     }
-                    if (target.kind !== 'character') return null;
                     return store.getNativeView(target.key).then(function (record) {
                         if (!record) return null;
-                        if (record.sourceKey !== target.characterAvatar) {
+                        var representative = messageImages(doc, target)[0] || null;
+                        var sourceKey = nativeSourceKey(target, representative);
+                        if (sourceKey && record.sourceKey !== sourceKey) {
                             return store.deleteNativeView(target.key).then(function () { return null; });
                         }
                         foundBinding = true;
-                        return { target: target, binding: record, asset: null, native: true };
+                        return embeddedNativeAsset(representative, target).then(function (asset) {
+                            return { target: target, binding: record, asset: asset, native: true };
+                        });
                     });
                 });
             })).then(function (groups) {
@@ -466,14 +528,14 @@
                 if (plan.target.key === editor.target.key) return;
                 desiredForPlan(plan).forEach(function (item) {
                     desired.add(item.entry.image);
-                    if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.binding.targetKey);
+                    if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
                     else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
                 });
             });
             entries.forEach(function (entry) { desired.add(entry.image); });
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
             entries.forEach(function (entry) {
-                if (editor.mode === 'native') applyNativeToEntry(entry, editor.view, editor.target.key);
+                if (editor.mode === 'native') applyNativeToEntry(entry, editor.view, editor.target, editor.asset);
                 else applyToEntry(entry, editor.asset, editor.view, editor.target.key);
             });
             return true;
@@ -546,6 +608,7 @@
             started = false;
             hasRuntimeBinding = false;
             bindingPlans = [];
+            nativeImageCache.clear();
             sequence += 1;
             restoreAll();
         }
@@ -584,8 +647,8 @@
                 avatarOverflow: avatarStyle.overflow,
                 parentClips: clips(avatarStyle),
                 themeInlineStyleBaseline: (baselines.get(entry.image) || {}).style || null,
-                strategy: 'css-object-view-box-content-crop',
-                coordinateModel: 'normalized-avatar-content-crop',
+                strategy: editor && editor.mode === 'native' ? 'svg-native-content-transform' : 'css-object-view-box-content-crop',
+                coordinateModel: 'normalized-avatar-content-transform',
                 objectViewBox: entry.image.style && entry.image.style.getPropertyValue ? entry.image.style.getPropertyValue('object-view-box') : '',
             };
         }
@@ -753,20 +816,23 @@
                 return getState();
             });
         }
-        function beginNativeEdit() {
+        function beginNativeEdit(kind) {
             if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
-            var cap = capability('character');
+            kind = kind === 'user' ? 'user' : 'character';
+            var cap = capability(kind);
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
-            return Promise.all([getBindingForTarget(cap.target), store.getNativeView(cap.target.key)]).then(function (parts) {
-                var nativeView = parts[1] && parts[1].sourceKey === cap.target.characterAvatar ? parts[1] : null;
+            return Promise.all([getBindingForTarget(cap.target), store.getNativeView(cap.target.key), embeddedNativeAsset(cap.representative, cap.target)]).then(function (parts) {
+                var sourceKey = nativeSourceKey(cap.target, cap.representative);
+                var nativeView = parts[1] && parts[1].sourceKey === sourceKey ? parts[1] : null;
                 editor = {
                     mode: 'native',
                     themeKey: null,
                     target: cap.target,
                     avatarId: null,
-                    asset: nativeAssetForEntry(cap.representative, cap.target),
+                    asset: parts[2],
                     previousBinding: clone(parts[0]),
                     previousNativeView: clone(nativeView),
+                    nativeSourceKey: sourceKey,
                     view: normalizeView(nativeView && nativeView.view),
                     representative: cap.representative,
                     diagnostics: null,
@@ -884,7 +950,7 @@
             if (editor.mode === 'native') {
                 var nativeRecord = {
                     targetKey: editor.target.key,
-                    sourceKey: editor.target.characterAvatar,
+                    sourceKey: editor.nativeSourceKey,
                     view: normalizeView(editor.view),
                 };
                 var nativeDiagnostics = clone(editor.diagnostics);
@@ -960,6 +1026,12 @@
             promotedBindings.delete(cap.target.key);
             return deleteTargetBindings(cap.target.key).then(reconcile);
         }
+        function clearNativeView(kind) {
+            var cap = capability(kind === 'user' ? 'user' : 'character');
+            if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
+            if (editor) return cancelEdit('native-view-cleared').then(function () { return clearNativeView(kind); });
+            return store.deleteNativeView(cap.target.key).then(reconcile);
+        }
         function deleteAsset(id) {
             var cancel = editor && editor.avatarId === id ? cancelEdit('avatar-deleted') : Promise.resolve();
             return cancel.then(function () { return store.deleteAsset(id); }).then(function (result) {
@@ -991,6 +1063,7 @@
             getCapabilities: getCapabilities,
             beginEdit: beginEdit,
             beginNativeEdit: beginNativeEdit,
+            clearNativeView: clearNativeView,
             cancelEdit: cancelEdit,
             saveEdit: saveEdit,
             reset: resetEdit,

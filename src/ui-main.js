@@ -3725,12 +3725,10 @@
         });
         ov.querySelector('#tm-bottom-settings').addEventListener('click', function () { openSettingsSheet(); });
         ov.querySelector('#tm-avatar-bottom-status').addEventListener('click', function () {
-            var status = avatarPageController && avatarPageController.getNativeStatus();
-            if (!status || !status.available) {
-                toast(status && status.reason || '当前角色原头像无法调整', true);
-                return;
-            }
-            avatarPageController.beginNativeEdit();
+            if (!avatarPageController) return;
+            avatarPageController.openNativeMenu().catch(function (error) {
+                toast(error.message || '原头像操作菜单无法打开', true);
+            });
         });
         ov.querySelector('#tm-bottom-status').addEventListener('click', function () {
             var curTheme = getCurrentThemeName();
@@ -5057,11 +5055,10 @@
     function renderAvatarBottomStatus() {
         var el = document.getElementById('tm-avatar-bottom-status'); if (!el || !avatarPageController) return;
         var status = avatarPageController.getNativeStatus();
-        var available = !!(status && status.available);
         var hasTarget = !!(status && status.targetKey);
         var text = status && status.label || '未进入角色卡';
         el.innerHTML = '<div class="tm-status-dot ' + (hasTarget ? 'green' : 'gray') + '"></div><span class="tm-status-text">' + esc(text) + '</span>';
-        el.title = available ? '调整「' + text + '」的原头像' : (status && status.reason || '当前角色原头像无法调整');
+        el.title = hasTarget ? '管理「' + text + '」与 User 的原头像调整' : '管理角色与 User 原头像调整';
         el.setAttribute('aria-label', el.title);
     }
 

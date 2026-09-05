@@ -169,15 +169,23 @@
                 });
             }, 32);
         }
-        function beginNativeEdit() {
-            var cap = runtime.getCapabilities().character;
+        function beginNativeEdit(kind, sheet) {
+            kind = kind === 'user' ? 'user' : 'character';
+            var cap = runtime.getCapabilities()[kind];
             if (!cap || !cap.available) { setNotice(cap && cap.reason || '当前角色原头像无法调整'); return; }
+            if (sheet) closeSheet(sheet);
             closeManager();
             global.setTimeout(function () {
-                runtime.beginNativeEdit().catch(function (error) {
-                    toast(error.message || '无法启动角色原头像调整', true);
+                runtime.beginNativeEdit(kind).catch(function (error) {
+                    toast(error.message || '无法启动原头像调整', true);
                 });
             }, 32);
+        }
+        function clearNativeView(kind, sheet) {
+            if (sheet) closeSheet(sheet);
+            return runtime.clearNativeView(kind).then(function () {
+                toast(kind === 'user' ? '已恢复 User 原头像显示' : '已恢复当前角色原头像显示');
+            }).catch(function (error) { setNotice(error.message || '无法恢复原头像显示', 'error'); });
         }
         function deleteAvatar(id, sheet) {
             var asset = assets.find(function (item) { return item.id === id; });
@@ -229,6 +237,30 @@
                     closeSheet(sheet); runtime.clearBinding('user').then(function () { toast('已恢复 SillyTavern 原头像'); }).catch(function (error) { setNotice(error.message, 'error'); });
                 });
                 bindSheetAction(sheet, 'delete', function () { deleteAvatar(asset.id, sheet); });
+                return sheet;
+            });
+        }
+        function openNativeMenu() {
+            if (typeof createSheet !== 'function') return Promise.reject(new Error('原头像操作菜单不可用'));
+            var caps = runtime.getCapabilities();
+            var character = caps.character || {};
+            var user = caps.user || {};
+            return Promise.all([
+                character.target ? store.getNativeView(character.target.key) : null,
+                user.target ? store.getNativeView(user.target.key) : null,
+            ]).then(function (views) {
+                var heading = character.target && character.target.label || '原头像调整';
+                var sheet = createSheet([
+                    '<div class="tm-ctx-theme-name"><i class="fa-solid fa-user" style="margin-right:6px;opacity:.5"></i>' + esc(heading) + '</div>',
+                    menuItem('adjust-native-character', 'fa-sliders', '调整当前角色原头像', !character.available, character.reason, false),
+                    views[0] ? menuItem('reset-native-character', 'fa-rotate-left', '恢复当前角色原始显示', false, '', false) : '',
+                    menuItem('adjust-native-user', 'fa-sliders', '调整 User 原头像', !user.available, user.reason, false),
+                    views[1] ? menuItem('reset-native-user', 'fa-rotate-left', '恢复 User 原始显示', false, '', false) : '',
+                ].join(''));
+                bindSheetAction(sheet, 'adjust-native-character', function () { beginNativeEdit('character', sheet); });
+                bindSheetAction(sheet, 'reset-native-character', function () { clearNativeView('character', sheet); });
+                bindSheetAction(sheet, 'adjust-native-user', function () { beginNativeEdit('user', sheet); });
+                bindSheetAction(sheet, 'reset-native-user', function () { clearNativeView('user', sheet); });
                 return sheet;
             });
         }
@@ -305,8 +337,10 @@
             importFiles: importFiles,
             pickFiles: function () { if (!mounted || !fileInput || importing) return false; fileInput.click(); return true; },
             beginNativeEdit: beginNativeEdit,
-            getNativeStatus: function () {
-                var cap = runtime.getCapabilities().character || {};
+            openNativeMenu: openNativeMenu,
+            getNativeStatus: function (kind) {
+                kind = kind === 'user' ? 'user' : 'character';
+                var cap = runtime.getCapabilities()[kind] || {};
                 return {
                     available: !!cap.available,
                     reason: cap.reason || '',
