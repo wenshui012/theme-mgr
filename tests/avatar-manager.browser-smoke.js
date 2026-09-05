@@ -130,7 +130,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const directUser = runtime.getState().state === 'editing' && managerClosed === 1;
                 toolbarHost = document.querySelector('#tm-avatar-editor-toolbar');
                 const toolbarRect = toolbarHost && toolbarHost.getBoundingClientRect();
-                const toolbarVisible = Boolean(toolbarRect && toolbarRect.width > 0 && toolbarRect.height > 0 && toolbarRect.top >= 0 && toolbarRect.bottom <= innerHeight);
+                const viewportTop = visualViewport ? visualViewport.offsetTop : 0;
+                const viewportBottom = viewportTop + (visualViewport ? visualViewport.height : innerHeight);
+                const toolbarVisible = Boolean(toolbarRect && toolbarRect.width > 0 && toolbarRect.height > 0 && toolbarRect.top >= viewportTop && toolbarRect.bottom <= viewportBottom);
                 const toolbarIsolated = Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="save"]'));
                 const userImages = [...document.querySelectorAll('.mes[is_user="true"] .avatar img')];
                 const highQualityApplied = userImages.every((image) => image.src === persisted.imageData);
@@ -153,37 +155,45 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const beforeVisuals = characterImages.map((image) => ({
                     radius:getComputedStyle(image).borderRadius, clip:getComputedStyle(image).clipPath,
                     mask:getComputedStyle(image).webkitMaskImage || getComputedStyle(image).maskImage,
-                    inline:image.getAttribute('style'), translate:getComputedStyle(image).translate,
+                    translate:getComputedStyle(image).translate,
                     scale:getComputedStyle(image).scale, rotate:getComputedStyle(image).rotate,
-                    composite:image.getAnimations().at(-1).effect.getKeyframes()[0].composite,
+                    rect:Array.from(['left','top','width','height'],(key)=>Math.round(image.getBoundingClientRect()[key]*1000)/1000),
                 }));
+                const cropBeforeScale = characterImages[0].style.getPropertyValue('object-view-box');
                 runtime.setScale(1.2);
+                const scaledRects = characterImages.map((image) => Array.from(['left','top','width','height'],(key)=>Math.round(image.getBoundingClientRect()[key]*1000)/1000));
+                const cropAfterScale = characterImages[0].style.getPropertyValue('object-view-box');
                 const saveResult = await runtime.saveEdit();
                 const persistedBindingAfterSave = await reloadedStore.getBinding('theme-name:A','character:char.png');
                 const afterVisuals = characterImages.map((image) => ({
                     radius:getComputedStyle(image).borderRadius, clip:getComputedStyle(image).clipPath,
                     mask:getComputedStyle(image).webkitMaskImage || getComputedStyle(image).maskImage,
-                    inline:image.getAttribute('style'), translate:getComputedStyle(image).translate,
+                    translate:getComputedStyle(image).translate,
                     scale:getComputedStyle(image).scale, rotate:getComputedStyle(image).rotate,
-                    composite:image.getAnimations().at(-1).effect.getKeyframes()[0].composite,
+                    rect:Array.from(['left','top','width','height'],(key)=>Math.round(image.getBoundingClientRect()[key]*1000)/1000),
                 }));
                 const visualsPreserved = JSON.stringify(beforeVisuals) === JSON.stringify(afterVisuals);
+                const contentOnlyScale = JSON.stringify(beforeVisuals.map((item)=>item.rect)) === JSON.stringify(scaledRects) && cropBeforeScale !== cropAfterScale;
 
                 const rerender = document.createElement('div'); rerender.className='mes transformed'; rerender.setAttribute('is_user','false'); rerender.setAttribute('is_system','false'); rerender.innerHTML='<div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div>'; document.querySelector('#chat').appendChild(rerender);
                 await runtime.reconcile();
                 const rerenderApplied = rerender.querySelector('img').src === persisted.imageData;
 
                 await store.putBinding({ themeKey:'theme-name:B', targetKey:'character:char.png', avatarId, view:{x:.4,y:.2,scale:1.4} });
-                const transformA = characterImages[0].getAnimations().at(-1).effect.getKeyframes()[0].transform;
+                const transformA = characterImages[0].style.getPropertyValue('object-view-box');
                 document.querySelector('#themes').value='B'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true}));
                 await delay(150);
-                const transformB = characterImages[0].getAnimations().at(-1).effect.getKeyframes()[0].transform;
+                const transformB = characterImages[0].style.getPropertyValue('object-view-box');
                 const themesIsolated = transformA !== transformB;
 
                 await store.putBinding({ themeKey:'theme-name:B', targetKey:'user:global', avatarId, view:{x:.25,y:.125,scale:1} });
                 await runtime.reconcile();
-                const responsiveTransforms = userImages.map((image) => image.getAnimations().at(-1).effect.getKeyframes()[0].transform);
-                const responsive = responsiveTransforms[0] !== responsiveTransforms[1];
+                const responsiveCrops = userImages.map((image) => image.style.getPropertyValue('object-view-box'));
+                const responsive = responsiveCrops.every((value) => value && value === responsiveCrops[0]);
+                await runtime.beginEdit({ kind:'user', avatarId });
+                const otherTargetSurvivesEdit = characterImages.every((image) => image.src === persisted.imageData);
+                await runtime.cancelEdit();
+                const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image) => image.src === persisted.imageData) && userImages.every((image) => image.src === persisted.imageData);
                 await runtime.clearBinding('user');
                 const restoredUser = userImages.every((image) => image.src.includes('R0lGOD'));
                 document.querySelector('[data-avatar-action="menu"]').click();
@@ -213,12 +223,12 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1,
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls,
-                    emptyLayout, toolbarVisible, toolbarIsolated, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
+                    emptyLayout, toolbarVisible, toolbarIsolated, contentOnlyScale, simultaneousBindings, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','toolbarVisible','toolbarIsolated','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','toolbarVisible','toolbarIsolated','contentOnlyScale','simultaneousBindings','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

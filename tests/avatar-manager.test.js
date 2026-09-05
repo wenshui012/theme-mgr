@@ -222,11 +222,11 @@ test('22 reset restores normalized zero zero one', async () => { const f=runtime
 test('23 Cancel restores the previous binding rather than raw avatar', async () => { const f=runtimeFixture({seed:{assets:[asset('a'),asset('b')],bindings:[{themeKey:'theme-name:A',targetKey:'character:char.png',avatarId:'a',view:{x:.1,y:.1,scale:1}}]}}); await f.runtime.start(); await f.runtime.beginEdit({kind:'character',avatarId:'b'}); await f.runtime.cancelEdit(); assert.ok(f.chars.every((x)=>x.image.getAttribute('src').includes('main-a'))); });
 test('24 Save persists the formal binding', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'user',avatarId:'a'}); const result=await f.runtime.saveEdit(); assert.equal(result.binding.avatarId,'a'); assert.equal((await f.store.getBinding('theme-name:A','user:global')).avatarId,'a'); });
 test('25 normalized view yields proportionate pixels across avatar sizes', () => { assert.deepEqual({ ...modules.avatarRuntime.pixelsForView({x:.2,y:.1,scale:1.5},{getBoundingClientRect:()=>({x:0,y:0,width:50,height:80,left:0,top:0,right:50,bottom:80})}) },{x:10,y:8,scale:1.5}); });
-test('26 theme transform remains untouched while plugin animation is additive', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); const before=f.chars[0].image.computed.transform; await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.equal(f.chars[0].image.computed.transform,before); assert.equal(f.chars[0].image.animations.at(-1).frames[0].composite,'add'); });
+test('26 theme transform and avatar box stay fixed while only image content is cropped', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); const beforeTransform=f.chars[0].image.computed.transform; const beforeRect=f.chars[0].image.getBoundingClientRect(); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); f.runtime.setScale(1.5); assert.equal(f.chars[0].image.computed.transform,beforeTransform); assert.deepEqual(f.chars[0].image.getBoundingClientRect(),beforeRect); assert.match(f.chars[0].image.getAttribute('style'),/object-view-box:inset\(/); assert.equal(f.chars[0].image.animations.length,0); });
 test('27 mask and clip properties are not rewritten', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.equal(f.chars[0].image.computed.clipPath,'circle(48%)'); assert.equal(f.chars[0].image.computed.maskImage,'url(mask.png)'); });
 test('28 a newly rendered message is reapplied on reconcile', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{themeKey:'theme-name:A',targetKey:'character:char.png',avatarId:'a',view:{}}]}}); await f.runtime.start(); const next=message('character',{x:20,y:350,width:60,height:60},'raw-new'); f.chat.appendChild(next.mes); await f.runtime.reconcile(); assert.match(next.image.getAttribute('src'),/main-a/); });
 test('29 a fresh runtime restores persisted bindings after reload', async () => { const seed={assets:[asset()],bindings:[{themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{}}]}; const f=runtimeFixture({seed}); await f.runtime.start(); assert.match(f.user.image.getAttribute('src'),/main-a/); });
-test('30 Theme A and Theme B keep independent normalized views', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{x:.1}},{themeKey:'theme-name:B',targetKey:'user:global',avatarId:'a',view:{x:.4}}]}}); await f.runtime.start(); const a=f.user.image.animations.at(-1).frames[0].transform; f.setTheme('B'); await f.runtime.reconcile(); const b=f.user.image.animations.at(-1).frames[0].transform; assert.notEqual(a,b); });
+test('30 Theme A and Theme B keep independent normalized content crops', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{x:.1}},{themeKey:'theme-name:B',targetKey:'user:global',avatarId:'a',view:{x:.4}}]}}); await f.runtime.start(); const a=f.user.image.getAttribute('style'); f.setTheme('B'); await f.runtime.reconcile(); const b=f.user.image.getAttribute('style'); assert.notEqual(a,b); assert.match(b,/object-view-box:inset\(/); });
 test('31 a theme without binding restores the SillyTavern src', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{}}]}}); await f.runtime.start(); f.setTheme('B'); await f.runtime.reconcile(); assert.equal(f.user.image.getAttribute('src'),'raw-user.png'); });
 test('32 deleting an avatar under edit safely cancels and clears binding references', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'user',avatarId:'a'}); await f.runtime.deleteAsset('a'); assert.equal(f.runtime.getState().state,'idle'); assert.equal(await f.store.getAsset('a'),null); });
 test('33 frontend-only import to edit to save flow needs no server', async () => { const f=runtimeFixture(); await f.store.putAsset(asset()); await f.runtime.beginEdit({kind:'user',avatarId:'a'}); await f.runtime.saveEdit(); assert.ok(await f.store.getBinding('theme-name:A','user:global')); });
@@ -303,4 +303,25 @@ test('46 editor toolbar uses a host-level important layout and Shadow DOM isolat
     assert.match(source, /attachShadow\(\{ mode: 'open' \}\)/);
     assert.match(source, /position:fixed!important/);
     assert.match(source, /visibility:visible!important/);
+    assert.match(source, /win\.visualViewport/);
+    assert.match(source, /css-object-view-box-content-crop/);
+});
+test('47 editing either target preserves the other target binding', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a'), asset('b')], bindings: [
+        { themeKey: 'theme-name:A', targetKey: 'character:char.png', avatarId: 'a', view: {} },
+        { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'b', view: {} },
+    ] } });
+    await f.runtime.start();
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'b' });
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src').includes('main-a')));
+    const newCharacterMessage = message('character', { x: 30, y: 340, width: 70, height: 70 }, 'raw-new-character.png');
+    f.chat.appendChild(newCharacterMessage.mes);
+    await f.runtime.reconcile();
+    assert.match(newCharacterMessage.image.getAttribute('src'), /main-a/);
+    await f.runtime.saveEdit();
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'a' });
+    assert.match(f.user.image.getAttribute('src'), /main-b/);
+    await f.runtime.saveEdit();
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src').includes('main-a')));
+    assert.match(f.user.image.getAttribute('src'), /main-b/);
 });

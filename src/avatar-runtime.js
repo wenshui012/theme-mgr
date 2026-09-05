@@ -168,6 +168,25 @@
         view = normalizeView(view);
         return { x: view.x * rect.width, y: view.y * rect.height, scale: view.scale };
     }
+    function objectViewBoxForView(view) {
+        view = normalizeView(view);
+        var visible = 1 / view.scale;
+        var centerInset = (1 - visible) / 2;
+        var left = centerInset - view.x / view.scale;
+        var top = centerInset - view.y / view.scale;
+        var right = 1 - visible - left;
+        var bottom = 1 - visible - top;
+        return 'inset(' + [top, right, bottom, left].map(function (value) { return round(value * 100, 4) + '%'; }).join(' ') + ')';
+    }
+    function setImportantStyle(element, name, value) {
+        if (element && element.style && typeof element.style.setProperty === 'function') {
+            element.style.setProperty(name, value, 'important');
+            return;
+        }
+        var current = clean(getAttribute(element, 'style'));
+        if (current && current.charAt(current.length - 1) !== ';') current += ';';
+        setExactAttribute(element, 'style', current + name + ':' + value + '!important;');
+    }
     function clips(style) {
         return /^(?:hidden|clip)$/i.test(clean(style && style.overflow)) || /^(?:hidden|clip)$/i.test(clean(style && style.overflowX)) || /^(?:hidden|clip)$/i.test(clean(style && style.overflowY));
     }
@@ -185,6 +204,7 @@
         var baselines = new WeakMap();
         var activeImages = new Set();
         var assetCache = new Map();
+        var bindingPlans = [];
         var listeners = [];
         var chatObserver = null;
         var observedChat = null;
@@ -197,6 +217,7 @@
         var toolbarHost = null;
         var toolbar = null;
         var styleNode = null;
+        var toolbarViewport = null;
         var activePointer = null;
         var dragOrigin = null;
 
@@ -216,6 +237,7 @@
                 avatarClass: image.parentElement && image.parentElement.classList.contains(AVATAR_CLASS),
                 animation: null,
                 mapping: null,
+                targetKey: '',
             };
             baselines.set(image, record);
             return record;
@@ -236,19 +258,17 @@
         function restoreAll() {
             Array.from(activeImages).forEach(restoreImage);
         }
-        function applyToEntry(entry, asset, view) {
+        function applyToEntry(entry, asset, view, targetKey) {
             var image = entry.image;
             var record = captureBaseline(image);
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
             setExactAttribute(image, 'srcset', null);
             setExactAttribute(image, 'src', asset.imageData);
-            var animation = createAnimation(image);
-            var mapping;
-            try { mapping = measureMapping(image, animation); }
-            catch (error) { animation.cancel(); throw error; }
-            updateAnimation(animation, pixelsForView(view, entry.avatar), mapping);
-            record.animation = animation;
-            record.mapping = mapping;
+            if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
+                throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
+            }
+            setImportantStyle(image, 'object-view-box', objectViewBoxForView(view));
+            record.targetKey = targetKey || '';
             activeImages.add(image);
         }
         function getAsset(id) {
@@ -264,12 +284,12 @@
         function applyDesired(items) {
             var desired = new Set(items.map(function (item) { return item.entry.image; }));
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
-            items.forEach(function (item) { applyToEntry(item.entry, item.asset, item.binding.view); });
+            items.forEach(function (item) { applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey); });
         }
         function resolveRuntimeDesired() {
             var key = currentThemeKey();
             var info = targets();
-            if (!key) return Promise.resolve({ items: [], hasBinding: false });
+            if (!key) return Promise.resolve({ items: [], plans: [], hasBinding: false });
             var targetList = [info.character, info.user].filter(Boolean);
             var foundBinding = false;
             return Promise.all(targetList.map(function (target) {
@@ -280,12 +300,14 @@
                         if (!asset) {
                             return store.deleteBinding(key, target.key).then(function () { return null; });
                         }
-                        return desiredForBinding(target, binding, asset);
+                        return { target: target, binding: binding, asset: asset };
                     });
                 });
             })).then(function (groups) {
+                var plans = groups.filter(Boolean);
                 return {
-                    items: groups.reduce(function (all, group) { return group ? all.concat(group) : all; }, []),
+                    items: plans.reduce(function (all, plan) { return all.concat(desiredForBinding(plan.target, plan.binding, plan.asset)); }, []),
+                    plans: plans,
                     hasBinding: foundBinding,
                 };
             });
@@ -297,9 +319,17 @@
                 cancelEdit('target-disconnected');
                 return false;
             }
-            var desired = new Set(entries.map(function (entry) { return entry.image; }));
+            var desired = new Set();
+            bindingPlans.forEach(function (plan) {
+                if (plan.target.key === editor.target.key) return;
+                desiredForBinding(plan.target, plan.binding, plan.asset).forEach(function (item) {
+                    desired.add(item.entry.image);
+                    applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
+                });
+            });
+            entries.forEach(function (entry) { desired.add(entry.image); });
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
-            entries.forEach(function (entry) { applyToEntry(entry, editor.asset, editor.view); });
+            entries.forEach(function (entry) { applyToEntry(entry, editor.asset, editor.view, editor.target.key); });
             return true;
         }
         function reconcile() {
@@ -308,6 +338,7 @@
             return Promise.resolve(store.ready).then(resolveRuntimeDesired).then(function (desired) {
                 if (request !== sequence || editor) return { superseded: true };
                 hasRuntimeBinding = desired.hasBinding;
+                bindingPlans = desired.plans;
                 try { applyDesired(desired.items); observeChat(); }
                 catch (error) { restoreAll(); onError(error); return { ok: false, error: error }; }
                 return { ok: true, count: desired.items.length };
@@ -368,6 +399,7 @@
             reconcileTimer = null;
             started = false;
             hasRuntimeBinding = false;
+            bindingPlans = [];
             sequence += 1;
             restoreAll();
         }
@@ -382,7 +414,7 @@
             return { available: true, reason: '', target: target, count: entries.length, representative: representative };
         }
         function getCapabilities() { return { character: capability('character'), user: capability('user'), themeKey: currentThemeKey() }; }
-        function diagnosticsFor(entry, target, mapping) {
+        function diagnosticsFor(entry, target) {
             var imageStyle = win.getComputedStyle(entry.image);
             var avatarStyle = win.getComputedStyle(entry.avatar);
             var imageRect = rectOf(entry.image);
@@ -404,11 +436,46 @@
                 maskImage: imageStyle.webkitMaskImage || imageStyle.maskImage,
                 avatarOverflow: avatarStyle.overflow,
                 parentClips: clips(avatarStyle),
-                themeInlineStyleBaseline: getAttribute(entry.image, 'style'),
-                strategy: 'web-animations-additive-transform',
-                coordinateModel: 'normalized-avatar-box',
-                mapping: clone(mapping),
+                themeInlineStyleBaseline: (baselines.get(entry.image) || {}).style || null,
+                strategy: 'css-object-view-box-content-crop',
+                coordinateModel: 'normalized-avatar-content-crop',
+                objectViewBox: entry.image.style && entry.image.style.getPropertyValue ? entry.image.style.getPropertyValue('object-view-box') : '',
             };
+        }
+        function positionEditorToolbar() {
+            if (!toolbarHost) return;
+            var viewport = win.visualViewport;
+            var viewportWidth = Number(viewport && viewport.width) || Number(win.innerWidth) || 320;
+            var viewportHeight = Number(viewport && viewport.height) || Number(win.innerHeight) || 480;
+            var offsetLeft = Number(viewport && viewport.offsetLeft) || 0;
+            var offsetTop = Number(viewport && viewport.offsetTop) || 0;
+            var rect = rectOf(toolbarHost);
+            var top = Math.max(offsetTop + 8, offsetTop + viewportHeight - rect.height - 12);
+            setImportantStyle(toolbarHost, 'left', round(offsetLeft + viewportWidth / 2, 2) + 'px');
+            setImportantStyle(toolbarHost, 'top', 'calc(' + round(top, 2) + 'px - env(safe-area-inset-bottom,0px))');
+            setImportantStyle(toolbarHost, 'max-width', Math.max(240, viewportWidth - 16) + 'px');
+        }
+        function bindToolbarViewport() {
+            toolbarViewport = win.visualViewport || null;
+            if (toolbarViewport && typeof toolbarViewport.addEventListener === 'function') {
+                toolbarViewport.addEventListener('resize', positionEditorToolbar);
+                toolbarViewport.addEventListener('scroll', positionEditorToolbar);
+            }
+            if (typeof win.addEventListener === 'function') {
+                win.addEventListener('resize', positionEditorToolbar);
+                win.addEventListener('orientationchange', positionEditorToolbar);
+            }
+        }
+        function unbindToolbarViewport() {
+            if (toolbarViewport && typeof toolbarViewport.removeEventListener === 'function') {
+                toolbarViewport.removeEventListener('resize', positionEditorToolbar);
+                toolbarViewport.removeEventListener('scroll', positionEditorToolbar);
+            }
+            if (typeof win.removeEventListener === 'function') {
+                win.removeEventListener('resize', positionEditorToolbar);
+                win.removeEventListener('orientationchange', positionEditorToolbar);
+            }
+            toolbarViewport = null;
         }
         function ensureEditorUi() {
             styleNode = doc.createElement('style');
@@ -420,11 +487,11 @@
             doc.head.appendChild(styleNode);
             toolbarHost = doc.createElement('div');
             toolbarHost.id = TOOLBAR_ID;
-            toolbarHost.setAttribute('style', 'all:initial!important;position:fixed!important;left:50%!important;bottom:calc(12px + env(safe-area-inset-bottom,0px))!important;transform:translateX(-50%)!important;z-index:2147483647!important;display:block!important;width:max-content!important;max-width:calc(100vw - 16px)!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;box-sizing:border-box!important');
+            toolbarHost.setAttribute('style', 'all:initial!important;position:fixed!important;left:50%!important;top:0!important;bottom:auto!important;transform:translateX(-50%)!important;z-index:2147483647!important;display:block!important;width:max-content!important;max-width:calc(100vw - 16px)!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;box-sizing:border-box!important');
             var toolbarRoot = typeof toolbarHost.attachShadow === 'function' ? toolbarHost.attachShadow({ mode: 'open' }) : toolbarHost;
             var toolbarStyle = doc.createElement('style');
             toolbarStyle.textContent = [
-                '.tm-avatar-editor-bar{display:flex;align-items:center;gap:7px;max-width:calc(100vw - 16px);box-sizing:border-box;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:12px;background:rgba(22,22,28,.95);color:#fff;font:13px/1.2 system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
+                '.tm-avatar-editor-bar{display:flex;align-items:center;gap:7px;max-width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:12px;background:rgba(22,22,28,.95);color:#fff;font:13px/1.2 system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
                 'button{appearance:none;border:1px solid rgba(255,255,255,.24);border-radius:7px;background:rgba(255,255,255,.1);color:inherit;min-width:34px;min-height:34px;padding:6px 9px;font:inherit;white-space:nowrap}',
                 '.tm-avatar-editor-scale{min-width:48px;text-align:center;font-variant-numeric:tabular-nums}',
                 '@media(max-width:430px){.tm-avatar-editor-bar{gap:5px;padding:7px 8px}.tm-avatar-editor-title{display:none}button{padding:5px 7px}}',
@@ -436,6 +503,9 @@
             toolbar.addEventListener('click', onToolbarClick);
             toolbarRoot.appendChild(toolbar);
             doc.body.appendChild(toolbarHost);
+            bindToolbarViewport();
+            positionEditorToolbar();
+            if (typeof win.requestAnimationFrame === 'function') win.requestAnimationFrame(positionEditorToolbar);
         }
         function updateToolbar() {
             if (!toolbar || !editor) return;
@@ -462,6 +532,7 @@
         }
         function finishEditorUi() {
             unbindRepresentative();
+            unbindToolbarViewport();
             if (toolbar) toolbar.removeEventListener('click', onToolbarClick);
             if (toolbarHost && toolbarHost.parentNode) toolbarHost.parentNode.removeChild(toolbarHost);
             if (styleNode && styleNode.parentNode) styleNode.parentNode.removeChild(styleNode);
@@ -495,8 +566,7 @@
                 try {
                     syncEditorInstances();
                     bindRepresentative();
-                    var record = baselines.get(editor.representative.image);
-                    editor.diagnostics = diagnosticsFor(editor.representative, editor.target, record && record.mapping);
+                    editor.diagnostics = diagnosticsFor(editor.representative, editor.target);
                     updateToolbar();
                 } catch (error) {
                     finishEditorUi();
@@ -650,5 +720,6 @@
         normalizeView: normalizeView,
         pixelsForView: pixelsForView,
         transformForPixels: transformForPixels,
+        objectViewBoxForView: objectViewBoxForView,
     };
 })(window);
