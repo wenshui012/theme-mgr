@@ -2,6 +2,67 @@
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
     var PREVIEW_VIEW_VERSION = 2;
+    var IMAGE_MIME_BY_EXTENSION = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+
+    function imageImportError(code, message, cause) {
+        var error = new Error(message);
+        error.name = 'ImageImportError';
+        error.code = code;
+        if (cause) error.cause = cause;
+        return error;
+    }
+
+    function inferImageMime(file) {
+        var declared = String(file && file.type || '').trim().toLowerCase();
+        if (declared === 'image/jpg') declared = 'image/jpeg';
+        if (/^image\/[a-z0-9.+-]+$/.test(declared)) return declared;
+        if (declared) return '';
+        var match = String(file && file.name || '').trim().toLowerCase().match(/\.([a-z0-9]+)$/);
+        return match && IMAGE_MIME_BY_EXTENSION[match[1]] || '';
+    }
+
+    function snapshotInputFiles(input) {
+        return Array.prototype.slice.call(input && input.files || []);
+    }
+
+    function readImageFile(file) {
+        if (!file) return Promise.reject(imageImportError('IMAGE_READ_FAILED', '图片读取失败'));
+        return new Promise(function (resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function (event) {
+                var result = event && event.target && event.target.result;
+                if (typeof result !== 'string' || result.indexOf('data:') !== 0) {
+                    reject(imageImportError('IMAGE_READ_FAILED', '图片读取失败'));
+                    return;
+                }
+                resolve(result);
+            };
+            reader.onerror = function () { reject(imageImportError('IMAGE_READ_FAILED', '图片读取失败', reader.error)); };
+            reader.onabort = function () { reject(imageImportError('IMAGE_READ_FAILED', '图片读取已取消', reader.error)); };
+            try { reader.readAsDataURL(file); }
+            catch (error) { reject(imageImportError('IMAGE_READ_FAILED', '图片读取失败', error)); }
+        });
+    }
+
+    function decodeImageFile(file, mimeType) {
+        return readImageFile(file).then(function (dataUrl) {
+            return new Promise(function (resolve, reject) {
+                var image = new Image();
+                image.onload = function () {
+                    resolve({
+                        source: image,
+                        dataUrl: dataUrl,
+                        width: image.naturalWidth || image.width,
+                        height: image.naturalHeight || image.height,
+                        hasAlpha: mimeType === 'image/png' || mimeType === 'image/webp',
+                        close: function () {},
+                    });
+                };
+                image.onerror = function () { reject(imageImportError('IMAGE_DECODE_FAILED', '图片解码失败')); };
+                image.src = dataUrl;
+            });
+        });
+    }
 
     function finiteNumber(value, fallback) {
         if (value === null || value === '' || typeof value === 'boolean') return fallback;
@@ -174,6 +235,11 @@
         normalizePreviewImageQuality: normalizePreviewImageQuality,
         hasPreviewImage: hasPreviewImage,
         mergeMissingPreview: mergeMissingPreview,
+        inferImageMime: inferImageMime,
+        snapshotInputFiles: snapshotInputFiles,
+        readImageFile: readImageFile,
+        decodeImageFile: decodeImageFile,
+        imageImportError: imageImportError,
 
         compressImage: function (dataUrl, cb, opts) {
             var maxWidth = opts && opts.maxWidth ? opts.maxWidth : 1200;

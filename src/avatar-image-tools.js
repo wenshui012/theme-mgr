@@ -6,6 +6,14 @@
     var THUMB_QUALITY = 0.84;
     var ALLOWED = { 'image/jpeg': true, 'image/png': true, 'image/webp': true };
 
+    function avatarImageError(code, message, cause) {
+        var error = new Error(message);
+        error.name = 'AvatarImageError';
+        error.code = code;
+        if (cause) error.cause = cause;
+        return error;
+    }
+
     function fit(width, height, maximum) {
         width = Math.max(1, Math.round(Number(width) || 0));
         height = Math.max(1, Math.round(Number(height) || 0));
@@ -29,35 +37,6 @@
         return 'image/jpeg';
     }
 
-    function browserDecode(file) {
-        if (typeof global.createImageBitmap === 'function') {
-            return global.createImageBitmap(file).then(function (bitmap) {
-                return {
-                    source: bitmap,
-                    width: bitmap.width,
-                    height: bitmap.height,
-                    hasAlpha: file.type === 'image/png' || file.type === 'image/webp',
-                    close: function () { if (typeof bitmap.close === 'function') bitmap.close(); },
-                };
-            });
-        }
-        return new Promise(function (resolve, reject) {
-            var url = global.URL.createObjectURL(file);
-            var image = new Image();
-            image.onload = function () {
-                resolve({
-                    source: image,
-                    width: image.naturalWidth || image.width,
-                    height: image.naturalHeight || image.height,
-                    hasAlpha: file.type === 'image/png' || file.type === 'image/webp',
-                    close: function () { global.URL.revokeObjectURL(url); },
-                });
-            };
-            image.onerror = function () { global.URL.revokeObjectURL(url); reject(new Error('图片解码失败')); };
-            image.src = url;
-        });
-    }
-
     function browserEncode(decoded, size, mimeType, quality) {
         var canvas = global.document.createElement('canvas');
         canvas.width = size.width;
@@ -71,15 +50,27 @@
 
     ns.createAvatarImageProcessor = function (options) {
         options = options || {};
-        var decode = options.decode || browserDecode;
+        var sharedImageTools = options.imageTools || ns.imageTools;
+        var decode = options.decode || sharedImageTools && sharedImageTools.decodeImageFile;
+        var inferMime = options.inferMime || sharedImageTools && sharedImageTools.inferImageMime;
         var encode = options.encode || browserEncode;
         var makeId = options.makeId || idForFile;
         var now = options.now || function () { return new Date().toISOString(); };
 
         function processFile(file) {
-            var mimeType = String(file && file.type || '').toLowerCase();
-            if (!ALLOWED[mimeType]) return Promise.reject(Object.assign(new Error('仅支持 JPG、PNG、WebP 图片'), { code: 'AVATAR_FORMAT_UNSUPPORTED' }));
-            return Promise.resolve(decode(file)).then(function (decoded) {
+            if (typeof decode !== 'function' || typeof inferMime !== 'function') {
+                return Promise.reject(avatarImageError('AVATAR_IMAGE_TOOLS_UNAVAILABLE', '图片处理组件不可用'));
+            }
+            var mimeType = inferMime(file);
+            if (!file) return Promise.reject(avatarImageError('AVATAR_READ_FAILED', '图片读取失败'));
+            if (!ALLOWED[mimeType]) return Promise.reject(avatarImageError('AVATAR_FORMAT_UNSUPPORTED', '图片格式暂不支持'));
+            var decodedPromise;
+            try { decodedPromise = decode(file, mimeType); }
+            catch (error) { decodedPromise = Promise.reject(error); }
+            return Promise.resolve(decodedPromise).catch(function (error) {
+                if (error && error.code) throw error;
+                throw avatarImageError('AVATAR_DECODE_FAILED', '图片解码失败', error);
+            }).then(function (decoded) {
                 if (!decoded || !(decoded.width > 0) || !(decoded.height > 0)) throw Object.assign(new Error('图片解码失败'), { code: 'AVATAR_DECODE_FAILED' });
                 var mainSize = fit(decoded.width, decoded.height, MAIN_MAX);
                 var thumbSize = fit(decoded.width, decoded.height, THUMB_MAX);
@@ -121,5 +112,6 @@
         fit: fit,
         fileBaseName: fileBaseName,
         outputMime: outputMime,
+        avatarImageError: avatarImageError,
     };
 })(window);

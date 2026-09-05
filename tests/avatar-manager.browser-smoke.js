@@ -3,7 +3,7 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '..');
-const MODULES = ['avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'avatar-runtime.js', 'avatar-page.js'];
+const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'avatar-runtime.js', 'avatar-page.js'];
 const viewports = [
     { label: 'desktop', width: 1280, height: 800 },
     { label: 'mobile-360', width: 360, height: 720, isMobile: true, hasTouch: true },
@@ -87,6 +87,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 document.querySelector('[data-tm-page="avatars"]').innerHTML = modules.avatarPage.buildPageHtml(modules.imageLoader.PLACEHOLDER_SRC);
                 await pageController.mount();
                 const empty = pageController.getState().count === 0 && Boolean(document.querySelector('.tm-avatar-page-empty'));
+                const emptyLayout = [...document.querySelectorAll('[data-avatar-action="pick"]')].filter((button) => button.getClientRects().length).length === 1 &&
+                    !document.querySelector('.tm-avatar-page h2') && document.querySelector('[data-avatar-actions]').hidden;
 
                 const source = document.createElement('canvas'); source.width = 2600; source.height = 1300;
                 const ctx = source.getContext('2d'); ctx.clearRect(0, 0, source.width, source.height); ctx.fillStyle = 'rgba(120,60,220,.72)'; ctx.fillRect(40, 40, 2400, 1100);
@@ -174,12 +176,12 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1,
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls,
-                    hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
+                    emptyLayout, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

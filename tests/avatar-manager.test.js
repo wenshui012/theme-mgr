@@ -17,7 +17,7 @@ function loadModules(window) {
     window.JSON = JSON;
     window.Number = Number;
     const context = vm.createContext(window);
-    ['avatar-storage.js', 'avatar-image-tools.js', 'avatar-runtime.js', 'avatar-page.js'].forEach((name) => {
+    ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'avatar-runtime.js', 'avatar-page.js'].forEach((name) => {
         vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', name), 'utf8'), context, { filename: name });
     });
     return window.ThemeMgrModules;
@@ -192,13 +192,14 @@ function runtimeFixture(options = {}) {
 }
 
 class PageRoot extends Events {
-    constructor() { super(); this.grid = new Element('div'); this.notice = new Element('div'); this.actions = new Element('div'); this.selected = new Element('div'); this.input = new Element('input'); this.buttons = {}; ['apply-character','apply-user','restore-character','restore-user'].forEach((x) => this.buttons[x] = new Element('button')); }
-    querySelector(s) { if (s === '[data-avatar-grid]') return this.grid; if (s === '[data-avatar-notice]') return this.notice; if (s === '[data-avatar-actions]') return this.actions; if (s === '[data-avatar-selected]') return this.selected; if (s === '[data-avatar-file]') return this.input; const m=s.match(/data-avatar-action="([^"]+)/); return m ? this.buttons[m[1]] : null; }
+    constructor() { super(); this.grid = new Element('div'); this.notice = new Element('div'); this.actions = new Element('div'); this.selected = new Element('div'); this.tools = new Element('div'); this.input = new Element('input'); this.buttons = {}; ['apply-character','apply-user','restore-character','restore-user'].forEach((x) => this.buttons[x] = new Element('button')); }
+    querySelector(s) { if (s === '[data-avatar-grid]') return this.grid; if (s === '[data-avatar-notice]') return this.notice; if (s === '[data-avatar-actions]') return this.actions; if (s === '[data-avatar-selected]') return this.selected; if (s === '[data-avatar-tools]') return this.tools; if (s === '[data-avatar-file]') return this.input; const m=s.match(/data-avatar-action="([^"]+)/); return m ? this.buttons[m[1]] : null; }
+    querySelectorAll() { return []; }
     contains() { return true; }
 }
-function pageFixture(seed = []) {
+function pageFixture(seed = [], bindings = []) {
     const doc = new Document(); const pageRoot = new PageRoot(); doc.pageRoot = pageRoot;
-    const { store } = memoryStore({ assets: seed }); let disconnected = 0; let observed = 0;
+    const { store } = memoryStore({ assets: seed, bindings }); let disconnected = 0; let observed = 0;
     const imageLoader = { PLACEHOLDER_SRC: 'placeholder', createImageLoader: () => ({ observe: () => { observed++; }, disconnect: () => { disconnected++; } }) };
     const runtime = { getCapabilities: () => ({ themeKey: 'theme-name:A', character: { available: true, target: { key: 'character:c' } }, user: { available: true, target: { key: 'user:global' } } }), notifyAssetChanged: async () => {}, deleteAsset: (id) => store.deleteAsset(id), clearBinding: async () => {}, beginEdit: async () => {} };
     const win = { document: doc, confirm: () => true }; const mods = loadModules(win);
@@ -237,4 +238,64 @@ test('38 editing Character does not modify User or another target', async () => 
 test('39 IndexedDB quota failures have a stable explicit error code', () => {
     const error = modules.avatarStorage.idbError('AVATAR_IDB_WRITE_FAILED', 'write failed', { name: 'QuotaExceededError' });
     assert.equal(error.code, 'AVATAR_STORAGE_QUOTA_EXCEEDED');
+});
+test('40 shared file picker helper freezes FileList before input reset', () => {
+    const chosen = { name: '安卓头像.jpg', type: 'image/jpeg' };
+    const input = { files: [chosen] };
+    const snapshot = modules.imageTools.snapshotInputFiles(input);
+    input.files.length = 0;
+    assert.equal(snapshot.length, 1);
+    assert.equal(snapshot[0], chosen);
+});
+test('41 shared MIME inference accepts an empty Android MIME with a legal extension', () => {
+    assert.equal(modules.imageTools.inferImageMime({ name: '中文头像.JPEG', type: '' }), 'image/jpeg');
+    assert.equal(modules.imageTools.inferImageMime({ name: '透明头像.png', type: '' }), 'image/png');
+    assert.equal(modules.imageTools.inferImageMime({ name: '头像.webp', type: '' }), 'image/webp');
+});
+test('42 Avatar Page has no duplicate title or hard-coded purple CTA', () => {
+    const html = modules.avatarPage.buildPageHtml('placeholder');
+    const css = modules.avatarPage.styleText();
+    assert.doesNotMatch(html, /<h2>头像管理<\/h2>/);
+    assert.doesNotMatch(css, /#7c4dff|#9d6cff|tm-avatar-page-primary/);
+    assert.match(html, /还没有头像|data-avatar-grid/);
+});
+test('43 Avatar Page exposes a visible importing state until the pipeline settles', async () => {
+    let finish;
+    const f = pageFixture();
+    await f.page.mount();
+    const pendingAsset = new Promise((resolve) => { finish = resolve; });
+    const custom = modules.createAvatarPage({
+        document: f.doc,
+        store: f.store,
+        processor: { processFile: () => pendingAsset },
+        runtime: { getCapabilities: () => ({ themeKey: null, character: { available: false }, user: { available: false } }), notifyAssetChanged() {} },
+        imageLoader: { PLACEHOLDER_SRC: 'placeholder', createImageLoader: () => ({ observe() {}, disconnect() {} }) },
+        imageTools: modules.imageTools,
+        getRoot: () => f.pageRoot,
+        toast() {},
+    });
+    f.page.unmount();
+    await custom.mount();
+    const pending = custom.importFiles([{ name: 'pending.jpg', type: 'image/jpeg' }]);
+    assert.equal(custom.getState().importing, true);
+    assert.match(f.pageRoot.notice.innerHTML, /正在添加头像/);
+    finish(asset('pending'));
+    await pending;
+    assert.equal(custom.getState().importing, false);
+});
+test('44 bottom actions stay hidden with no selection and no active binding', async () => {
+    const f = pageFixture();
+    await f.page.mount();
+    await Promise.resolve();
+    assert.equal(f.pageRoot.actions.hidden, true);
+});
+test('45 an existing binding shows only its restore action when no avatar is selected', async () => {
+    const f = pageFixture([asset()], [{ themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: {} }]);
+    await f.page.mount();
+    await Promise.resolve();
+    assert.equal(f.pageRoot.actions.hidden, false);
+    assert.equal(f.pageRoot.buttons['apply-character'].hidden, true);
+    assert.equal(f.pageRoot.buttons['apply-user'].hidden, true);
+    assert.equal(f.pageRoot.buttons['restore-character'].hidden, true);
+    assert.equal(f.pageRoot.buttons['restore-user'].hidden, false);
 });

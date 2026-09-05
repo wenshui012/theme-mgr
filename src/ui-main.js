@@ -263,7 +263,7 @@
             imageToolsApi = modules.imageTools;
             imageLoaderApi = modules.imageLoader;
             avatarStore = modules.createAvatarStore({});
-            avatarImageProcessor = modules.createAvatarImageProcessor({});
+            avatarImageProcessor = modules.createAvatarImageProcessor({ imageTools: imageToolsApi });
             avatarRuntime = modules.createAvatarRuntime({
                 window: global,
                 document: document,
@@ -287,6 +287,7 @@
                 processor: avatarImageProcessor,
                 runtime: avatarRuntime,
                 imageLoader: imageLoaderApi,
+                imageTools: imageToolsApi,
                 getRoot: function () { return document.querySelector('[data-tm-page="avatars"]'); },
                 closeManager: closePopup,
                 toast: toast,
@@ -5565,19 +5566,20 @@
             });
         }
         function handleFile(f) {
-            if (!f || f.type.indexOf('image') !== 0) return;
-            var r = new FileReader();
-            r.onload = function (e) {
+            if (!f || !imageToolsApi.inferImageMime(f)) return;
+            imageToolsApi.readImageFile(f).then(function (dataUrl) {
                 if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
-                compressImage(e.target.result, function (c) {
+                compressImage(dataUrl, function (c) {
                     if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
                     openImageCropSheet(c, null, function (res) {
                         if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
                         setImg(res.imageData, res.thumbData, res.crop);
                     });
                 });
-            };
-            r.readAsDataURL(f);
+            }).catch(function (error) {
+                console.error('[Theme Manager] preview image read failed', error);
+                toast(error.message || '图片读取失败', true);
+            });
         }
         function adjustCurrentImage() {
             var source = editImgData || editThumbData;
@@ -5597,7 +5599,8 @@
         });
         imgArea.addEventListener('click', function () { fileInp.click(); });
         fileInp.addEventListener('change', function () {
-            if (fileInp.files[0]) handleFile(fileInp.files[0]);
+            var files = imageToolsApi.snapshotInputFiles(fileInp);
+            if (files[0]) handleFile(files[0]);
             fileInp.value = '';
         });
         imgArea.addEventListener('dragover', function (e) { e.preventDefault(); imgArea.classList.add('drag'); });
