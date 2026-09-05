@@ -194,6 +194,7 @@
         var hasRuntimeBinding = false;
         var editor = null;
         var editorClosing = false;
+        var toolbarHost = null;
         var toolbar = null;
         var styleNode = null;
         var activePointer = null;
@@ -413,19 +414,28 @@
             styleNode = doc.createElement('style');
             styleNode.id = STYLE_ID;
             styleNode.textContent = [
-                '#' + TOOLBAR_ID + '{position:fixed;left:50%;bottom:max(12px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:2147483647;display:flex;align-items:center;gap:7px;max-width:calc(100vw - 16px);box-sizing:border-box;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:12px;background:rgba(22,22,28,.95);color:#fff;font:13px/1.2 system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);user-select:none;-webkit-user-select:none}',
-                '#' + TOOLBAR_ID + ' button{appearance:none;border:1px solid rgba(255,255,255,.24);border-radius:7px;background:rgba(255,255,255,.1);color:inherit;min-width:34px;min-height:32px;padding:6px 9px;font:inherit}',
-                '#' + TOOLBAR_ID + ' .tm-avatar-editor-scale{min-width:48px;text-align:center;font-variant-numeric:tabular-nums}',
                 '.' + TARGET_CLASS + '{touch-action:none!important;user-select:none!important;-webkit-user-select:none!important;-webkit-user-drag:none!important;cursor:grab!important}',
                 '.' + AVATAR_CLASS + '{outline:2px solid #d8a8ff!important;outline-offset:3px!important}',
-                '@media(max-width:430px){#' + TOOLBAR_ID + '{gap:5px;padding:7px 8px}#' + TOOLBAR_ID + ' .tm-avatar-editor-title{display:none}#' + TOOLBAR_ID + ' button{padding:5px 7px}}',
             ].join('');
             doc.head.appendChild(styleNode);
+            toolbarHost = doc.createElement('div');
+            toolbarHost.id = TOOLBAR_ID;
+            toolbarHost.setAttribute('style', 'all:initial!important;position:fixed!important;left:50%!important;bottom:calc(12px + env(safe-area-inset-bottom,0px))!important;transform:translateX(-50%)!important;z-index:2147483647!important;display:block!important;width:max-content!important;max-width:calc(100vw - 16px)!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;box-sizing:border-box!important');
+            var toolbarRoot = typeof toolbarHost.attachShadow === 'function' ? toolbarHost.attachShadow({ mode: 'open' }) : toolbarHost;
+            var toolbarStyle = doc.createElement('style');
+            toolbarStyle.textContent = [
+                '.tm-avatar-editor-bar{display:flex;align-items:center;gap:7px;max-width:calc(100vw - 16px);box-sizing:border-box;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:12px;background:rgba(22,22,28,.95);color:#fff;font:13px/1.2 system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
+                'button{appearance:none;border:1px solid rgba(255,255,255,.24);border-radius:7px;background:rgba(255,255,255,.1);color:inherit;min-width:34px;min-height:34px;padding:6px 9px;font:inherit;white-space:nowrap}',
+                '.tm-avatar-editor-scale{min-width:48px;text-align:center;font-variant-numeric:tabular-nums}',
+                '@media(max-width:430px){.tm-avatar-editor-bar{gap:5px;padding:7px 8px}.tm-avatar-editor-title{display:none}button{padding:5px 7px}}',
+            ].join('');
+            toolbarRoot.appendChild(toolbarStyle);
             toolbar = doc.createElement('div');
-            toolbar.id = TOOLBAR_ID;
+            toolbar.className = 'tm-avatar-editor-bar';
             toolbar.innerHTML = '<span class="tm-avatar-editor-title">头像调整</span><button type="button" data-action="down">−</button><span class="tm-avatar-editor-scale">100%</span><button type="button" data-action="up">+</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" data-action="save">保存</button>';
             toolbar.addEventListener('click', onToolbarClick);
-            doc.body.appendChild(toolbar);
+            toolbarRoot.appendChild(toolbar);
+            doc.body.appendChild(toolbarHost);
         }
         function updateToolbar() {
             if (!toolbar || !editor) return;
@@ -453,8 +463,9 @@
         function finishEditorUi() {
             unbindRepresentative();
             if (toolbar) toolbar.removeEventListener('click', onToolbarClick);
-            if (toolbar && toolbar.parentNode) toolbar.parentNode.removeChild(toolbar);
+            if (toolbarHost && toolbarHost.parentNode) toolbarHost.parentNode.removeChild(toolbarHost);
             if (styleNode && styleNode.parentNode) styleNode.parentNode.removeChild(styleNode);
+            toolbarHost = null;
             toolbar = null;
             styleNode = null;
         }

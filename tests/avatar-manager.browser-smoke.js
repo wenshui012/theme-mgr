@@ -82,13 +82,21 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const pageController = modules.createAvatarPage({
                     store, processor, runtime, imageLoader: loaderApi,
                     getRoot: () => document.querySelector('[data-tm-page="avatars"]'),
+                    createSheet: (html) => {
+                        const overlay = document.createElement('div');
+                        overlay.className = 'tm-sheet-overlay';
+                        overlay.innerHTML = '<div class="tm-sheet"><div class="tm-sheet-content">' + html + '</div></div>';
+                        document.body.appendChild(overlay);
+                        return overlay;
+                    },
+                    closeSheet: (sheet) => sheet.remove(),
                     closeManager: () => { managerClosed++; }, toast() {}, confirm: () => true,
                 });
                 document.querySelector('[data-tm-page="avatars"]').innerHTML = modules.avatarPage.buildPageHtml(modules.imageLoader.PLACEHOLDER_SRC);
                 await pageController.mount();
                 const empty = pageController.getState().count === 0 && Boolean(document.querySelector('.tm-avatar-page-empty'));
-                const emptyLayout = [...document.querySelectorAll('[data-avatar-action="pick"]')].filter((button) => button.getClientRects().length).length === 1 &&
-                    !document.querySelector('.tm-avatar-page h2') && document.querySelector('[data-avatar-actions]').hidden;
+                const emptyLayout = !document.querySelector('.tm-avatar-page h2') &&
+                    !document.querySelector('[data-avatar-action="pick"]') && !document.querySelector('[data-avatar-actions]');
 
                 const source = document.createElement('canvas'); source.width = 2600; source.height = 1300;
                 const ctx = source.getContext('2d'); ctx.clearRect(0, 0, source.width, source.height); ctx.fillStyle = 'rgba(120,60,220,.72)'; ctx.fillRect(40, 40, 2400, 1100);
@@ -104,14 +112,30 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const gridImage = document.querySelector('.tm-avatar-page-thumb');
                 await delay(30);
                 const gridUsesThumb = gridImage && gridImage.src === persisted.thumbData && gridImage.src !== persisted.imageData;
-                const selected = pageController.getState().selectedId === avatarId && document.querySelector('.tm-avatar-page-card.selected');
+                const imageOnlyCard = Boolean(document.querySelector('.tm-avatar-page-card .tm-avatar-page-thumb')) &&
+                    !document.querySelector('.tm-avatar-page-name') && Boolean(document.querySelector('[data-avatar-action="menu"]'));
 
-                document.querySelector('[data-avatar-action="apply-user"]').click();
-                await frame(); await delay(20);
+                document.querySelector('[data-avatar-action="menu"]').click();
+                let userMenuAction = null;
+                for (let attempt = 0; attempt < 20 && !userMenuAction; attempt++) {
+                    await delay(10);
+                    userMenuAction = document.querySelector('[data-avatar-menu-action="apply-user"]');
+                }
+                const menuOpened = Boolean(userMenuAction);
+                if (!userMenuAction) throw new Error('avatar three-dot menu did not finish opening');
+                userMenuAction.click();
+                let toolbarHost = null;
+                for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
+                await frame();
                 const directUser = runtime.getState().state === 'editing' && managerClosed === 1;
+                toolbarHost = document.querySelector('#tm-avatar-editor-toolbar');
+                const toolbarRect = toolbarHost && toolbarHost.getBoundingClientRect();
+                const toolbarVisible = Boolean(toolbarRect && toolbarRect.width > 0 && toolbarRect.height > 0 && toolbarRect.top >= 0 && toolbarRect.bottom <= innerHeight);
+                const toolbarIsolated = Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="save"]'));
                 const userImages = [...document.querySelectorAll('.mes[is_user="true"] .avatar img')];
                 const highQualityApplied = userImages.every((image) => image.src === persisted.imageData);
                 const representative = document.querySelector('.tm-avatar-editor-target');
+                if (!representative) throw new Error('avatar editor did not expose a draggable target');
                 const repAvatar = representative.parentElement;
                 const repRect = repAvatar.getBoundingClientRect();
                 representative.dispatchEvent(new PointerEvent('pointerdown', { bubbles:true,cancelable:true,pointerId:7,pointerType:label.includes('mobile')?'touch':'mouse',button:0,clientX:10,clientY:10 }));
@@ -162,12 +186,25 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const responsive = responsiveTransforms[0] !== responsiveTransforms[1];
                 await runtime.clearBinding('user');
                 const restoredUser = userImages.every((image) => image.src.includes('R0lGOD'));
+                document.querySelector('[data-avatar-action="menu"]').click();
+                let deleteMenuAction = null;
+                for (let attempt = 0; attempt < 20 && !deleteMenuAction; attempt++) {
+                    await delay(10);
+                    deleteMenuAction = document.querySelector('[data-avatar-menu-action="delete"]');
+                }
+                if (!deleteMenuAction) throw new Error('avatar delete action was not moved into the three-dot menu');
+                deleteMenuAction.click();
+                for (let attempt = 0; attempt < 50; attempt++) {
+                    if (!(await store.getAsset(avatarId)) && pageController.getState().count === 0) break;
+                    await delay(10);
+                }
+                const menuDelete = !(await store.getAsset(avatarId)) && pageController.getState().count === 0;
                 const noOverflow = document.documentElement.scrollWidth <= window.innerWidth;
                 const cleanup = !document.querySelector('#tm-avatar-editor-toolbar') && !document.querySelector('#tm-avatar-editor-style');
                 pageController.unmount();
 
                 return {
-                    label, A_empty:empty, B_added:imported[0].ok, C_reload:reloadCount===1, D_selected:Boolean(selected),
+                    label, A_empty:empty, B_added:imported[0].ok, C_reload:reloadCount===1, D_menu:menuOpened&&imageOnlyCard,
                     E_userApply:directUser&&highQualityApplied, F_characterApply:saveResult.saved,
                     G_managerClose:managerClosed===1, H_drag:Math.abs(dragged.view.x-.25)<.001&&Math.abs(dragged.view.y-.125)<.001,
                     I_scale:dragged.view.scale===1.05, J_cancel:cancelledToRaw, K_save:Boolean(persistedBindingAfterSave&&persistedBindingAfterSave.avatarId===avatarId),
@@ -176,12 +213,12 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1,
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls,
-                    emptyLayout, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
+                    emptyLayout, toolbarVisible, toolbarIsolated, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','toolbarVisible','toolbarIsolated','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

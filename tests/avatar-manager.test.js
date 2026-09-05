@@ -209,7 +209,7 @@ function pageFixture(seed = [], bindings = []) {
 }
 test('11 Avatar Page mount and unmount own their loader and style', async () => { const f=pageFixture(); await f.page.mount(); assert.equal(f.page.getState().mounted,true); f.page.unmount(); assert.equal(f.page.getState().mounted,false); assert.ok(f.stats().disconnected >= 1); });
 test('12 avatar grid uses thumbnail lazy loader rather than main image', async () => { const f=pageFixture([asset()]); await f.page.mount(); assert.match(f.pageRoot.grid.innerHTML,/placeholder/); assert.doesNotMatch(f.pageRoot.grid.innerHTML,/main-a/); assert.ok(f.stats().observed >= 1); });
-test('13 successful import selects the new card', async () => { const f=pageFixture(); await f.page.mount(); await f.page.importFiles([{name:'new',type:'image/jpeg'}]); assert.equal(f.page.getState().selectedId,'new'); });
+test('13 successful import renders the new card without a selection footer', async () => { const f=pageFixture(); await f.page.mount(); await f.page.importFiles([{name:'new',type:'image/jpeg'}]); assert.equal(f.page.getState().count,1); assert.doesNotMatch(f.pageRoot.grid.innerHTML,/tm-avatar-page-actions/); });
 test('14 current character target uses stable character avatar key', () => assert.equal(modules.avatarRuntime.getContextInfo({characters:[{avatar:'x.png'}],characterId:0}).character.key,'character:x.png'));
 test('15 User target uses a stable non-DOM global key', () => assert.equal(modules.avatarRuntime.getContextInfo({name1:'U'}).user.key,'user:global'));
 test('16 group chat refuses a current-character target', () => assert.equal(modules.avatarRuntime.getContextInfo({groups:[{id:1}],groupId:1,characters:[{avatar:'x'}],characterId:0}).character,null));
@@ -258,6 +258,7 @@ test('42 Avatar Page has no duplicate title or hard-coded purple CTA', () => {
     assert.doesNotMatch(html, /<h2>头像管理<\/h2>/);
     assert.doesNotMatch(css, /#7c4dff|#9d6cff|tm-avatar-page-primary/);
     assert.match(html, /还没有头像|data-avatar-grid/);
+    assert.doesNotMatch(html, /data-avatar-action="pick"|data-avatar-actions/);
 });
 test('43 Avatar Page exposes a visible importing state until the pipeline settles', async () => {
     let finish;
@@ -283,19 +284,23 @@ test('43 Avatar Page exposes a visible importing state until the pipeline settle
     await pending;
     assert.equal(custom.getState().importing, false);
 });
-test('44 bottom actions stay hidden with no selection and no active binding', async () => {
-    const f = pageFixture();
+test('44 avatar cards are image-only and expose a three-dot menu instead of delete', async () => {
+    const f = pageFixture([asset('1000116691')]);
     await f.page.mount();
-    await Promise.resolve();
-    assert.equal(f.pageRoot.actions.hidden, true);
+    assert.match(f.pageRoot.grid.innerHTML, /data-avatar-action="menu"/);
+    assert.match(f.pageRoot.grid.innerHTML, /fa-ellipsis/);
+    assert.doesNotMatch(f.pageRoot.grid.innerHTML, /tm-avatar-page-name|fa-trash/);
 });
-test('45 an existing binding shows only its restore action when no avatar is selected', async () => {
-    const f = pageFixture([asset()], [{ themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: {} }]);
-    await f.page.mount();
-    await Promise.resolve();
-    assert.equal(f.pageRoot.actions.hidden, false);
-    assert.equal(f.pageRoot.buttons['apply-character'].hidden, true);
-    assert.equal(f.pageRoot.buttons['apply-user'].hidden, true);
-    assert.equal(f.pageRoot.buttons['restore-character'].hidden, true);
-    assert.equal(f.pageRoot.buttons['restore-user'].hidden, false);
+test('45 shared header owns the only Avatar add entry and remembers the last app page', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    assert.match(source, /id="tm-avatar-add"/);
+    assert.match(source, /avatarPageController\.pickFiles\(\)/);
+    assert.match(source, /defaultPage: lastAppPage/);
+    assert.match(source, /lastAppPage = appShellController\.getActivePage\(\)/);
+});
+test('46 editor toolbar uses a host-level important layout and Shadow DOM isolation when supported', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-runtime.js'), 'utf8');
+    assert.match(source, /attachShadow\(\{ mode: 'open' \}\)/);
+    assert.match(source, /position:fixed!important/);
+    assert.match(source, /visibility:visible!important/);
 });

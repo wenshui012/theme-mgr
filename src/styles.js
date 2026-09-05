@@ -53,6 +53,7 @@
             '.tm-app-placeholder h2{font-size:1.05em;margin:0;color:inherit;}',
             '.tm-app-placeholder p{font-size:.82em;line-height:1.55;margin:0;opacity:.58;}',
             '.tm-overlay:not([data-tm-active-page="themes"]) .tm-themes-only{display:none !important;}',
+            '.tm-overlay:not([data-tm-active-page="avatars"]) .tm-avatars-only{display:none !important;}',
             '.tm-overlay:not([data-tm-active-page="themes"]) .tm-bottombar{justify-content:flex-end;}',
             '#tm-bottom-settings{margin-left:auto;}',
             '.tm-auto-hide-head .tm-head{cursor:pointer;}',

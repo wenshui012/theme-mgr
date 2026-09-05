@@ -289,3 +289,16 @@ test('destroy removes component and temporary document listeners', () => {
     assert.equal((harness.doc.listeners.pointerdown || []).length, 0);
     assert.equal((harness.doc.listeners.keydown || []).length, 0);
 });
+
+test('a recreated shell can reopen on the last active avatar page', () => {
+    const first = createHarness();
+    first.controller.setActivePage('avatars', 'click');
+    const rememberedPage = first.controller.getActivePage();
+    first.controller.destroy();
+
+    const reopened = createHarness({ defaultPage: rememberedPage });
+    assert.equal(reopened.controller.getActivePage(), 'avatars');
+    assert.equal(reopened.label.textContent, '头像管理');
+    assert.equal(reopened.panels[0].hidden, true);
+    assert.equal(reopened.panels[1].hidden, false);
+});

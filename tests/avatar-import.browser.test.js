@@ -134,7 +134,7 @@ async function waitForIdle(page) {
         assert(persistence.cardCount === beforeInvalid, 'grid did not match the committed library');
         assert(persistence.names.includes('中文头像') && persistence.names.includes('无类型头像'), 'Chinese or empty-MIME file names were not preserved');
         assert(!persistence.duplicateTitle, 'Avatar Page repeated the shell title');
-        assert(persistence.visiblePickers === 1, 'Avatar Page rendered duplicate add controls');
+        assert(persistence.visiblePickers === 0, 'Avatar Page retained an in-page add control instead of the shared header entry');
         assert(pageErrors.length === 0, `unhandled browser errors: ${pageErrors.join('; ')}`);
 
         console.log(JSON.stringify({

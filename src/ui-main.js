@@ -64,6 +64,7 @@
     var avatarPageController = null;
     var appShellApi = null;
     var appShellController = null;
+    var lastAppPage = 'themes';
     var styleApi = null;
     var themeSchema = null;
     var themeApi = null;
@@ -290,6 +291,12 @@
                 imageTools: imageToolsApi,
                 getRoot: function () { return document.querySelector('[data-tm-page="avatars"]'); },
                 closeManager: closePopup,
+                createSheet: createSheet,
+                closeSheet: closeSheet,
+                onImportingChange: function (importing) {
+                    var button = document.getElementById('tm-avatar-add');
+                    if (button) button.disabled = importing;
+                },
                 toast: toast,
                 confirm: global.confirm.bind(global),
             });
@@ -3467,7 +3474,7 @@
         if (appShellController) appShellController.destroy();
         appShellController = appShellApi.createAppShell({
             root: overlay,
-            defaultPage: 'themes',
+            defaultPage: lastAppPage,
             pages: [
                 { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
                 { id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
@@ -3478,6 +3485,7 @@
             beforeChange: function () {
                 return !uiSheetsApi || uiSheetsApi.requestCloseAll(overlay, 'page-change');
             },
+            onChange: function (activePage) { lastAppPage = activePage; },
         });
         return appShellController;
     }
@@ -3555,7 +3563,7 @@
             },
         ];
         var shellOptions = {
-            defaultPage: 'themes',
+            defaultPage: lastAppPage,
             pages: appPages,
         };
         var pageSwitcherHtml = appShellApi.buildPageSwitcherHtml(shellOptions);
@@ -3567,6 +3575,7 @@
             '<div class="tm-head">' +
             pageSwitcherHtml +
             '<div class="tm-head-actions">' +
+            '<button class="tm-icon-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"><i class="fa-solid fa-plus"></i></button>' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
             '<button class="tm-icon-btn" id="tm-theme-toggle" title="切换明暗"><i class="fa-solid fa-circle-half-stroke"></i></button>' +
@@ -3584,7 +3593,11 @@
 
         document.body.appendChild(ov);
         createAppShellController(ov);
-        bindSeriesResizeListener();
+        if (lastAppPage === 'avatars') {
+            avatarPageController.mount().catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
+        } else if (lastAppPage === 'themes') {
+            bindSeriesResizeListener();
+        }
         syncManagerAppearance();
         bindManagerAppearanceObserver();
 
@@ -3618,6 +3631,9 @@
             e.preventDefault();
         });
         ov.querySelector('#tm-x').addEventListener('click', closePopup);
+        ov.querySelector('#tm-avatar-add').addEventListener('click', function () {
+            if (avatarPageController) avatarPageController.pickFiles();
+        });
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
             if (dd.followThemeAppearance === true) {
@@ -3736,6 +3752,7 @@
         seriesGridResizeObserver = null;
         if (seriesResizeTimer) clearTimeout(seriesResizeTimer);
         seriesResizeTimer = null;
+        if (appShellController) lastAppPage = appShellController.getActivePage();
         if (avatarPageController) avatarPageController.unmount();
         if (appShellController) appShellController.destroy();
         appShellController = null;
