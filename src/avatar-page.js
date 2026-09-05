@@ -160,11 +160,11 @@
         function beginEdit(kind, avatarId, sheet) {
             var caps = runtime.getCapabilities();
             var cap = kind === 'character' ? caps.character : caps.user;
-            if (!caps.themeKey || !cap.available) { setNotice(!caps.themeKey ? '无法识别当前美化' : cap.reason); return; }
+            if (!caps.themeKey || !cap.target) { setNotice(!caps.themeKey ? '头像存储暂不可用' : cap.reason); return; }
             if (sheet) closeSheet(sheet);
             closeManager();
             global.setTimeout(function () {
-                runtime.beginEdit({ target: cap.target, avatarId: avatarId }).catch(function (error) {
+                runtime.beginEdit({ kind: kind, avatarId: avatarId }).catch(function (error) {
                     toast(error.message || '无法启动头像调整', true);
                 });
             }, 32);
@@ -200,8 +200,8 @@
                 caps.user.target && caps.themeKey ? store.getBinding(caps.themeKey, caps.user.target.key) : null,
             ]).then(function (bindings) {
                 if (!mounted) return;
-                var characterDisabled = !caps.themeKey || !caps.character.available;
-                var userDisabled = !caps.themeKey || !caps.user.available;
+                var characterDisabled = !caps.themeKey || !caps.character.target;
+                var userDisabled = !caps.themeKey || !caps.user.target;
                 var sheet = createSheet([
                     '<div class="tm-ctx-theme-name"><i class="fa-solid fa-user" style="margin-right:6px;opacity:.5"></i>' + esc(asset.name) + '</div>',
                     menuItem('apply-character', 'fa-wand-magic-sparkles', '用于当前角色并调整', characterDisabled, caps.character.reason, false),

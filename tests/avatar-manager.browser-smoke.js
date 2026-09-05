@@ -127,19 +127,27 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const sharedThemePreview = Boolean(themePreviewImage && themePreviewImage.src === themePreviewSource);
                 document.querySelector('.tm-lightbox .tm-lb-close').click();
 
+                const avatarElements = [...document.querySelectorAll('#chat .avatar')];
+                const originalAvatarRects = avatarElements.map((element) => element.getBoundingClientRect.bind(element));
+                let offscreenScrolls = 0;
+                avatarElements.forEach((element) => {
+                    element.getBoundingClientRect = () => ({x:20,y:innerHeight+1000,left:20,top:innerHeight+1000,right:92,bottom:innerHeight+1072,width:72,height:72,toJSON(){return this;}});
+                    element.scrollIntoView = () => { offscreenScrolls++; };
+                });
                 document.querySelector('[data-avatar-action="menu"]').click();
                 let userMenuAction = null;
                 for (let attempt = 0; attempt < 20 && !userMenuAction; attempt++) {
                     await delay(10);
                     userMenuAction = document.querySelector('[data-avatar-menu-action="apply-user"]');
                 }
-                const menuOpened = Boolean(userMenuAction);
+                const menuOpened = Boolean(userMenuAction && userMenuAction.getAttribute('aria-disabled') !== 'true');
                 if (!userMenuAction) throw new Error('avatar three-dot menu did not finish opening');
                 userMenuAction.click();
                 let toolbarHost = null;
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
+                avatarElements.forEach((element, index) => { element.getBoundingClientRect = originalAvatarRects[index]; });
                 await frame();
-                const directUser = runtime.getState().state === 'editing' && managerClosed === 1;
+                const directUser = runtime.getState().state === 'editing' && managerClosed === 1 && offscreenScrolls === 1;
                 toolbarHost = document.querySelector('#tm-avatar-editor-toolbar');
                 const toolbarRect = toolbarHost && toolbarHost.getBoundingClientRect();
                 const viewportTop = visualViewport ? visualViewport.offsetTop : 0;
@@ -157,7 +165,10 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 sizeSlider.value = '1.25'; sizeSlider.dispatchEvent(new Event('input',{bubbles:true}));
                 horizontalSlider.value = '.3'; horizontalSlider.dispatchEvent(new Event('input',{bubbles:true}));
                 verticalSlider.value = '-.2'; verticalSlider.dispatchEvent(new Event('input',{bubbles:true}));
-                rotateSlider.value = '15'; rotateSlider.dispatchEvent(new Event('input',{bubbles:true}));
+                const inputStart = performance.now();
+                for (let angle = 1; angle <= 15; angle++) { rotateSlider.value = String(angle); rotateSlider.dispatchEvent(new Event('input',{bubbles:true})); }
+                const inputHandlingMs = Math.round((performance.now() - inputStart) * 100) / 100;
+                const responsiveInputs = inputHandlingMs < 80;
                 sliderRoot.querySelector('[data-step-view="scale"][data-step-direction="-1"]').click();
                 sliderRoot.querySelector('[data-step-view="x"][data-step-direction="1"]').click();
                 sliderRoot.querySelector('[data-step-view="y"][data-step-direction="-1"]').click();
@@ -165,6 +176,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const horizontalFlip = sliderRoot.querySelector('[data-action="flip-x"]');
                 const verticalFlip = sliderRoot.querySelector('[data-action="flip-y"]');
                 horizontalFlip.click(); verticalFlip.click();
+                await frame();
                 const sliderView = runtime.getState().view;
                 const userBoxAfterSliders = userImages.map((image) => image.getBoundingClientRect().toJSON());
                 const sliderControls = sliderView.scale === 1.2 && sliderView.x === .35 && sliderView.y === -.25 && sliderView.rotate === 16 &&
@@ -200,6 +212,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 }));
                 const cropBeforeScale = characterImages[0].style.getPropertyValue('object-view-box');
                 runtime.setScale(1.2);
+                await frame();
                 const scaledRects = characterImages.map((image) => Array.from(['left','top','width','height'],(key)=>Math.round(image.getBoundingClientRect()[key]*1000)/1000));
                 const cropAfterScale = characterImages[0].style.getPropertyValue('object-view-box');
                 const characterTilt = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot.querySelector('[data-view="rotate"]');
@@ -264,13 +277,13 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     O_clip:visualsPreserved, P_mask:visualsPreserved, Q_transform:visualsPreserved,
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
-                    restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls,
-                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
+                    restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
+                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

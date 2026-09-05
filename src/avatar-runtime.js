@@ -227,6 +227,7 @@
         var toolbar = null;
         var styleNode = null;
         var toolbarViewport = null;
+        var editorRenderFrame = null;
         var activePointer = null;
         var dragOrigin = null;
 
@@ -235,24 +236,32 @@
         }
         function currentThemeKey() { return themeKey(getThemeName()); }
         function targets() { return getContextInfo(contextSafe()); }
+        function ensureSourceCache(asset) {
+            var cached = rotatedSources.get(asset.id);
+            if (!cached || cached.imageData !== asset.imageData) {
+                var width = Math.max(1, Number(asset.width) || 1);
+                var height = Math.max(1, Number(asset.height) || 1);
+                var href = String(asset.imageData).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                cached = {
+                    imageData: asset.imageData,
+                    centerX: round(width / 2, 3),
+                    centerY: round(height / 2, 3),
+                    prefix: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '"><image href="' + href + '" width="' + width + '" height="' + height + '" transform="'),
+                    suffix: encodeURIComponent('"/></svg>'),
+                    sources: new Map(),
+                };
+                rotatedSources.set(asset.id, cached);
+            }
+            return cached;
+        }
         function sourceForView(asset, view) {
             view = normalizeView(view);
             if (!view.rotate && !view.flipX && !view.flipY) return asset.imageData;
             var signature = [view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1].join(':');
-            var cached = rotatedSources.get(asset.id);
-            if (!cached || cached.imageData !== asset.imageData) {
-                cached = { imageData: asset.imageData, sources: new Map() };
-                rotatedSources.set(asset.id, cached);
-            }
+            var cached = ensureSourceCache(asset);
             if (cached.sources.has(signature)) return cached.sources.get(signature);
-            var width = Math.max(1, Number(asset.width) || 1);
-            var height = Math.max(1, Number(asset.height) || 1);
-            var centerX = round(width / 2, 3);
-            var centerY = round(height / 2, 3);
-            var href = String(asset.imageData).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            var transform = 'translate(' + centerX + ' ' + centerY + ') rotate(' + view.rotate + ') scale(' + (view.flipX ? -1 : 1) + ' ' + (view.flipY ? -1 : 1) + ') translate(' + (-centerX) + ' ' + (-centerY) + ')';
-            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '"><image href="' + href + '" width="' + width + '" height="' + height + '" transform="' + transform + '"/></svg>';
-            var source = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+            var transform = 'translate(' + cached.centerX + ' ' + cached.centerY + ') rotate(' + view.rotate + ') scale(' + (view.flipX ? -1 : 1) + ' ' + (view.flipY ? -1 : 1) + ') translate(' + (-cached.centerX) + ' ' + (-cached.centerY) + ')';
+            var source = cached.prefix + encodeURIComponent(transform) + cached.suffix;
             if (cached.sources.size >= SOURCE_CACHE_LIMIT) cached.sources.delete(cached.sources.keys().next().value);
             cached.sources.set(signature, source);
             return source;
@@ -294,7 +303,8 @@
             var record = captureBaseline(image);
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
             setExactAttribute(image, 'srcset', null);
-            setExactAttribute(image, 'src', sourceForView(asset, view));
+            var source = sourceForView(asset, view);
+            if (getAttribute(image, 'src') !== source) setExactAttribute(image, 'src', source);
             if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
                 throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
             }
@@ -463,9 +473,10 @@
             if (kind === 'character' && info.isGroup) return { available: false, reason: '当前群聊暂不支持角色头像原位调整', target: null };
             if (!target) return { available: false, reason: kind === 'character' ? '无法识别当前角色' : '无法识别当前 User', target: null };
             var entries = messageImages(doc, target);
-            var representative = chooseRepresentative(entries, win);
-            if (!representative) return { available: false, reason: '当前聊天中没有可见的目标头像', target: target, count: entries.length };
-            return { available: true, reason: '', target: target, count: entries.length, representative: representative };
+            var visibleRepresentative = chooseRepresentative(entries, win);
+            var representative = visibleRepresentative || entries[entries.length - 1] || null;
+            if (!representative) return { available: false, reason: '当前聊天中还没有可调整的目标头像', target: target, count: 0 };
+            return { available: true, reason: '', target: target, count: entries.length, representative: representative, visible: !!visibleRepresentative };
         }
         function getCapabilities() { return { character: capability('character'), user: capability('user'), themeKey: DEFAULT_BINDING_KEY }; }
         function diagnosticsFor(entry, target) {
@@ -607,6 +618,7 @@
         function finishEditorUi() {
             unbindRepresentative();
             unbindToolbarViewport();
+            cancelEditorSync();
             if (toolbar) toolbar.removeEventListener('click', onToolbarClick);
             if (toolbar) toolbar.removeEventListener('input', onToolbarInput);
             if (toolbarHost && toolbarHost.parentNode) toolbarHost.parentNode.removeChild(toolbarHost);
@@ -635,6 +647,14 @@
                     representative: cap.representative,
                     diagnostics: null,
                 };
+                if (!rotatedSources.has(asset.id)) {
+                    win.setTimeout(function () {
+                        if (editor && editor.asset.id === asset.id) ensureSourceCache(asset);
+                    }, 0);
+                }
+                if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
+                    try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
+                }
                 observeChat();
                 ensureEditorUi();
                 try {
@@ -666,7 +686,8 @@
             if (!editor || activePointer == null || !dragOrigin || event.pointerId != null && event.pointerId !== activePointer) return;
             editor.view.x = round(dragOrigin.view.x + ((Number(event.clientX) || 0) - dragOrigin.clientX) / dragOrigin.width);
             editor.view.y = round(dragOrigin.view.y + ((Number(event.clientY) || 0) - dragOrigin.clientY) / dragOrigin.height);
-            syncEditorInstances();
+            updateToolbar();
+            scheduleEditorSync();
             event.preventDefault(); event.stopImmediatePropagation();
         }
         function onPointerUp(event) {
@@ -687,15 +708,29 @@
         function setScale(value) {
             if (!editor) return getState();
             editor.view.scale = clampScale(value);
-            syncEditorInstances(); updateToolbar();
+            scheduleEditorSync(); updateToolbar();
             return getState();
+        }
+        function cancelEditorSync() {
+            if (editorRenderFrame == null) return;
+            if (typeof win.cancelAnimationFrame === 'function') win.cancelAnimationFrame(editorRenderFrame);
+            else win.clearTimeout(editorRenderFrame);
+            editorRenderFrame = null;
+        }
+        function scheduleEditorSync() {
+            if (!editor || editorRenderFrame != null) return;
+            var render = function () {
+                editorRenderFrame = null;
+                if (editor) syncEditorInstances();
+            };
+            editorRenderFrame = typeof win.requestAnimationFrame === 'function' ? win.requestAnimationFrame(render) : win.setTimeout(render, 16);
         }
         function setViewValue(name, value) {
             if (!editor) return getState();
             if (name === 'scale') editor.view.scale = clampScale(value);
             else if (name === 'rotate') editor.view.rotate = round(Math.max(-180, Math.min(180, Number(value) || 0)), 2);
             else if (name === 'x' || name === 'y') editor.view[name] = round(Math.max(-1, Math.min(1, Number(value) || 0)));
-            syncEditorInstances(); updateToolbar();
+            scheduleEditorSync(); updateToolbar();
             return getState();
         }
         function stepView(name, direction) {
@@ -706,13 +741,13 @@
         function toggleFlip(name) {
             if (!editor || (name !== 'flipX' && name !== 'flipY')) return getState();
             editor.view[name] = !editor.view[name];
-            syncEditorInstances(); updateToolbar();
+            scheduleEditorSync(); updateToolbar();
             return getState();
         }
         function resetEdit() {
             if (!editor) return getState();
             editor.view = normalizeView(null);
-            syncEditorInstances(); updateToolbar();
+            scheduleEditorSync(); updateToolbar();
             return getState();
         }
         function cancelEdit(reason) {

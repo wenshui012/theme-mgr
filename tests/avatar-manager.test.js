@@ -318,6 +318,9 @@ test('46 editor toolbar uses a host-level important layout and Shadow DOM isolat
     assert.match(source, /data-action="flip-x"/);
     assert.match(source, /data-action="flip-y"/);
     assert.match(source, /--SmartThemeQuoteColor/);
+    assert.match(source, /scheduleEditorSync/);
+    assert.match(source, /requestAnimationFrame/);
+    assert.match(source, /ensureSourceCache/);
 });
 test('47 editing either target preserves the other target binding', async () => {
     const f = runtimeFixture({ seed: { assets: [asset('a'), asset('b')], bindings: [
