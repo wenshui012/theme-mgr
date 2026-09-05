@@ -385,7 +385,7 @@ test('51 native editor previews the original character image and Cancel restores
     await f.runtime.cancelEdit();
     assert.ok(f.chars.every((entry) => entry.image.getAttribute('src').includes('main-a')));
 });
-test('52 saving native character adjustment clears replacement binding and transforms content inside an SVG canvas', async () => {
+test('52 saving native character adjustment clears replacement binding and uses the shared in-frame crop path', async () => {
     const f = runtimeFixture({ seed: { assets: [asset()], bindings: [
         { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:char.png', avatarId: 'a', view: {} },
     ] } });
@@ -398,10 +398,9 @@ test('52 saving native character adjustment clears replacement binding and trans
     assert.equal(result.nativeView.view.scale, 1.35);
     assert.equal(stored.sourceKey, 'char.png');
     assert.equal(await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'character:char.png'), null);
-    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src').startsWith('data:image/svg+xml')));
-    assert.match(decodeURIComponent(f.chars[0].image.getAttribute('src')), /scale\(1\.35 1\.35\)/);
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src') === 'data:image/png;base64,AA=='));
+    assert.ok(f.chars.every((entry) => /object-view-box:inset\(12\.963% 12\.963% 12\.963% 12\.963%\)!important/.test(entry.image.getAttribute('style'))));
     assert.equal(f.chars[0].image.getAttribute('srcset'), null);
-    assert.doesNotMatch(f.chars[0].image.getAttribute('style'), /object-view-box/);
 });
 test('53 persisted native character adjustment reapplies after reload and across theme changes', async () => {
     const f = runtimeFixture({ seed: { nativeViews: [
@@ -409,10 +408,13 @@ test('53 persisted native character adjustment reapplies after reload and across
     ] } });
     await f.runtime.start();
     const first = f.chars[0].image.getAttribute('src');
-    assert.match(decodeURIComponent(first), /translate\(65 40\).*scale\(1\.2 1\.2\)/);
+    const firstCrop = f.chars[0].image.getAttribute('style');
+    assert.equal(first, 'data:image/png;base64,AA==');
+    assert.match(firstCrop, /object-view-box:inset\(16\.6667% 20\.8333% 0% -4\.1667%\)!important/);
     f.setTheme('B');
     await f.runtime.reconcile();
     assert.equal(f.chars[0].image.getAttribute('src'), first);
+    assert.match(f.chars[0].image.getAttribute('style'), /object-view-box:inset\(16\.6667% 20\.8333% 0% -4\.1667%\)!important/);
     assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
 });
 test('54 a different character avatar identity does not inherit the previous original-image adjustment', async () => {
@@ -442,7 +444,8 @@ test('56 User original avatar can be adjusted independently and restored exactly
     const record = await f.store.getNativeView('user:global');
     assert.equal(saved.nativeView.targetKey, 'user:global');
     assert.equal(record.sourceKey, 'raw-user.png');
-    assert.match(decodeURIComponent(f.user.image.getAttribute('src')), /scale\(1\.25 1\.25\)/);
+    assert.equal(f.user.image.getAttribute('src'), 'data:image/png;base64,AA==');
+    assert.match(f.user.image.getAttribute('style'), /object-view-box:inset\(10% 10% 10% 10%\)!important/);
     assert.equal(f.chars[0].image.getAttribute('src'), 'raw-char.png');
     await f.runtime.clearNativeView('user');
     assert.equal(await f.store.getNativeView('user:global'), null);
@@ -455,10 +458,21 @@ test('57 a saved character original-avatar adjustment can be cleared without tou
         { targetKey: 'character:char.png', sourceKey: 'char.png', view: { x: .2, scale: 1.4 } },
     ] } });
     await f.runtime.start();
-    assert.ok(f.chars[0].image.getAttribute('src').startsWith('data:image/svg+xml'));
+    assert.equal(f.chars[0].image.getAttribute('src'), 'data:image/png;base64,AA==');
+    assert.match(f.chars[0].image.getAttribute('style'), /object-view-box:/);
     await f.runtime.clearNativeView('character');
     assert.equal(await f.store.getNativeView('character:char.png'), null);
     assert.equal(f.chars[0].image.getAttribute('src'), 'raw-char.png');
     assert.equal(f.chars[0].image.getAttribute('style'), 'opacity:.99');
     assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+});
+test('58 native live adjustment updates only the representative until Save', async () => {
+    const f = runtimeFixture();
+    await f.runtime.start();
+    await f.runtime.beginNativeEdit('character');
+    f.runtime.setScale(1.4);
+    assert.equal(f.chars.filter((entry) => entry.image.getAttribute('src') === 'data:image/png;base64,AA==').length, 1);
+    assert.equal(f.chars.filter((entry) => entry.image.getAttribute('src') === 'raw-char.png').length, 1);
+    await f.runtime.saveEdit();
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src') === 'data:image/png;base64,AA=='));
 });

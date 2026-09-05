@@ -267,15 +267,15 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
                 const nativeEditorOpened = runtime.getState().state === 'editing' && runtime.getState().mode === 'native';
                 const nativeSourcesBeforeInput = characterImages.map((image) => image.src);
-                const nativePreviewFrame = document.querySelector('.tm-avatar-native-live-preview');
-                const nativePreviewImage = nativePreviewFrame && nativePreviewFrame.querySelector('img');
-                const nativePreviewOriginal = nativePreviewFrame && nativePreviewFrame.parentElement.querySelector(':scope > img');
-                const nativePreviewFrameStyle = nativePreviewFrame && getComputedStyle(nativePreviewFrame);
-                const nativePreviewOriginalStyle = nativePreviewOriginal && getComputedStyle(nativePreviewOriginal);
-                const nativeShapeDuringEdit = Boolean(nativePreviewFrame && nativePreviewImage && nativePreviewOriginal &&
-                    nativePreviewFrameStyle.borderRadius === nativePreviewOriginalStyle.borderRadius &&
-                    nativePreviewFrameStyle.clipPath === nativePreviewOriginalStyle.clipPath &&
-                    nativePreviewFrameStyle.maskImage === nativePreviewOriginalStyle.maskImage);
+                const nativePreviewImage = document.querySelector('.tm-avatar-editor-target');
+                const nativePreviewStyleBefore = nativePreviewImage && getComputedStyle(nativePreviewImage);
+                const nativePreviewVisualBefore = nativePreviewImage && {
+                    rect: nativePreviewImage.getBoundingClientRect().toJSON(),
+                    borderRadius: nativePreviewStyleBefore.borderRadius,
+                    clipPath: nativePreviewStyleBefore.clipPath,
+                    maskImage: nativePreviewStyleBefore.maskImage,
+                    transform: nativePreviewStyleBefore.transform,
+                };
                 const nativeRotateSlider = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot.querySelector('[data-view="rotate"]');
                 const nativeInputStart = performance.now();
                 for (let angle = 1; angle <= 60; angle++) { nativeRotateSlider.value = String(angle); nativeRotateSlider.dispatchEvent(new Event('input',{bubbles:true})); }
@@ -286,14 +286,24 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 await frame();
                 await nativePreviewImage.decode();
                 const nativePreviewView = runtime.getState().view;
-                const nativeLightweightPreview = characterImages.every((image,index) => image.src === nativeSourcesBeforeInput[index]) &&
-                    Boolean(nativePreviewImage.style.getPropertyValue('transform')) && nativePreviewView.scale === 1.3 &&
-                    document.querySelectorAll('.tm-avatar-native-live-preview').length === 1;
+                const nativePreviewStyleAfter = getComputedStyle(nativePreviewImage);
+                const nativePreviewVisualAfter = {
+                    rect: nativePreviewImage.getBoundingClientRect().toJSON(),
+                    borderRadius: nativePreviewStyleAfter.borderRadius,
+                    clipPath: nativePreviewStyleAfter.clipPath,
+                    maskImage: nativePreviewStyleAfter.maskImage,
+                    transform: nativePreviewStyleAfter.transform,
+                };
+                const nativeChangedSources = characterImages.filter((image,index) => image.src !== nativeSourcesBeforeInput[index]).length;
+                const nativeShapeDuringEdit = JSON.stringify(nativePreviewVisualBefore) === JSON.stringify(nativePreviewVisualAfter);
+                const nativeLightweightPreview = nativeChangedSources <= 1 && nativePreviewView.scale === 1.3 &&
+                    Boolean(nativePreviewImage.style.getPropertyValue('object-view-box')) &&
+                    !document.querySelector('.tm-avatar-native-live-preview');
                 const nativeSave = await runtime.saveEdit();
                 const persistedNativeView = await reloadedStore.getNativeView('character:char.png');
                 const nativeBindingCleared = !(await reloadedStore.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'character:char.png'));
-                const nativeContentMoved = characterImages.every((image) => image.src.startsWith('data:image/svg+xml') && image.naturalWidth > 0 && decodeURIComponent(image.src).includes('scale(1.3 1.3)'));
-                const nativeAvoidsObjectViewBox = characterImages.every((image) => !image.style.getPropertyValue('object-view-box'));
+                const nativeContentMoved = characterImages.every((image) => image.src.startsWith('data:image/') && image.naturalWidth > 0 && image.style.getPropertyValue('object-view-box'));
+                const nativeUsesSharedCrop = characterImages.every((image) => Boolean(image.style.getPropertyValue('object-view-box')));
                 const nativeShapePreserved = nativeShapeDuringEdit && getComputedStyle(characterImages[0]).clipPath === 'ellipse(44% 36%)';
 
                 const nativeMenu = await pageController.openNativeMenu();
@@ -305,19 +315,19 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
                 const nativeUserEditorOpened = runtime.getState().state === 'editing' && runtime.getState().mode === 'native' && runtime.getState().target.kind === 'user';
                 const nativeUserSourcesBeforeInput = userImages.map((image) => image.src);
+                const nativeUserPreviewImage = document.querySelector('.tm-avatar-editor-target');
                 const nativeUserX = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot.querySelector('[data-view="x"]');
                 nativeUserX.value = '.2'; nativeUserX.dispatchEvent(new Event('input',{bubbles:true}));
                 runtime.setScale(1.25);
                 await frame();
-                const nativeUserPreviewImage = document.querySelector('.tm-avatar-native-live-preview img');
                 const nativeUserPreviewView = runtime.getState().view;
+                const nativeUserChangedSources = userImages.filter((image,index) => image.src !== nativeUserSourcesBeforeInput[index]).length;
                 const nativeUserLightweightPreview = Boolean(nativeUserPreviewImage) &&
-                    userImages.every((image,index) => image.src === nativeUserSourcesBeforeInput[index]) &&
-                    Boolean(nativeUserPreviewImage.style.getPropertyValue('transform')) &&
+                    nativeUserChangedSources <= 1 && Boolean(nativeUserPreviewImage.style.getPropertyValue('object-view-box')) &&
                     nativeUserPreviewView.x === .2 && nativeUserPreviewView.scale === 1.25;
                 const nativeUserSave = await runtime.saveEdit();
                 const persistedUserNativeView = await reloadedStore.getNativeView('user:global');
-                const nativeUserMoved = runtime.getState().state === 'idle' && userImages.every((image) => image.src.startsWith('data:image/svg+xml') && decodeURIComponent(image.src).includes('scale(1.25 1.25)'));
+                const nativeUserMoved = runtime.getState().state === 'idle' && userImages.every((image) => image.src.startsWith('data:image/') && image.style.getPropertyValue('object-view-box'));
                 await runtime.clearNativeView('user');
                 const nativeUserRestored = userImages.every((image,index) => image.getAttribute('src') === originalUserSources[index].src && image.getAttribute('srcset') === originalUserSources[index].srcset);
 
@@ -326,9 +336,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const responsiveCrops = userImages.map((image) => image.style.getPropertyValue('object-view-box'));
                 const responsive = responsiveCrops.every((value) => value && value === responsiveCrops[0]);
                 await runtime.beginEdit({ kind:'user', avatarId });
-                const otherTargetSurvivesEdit = characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
+                const otherTargetSurvivesEdit = characterImages.every((image) => image.src.startsWith('data:image/') && image.style.getPropertyValue('object-view-box'));
                 await runtime.cancelEdit();
-                const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image) => image.src.startsWith('data:image/svg+xml')) && userImages.every((image) => image.src === persisted.imageData);
+                const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image) => image.src.startsWith('data:image/') && image.style.getPropertyValue('object-view-box')) && userImages.every((image) => image.src === persisted.imageData);
                 await runtime.clearBinding('user');
                 const restoredUser = userImages.every((image) => image.src.includes('R0lGOD'));
                 const resetNativeSheet = await pageController.openNativeMenu();
@@ -367,14 +377,14 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
                     emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete, nativeInputHandlingMs, nativeResponsiveInputs,
-                    nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeAvoidsObjectViewBox, nativeShapePreserved,
+                    nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
                     hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeAvoidsObjectViewBox','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

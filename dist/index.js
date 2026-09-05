@@ -7995,7 +7995,7 @@
 })(window);
 /* END MODULE 16/24: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:82393b413e3b5cc01ed4658dd531ebc8ecf12dda1603fe34a09881dec67160e3 */
+/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:6f41a1ccacc849c7f31b011ffc79816e896df54e1e4f367407291772990bc048 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -8008,7 +8008,6 @@
     var STYLE_ID = 'tm-avatar-editor-style';
     var TARGET_CLASS = 'tm-avatar-editor-target';
     var AVATAR_CLASS = 'tm-avatar-editor-selected';
-    var NATIVE_PREVIEW_CLASS = 'tm-avatar-native-live-preview';
     var DEFAULT_BINDING_KEY = 'avatar-default';
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
@@ -8284,22 +8283,6 @@
             cached.sources.set(signature, source);
             return source;
         }
-        function sourceForNativeView(asset, view) {
-            view = normalizeView(view);
-            if (!view.x && !view.y && view.scale === 1 && !view.rotate && !view.flipX && !view.flipY) return asset.imageData;
-            var signature = ['native', view.x, view.y, view.scale, view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1].join(':');
-            var cached = ensureSourceCache(asset);
-            if (cached.sources.has(signature)) return cached.sources.get(signature);
-            var translateX = round(cached.centerX + view.x * cached.centerX * 2, 3);
-            var translateY = round(cached.centerY + view.y * cached.centerY * 2, 3);
-            var scaleX = round(view.scale * (view.flipX ? -1 : 1), 3);
-            var scaleY = round(view.scale * (view.flipY ? -1 : 1), 3);
-            var transform = 'translate(' + translateX + ' ' + translateY + ') rotate(' + view.rotate + ') scale(' + scaleX + ' ' + scaleY + ') translate(' + (-cached.centerX) + ' ' + (-cached.centerY) + ')';
-            var source = cached.prefix + encodeURIComponent(transform) + cached.suffix;
-            if (cached.sources.size >= SOURCE_CACHE_LIMIT) cached.sources.delete(cached.sources.keys().next().value);
-            cached.sources.set(signature, source);
-            return source;
-        }
         function resolvedImageSource(image, attributeSource) {
             return clean(image && (image.currentSrc || image.src)) || clean(attributeSource);
         }
@@ -8395,108 +8378,30 @@
             var normalized = normalizeView(view);
             var nativeAsset = nativeAssetForEntry(entry, target);
             var transformsSource = Boolean(normalized.x || normalized.y || normalized.scale !== 1 || normalized.rotate || normalized.flipX || normalized.flipY);
-            var source = transformsSource ? sourceForNativeView(embeddedAsset, normalized) : nativeAsset.imageData;
-
-            // Restore the host image before every render so its theme-defined frame can
-            // be measured intact. A transformed source changes only pixels inside that
-            // fixed frame; a neutral view keeps the original src/srcset byte-for-byte.
-            setExactAttribute(image, 'src', record.src);
-            setExactAttribute(image, 'srcset', record.srcset);
-            setExactAttribute(image, 'style', record.style);
-            if (transformsSource) {
-                var computed = win.getComputedStyle(image);
-                var frame = {
-                    objectFit: computed.objectFit,
-                    objectPosition: computed.objectPosition,
-                    borderRadius: computed.borderRadius,
-                    clipPath: computed.clipPath,
-                    webkitMaskImage: computed.webkitMaskImage,
-                    maskImage: computed.maskImage,
-                };
-                setExactAttribute(image, 'srcset', null);
-                setExactAttribute(image, 'src', source);
-                if (frame.objectFit) setImportantStyle(image, 'object-fit', frame.objectFit);
-                if (frame.objectPosition) setImportantStyle(image, 'object-position', frame.objectPosition);
-                if (frame.borderRadius) setImportantStyle(image, 'border-radius', frame.borderRadius);
-                if (frame.clipPath && frame.clipPath !== 'none') setImportantStyle(image, 'clip-path', frame.clipPath);
-                if (frame.webkitMaskImage && frame.webkitMaskImage !== 'none') setImportantStyle(image, '-webkit-mask-image', frame.webkitMaskImage);
-                if (frame.maskImage && frame.maskImage !== 'none') setImportantStyle(image, 'mask-image', frame.maskImage);
+            if (!transformsSource) {
+                setExactAttribute(image, 'src', record.src || nativeAsset.imageData);
+                setExactAttribute(image, 'srcset', record.srcset);
+                setExactAttribute(image, 'style', record.style);
+                record.targetKey = target && target.key || '';
+                activeImages.add(image);
+                return;
             }
-            record.targetKey = target && target.key || '';
-            activeImages.add(image);
-        }
-        function nativePreviewTransform(view) {
-            view = normalizeView(view);
-            return 'translate(' + round(view.x * 100, 3) + '%, ' + round(view.y * 100, 3) + '%) rotate(' + view.rotate + 'deg) scale(' + round(view.scale * (view.flipX ? -1 : 1), 3) + ', ' + round(view.scale * (view.flipY ? -1 : 1), 3) + ')';
-        }
-        function copyPreviewFrameStyle(element, name, value) {
-            value = clean(value);
-            if (!value || value === 'none' || value === 'normal') return;
-            setImportantStyle(element, name, value);
-        }
-        function updateNativePreview() {
-            if (!editor || editor.mode !== 'native' || !editor.nativePreview) return false;
-            setImportantStyle(editor.nativePreview.image, 'transform', nativePreviewTransform(editor.view));
-            return true;
-        }
-        function createNativePreview() {
-            if (!editor || editor.mode !== 'native' || editor.nativePreview) return false;
-            var entry = editor.representative;
-            var host = entry && entry.avatar;
-            var original = entry && entry.image;
-            if (!host || !original || typeof host.appendChild !== 'function') return false;
-
-            var imageStyle = win.getComputedStyle(original);
-            var hostStyle = win.getComputedStyle(host);
-            var imageRect = rectOf(original);
-            var hostRect = rectOf(host);
-            var frame = doc.createElement('div');
-            var content = doc.createElement('img');
-            frame.setAttribute('class', NATIVE_PREVIEW_CLASS);
-            frame.setAttribute('aria-hidden', 'true');
-            frame.setAttribute('style', 'position:absolute!important;pointer-events:none!important;overflow:hidden!important;box-sizing:border-box!important;z-index:2!important');
-            if (hostRect.width > 0 && hostRect.height > 0 && imageRect.width > 0 && imageRect.height > 0) {
-                setImportantStyle(frame, 'left', round(imageRect.left - hostRect.left, 3) + 'px');
-                setImportantStyle(frame, 'top', round(imageRect.top - hostRect.top, 3) + 'px');
-                setImportantStyle(frame, 'width', round(imageRect.width, 3) + 'px');
-                setImportantStyle(frame, 'height', round(imageRect.height, 3) + 'px');
-            } else {
-                setImportantStyle(frame, 'inset', '0');
-            }
-            copyPreviewFrameStyle(frame, 'border-radius', imageStyle.borderRadius);
-            copyPreviewFrameStyle(frame, 'clip-path', imageStyle.clipPath);
-            copyPreviewFrameStyle(frame, '-webkit-mask-image', imageStyle.webkitMaskImage);
-            copyPreviewFrameStyle(frame, 'mask-image', imageStyle.maskImage);
-            copyPreviewFrameStyle(frame, 'filter', imageStyle.filter);
-
-            content.setAttribute('src', editor.asset.imageData);
-            content.setAttribute('draggable', 'false');
-            content.setAttribute('style', 'display:block!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;clip-path:none!important;-webkit-mask-image:none!important;mask-image:none!important;object-fit:' + (clean(imageStyle.objectFit) || 'cover') + '!important;object-position:' + (clean(imageStyle.objectPosition) || '50% 50%') + '!important;transform-origin:50% 50%!important;will-change:transform!important;pointer-events:none!important');
-            frame.appendChild(content);
-
-            var preview = {
-                frame: frame,
-                image: content,
-                host: host,
-                original: original,
-                hostStyle: getAttribute(host, 'style'),
-                originalStyle: getAttribute(original, 'style'),
-                knownImages: new Set(messageImages(doc, editor.target).map(function (item) { return item.image; })),
+            var computed = win.getComputedStyle(image);
+            var frame = {
+                objectFit: computed.objectFit,
+                objectPosition: computed.objectPosition,
+                borderRadius: computed.borderRadius,
+                clipPath: computed.clipPath,
+                webkitMaskImage: computed.webkitMaskImage,
+                maskImage: computed.maskImage,
             };
-            editor.nativePreview = preview;
-            if (!clean(hostStyle && hostStyle.position) || clean(hostStyle.position) === 'static') setImportantStyle(host, 'position', 'relative');
-            setImportantStyle(original, 'opacity', '0');
-            host.appendChild(frame);
-            updateNativePreview();
-            return true;
-        }
-        function removeNativePreview() {
-            if (!editor || !editor.nativePreview) return;
-            var preview = editor.nativePreview;
-            if (preview.frame && preview.frame.parentNode) preview.frame.parentNode.removeChild(preview.frame);
-            setExactAttribute(preview.host, 'style', preview.hostStyle);
-            setExactAttribute(preview.original, 'style', preview.originalStyle);
-            editor.nativePreview = null;
+            applyToEntry(entry, embeddedAsset, normalized, target && target.key);
+            if (frame.objectFit) setImportantStyle(image, 'object-fit', frame.objectFit);
+            if (frame.objectPosition) setImportantStyle(image, 'object-position', frame.objectPosition);
+            if (frame.borderRadius) setImportantStyle(image, 'border-radius', frame.borderRadius);
+            if (frame.clipPath && frame.clipPath !== 'none') setImportantStyle(image, 'clip-path', frame.clipPath);
+            if (frame.webkitMaskImage && frame.webkitMaskImage !== 'none') setImportantStyle(image, '-webkit-mask-image', frame.webkitMaskImage);
+            if (frame.maskImage && frame.maskImage !== 'none') setImportantStyle(image, 'mask-image', frame.maskImage);
         }
         function getAsset(id) {
             if (assetCache.has(id)) return Promise.resolve(assetCache.get(id));
@@ -8591,7 +8496,7 @@
         function syncEditorInstances() {
             if (!editor) return false;
             var entries = messageImages(doc, editor.target);
-            var lightweightNative = editor.mode === 'native' && editor.nativePreview;
+            var lightweightNative = editor.mode === 'native' && editor.nativeKnownImages;
             if (!editor.representative || editor.representative.image.isConnected === false) {
                 cancelEdit('target-disconnected');
                 return false;
@@ -8611,10 +8516,10 @@
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
             entries.forEach(function (entry) {
                 if (lightweightNative) {
-                    if (entry.image === editor.representative.image) updateNativePreview();
-                    else if (!editor.nativePreview.knownImages.has(entry.image)) {
+                    if (entry.image === editor.representative.image) applyNativeToEntry(entry, editor.view, editor.target, editor.asset);
+                    else if (!editor.nativeKnownImages.has(entry.image)) {
                         applyNativeToEntry(entry, editor.view, editor.target, editor.asset);
-                        editor.nativePreview.knownImages.add(entry.image);
+                        editor.nativeKnownImages.add(entry.image);
                     }
                     return;
                 }
@@ -8730,7 +8635,7 @@
                 avatarOverflow: avatarStyle.overflow,
                 parentClips: clips(avatarStyle),
                 themeInlineStyleBaseline: (baselines.get(entry.image) || {}).style || null,
-                strategy: editor && editor.mode === 'native' ? 'css-live-preview-svg-persisted' : 'css-object-view-box-content-crop',
+                strategy: 'css-object-view-box-content-crop',
                 coordinateModel: 'normalized-avatar-content-transform',
                 objectViewBox: entry.image.style && entry.image.style.getPropertyValue ? entry.image.style.getPropertyValue('object-view-box') : '',
             };
@@ -8844,7 +8749,6 @@
             if (editor.representative.avatar && (!record || !record.avatarClass)) editor.representative.avatar.classList.remove(AVATAR_CLASS);
         }
         function finishEditorUi() {
-            removeNativePreview();
             unbindRepresentative();
             unbindToolbarViewport();
             cancelEditorSync();
@@ -8928,7 +8832,7 @@
                 ensureEditorUi();
                 try {
                     syncEditorInstances();
-                    createNativePreview();
+                    editor.nativeKnownImages = new Set(messageImages(doc, editor.target).map(function (item) { return item.image; }));
                     bindRepresentative();
                     editor.diagnostics = diagnosticsFor(editor.representative, editor.target);
                     updateToolbar();
@@ -8991,7 +8895,7 @@
             if (!editor || editorRenderFrame != null) return;
             var render = function () {
                 editorRenderFrame = null;
-                if (editor && editor.mode === 'native' && editor.nativePreview) updateNativePreview();
+                if (editor && editor.mode === 'native') applyNativeToEntry(editor.representative, editor.view, editor.target, editor.asset);
                 else if (editor) syncEditorInstances();
             };
             editorRenderFrame = typeof win.requestAnimationFrame === 'function' ? win.requestAnimationFrame(render) : win.setTimeout(render, 16);
