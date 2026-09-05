@@ -3,7 +3,7 @@
     var DB_NAME = 'theme_mgr_avatar_db';
     var DB_VERSION = 1;
     var LIBRARY_VERSION = 1;
-    var BINDINGS_VERSION = 1;
+    var BINDINGS_VERSION = 2;
     var STORES = { assets: 'assets', main: 'main-images', thumbs: 'thumbnails', bindings: 'bindings', meta: 'meta' };
 
     function clone(value) {
@@ -40,6 +40,7 @@
             x: Math.max(-20, Math.min(20, finite(view.x, 0))),
             y: Math.max(-20, Math.min(20, finite(view.y, 0))),
             scale: Math.max(0.5, Math.min(3, finite(view.scale, 1))),
+            rotate: Math.max(-180, Math.min(180, finite(view.rotate, 0))),
         };
     }
 

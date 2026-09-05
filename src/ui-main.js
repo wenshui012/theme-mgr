@@ -293,6 +293,7 @@
                 closeManager: closePopup,
                 createSheet: createSheet,
                 closeSheet: closeSheet,
+                openImageLightbox: uiSheetsApi.openImageLightbox,
                 onImportingChange: function (importing) {
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = importing;

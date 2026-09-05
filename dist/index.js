@@ -7476,13 +7476,13 @@
 })(window);
 /* END MODULE 14/24: src/image-loader.js */
 
-/* BEGIN MODULE 15/24: src/avatar-storage.js | sha256:a3764f9918e70421dedb16d96a8d4dc67a286638d25beacc93858917025c8534 */
+/* BEGIN MODULE 15/24: src/avatar-storage.js | sha256:8dc69d9b4098c0a418b77963d729f82f3748325f82f1bd426026c85c6a8640e0 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var DB_NAME = 'theme_mgr_avatar_db';
     var DB_VERSION = 1;
     var LIBRARY_VERSION = 1;
-    var BINDINGS_VERSION = 1;
+    var BINDINGS_VERSION = 2;
     var STORES = { assets: 'assets', main: 'main-images', thumbs: 'thumbnails', bindings: 'bindings', meta: 'meta' };
 
     function clone(value) {
@@ -7519,6 +7519,7 @@
             x: Math.max(-20, Math.min(20, finite(view.x, 0))),
             y: Math.max(-20, Math.min(20, finite(view.y, 0))),
             scale: Math.max(0.5, Math.min(3, finite(view.scale, 1))),
+            rotate: Math.max(-180, Math.min(180, finite(view.rotate, 0))),
         };
     }
 
@@ -7935,7 +7936,7 @@
 })(window);
 /* END MODULE 16/24: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:048d0706945fc9146dbb0a40b6c5524ef09ab26549fd13598304950b679526c2 */
+/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:149bbd2a59044eaeac593fd8106f668c6b584ed7b9ceebebb526d93bc2db68d0 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -7945,6 +7946,7 @@
     var STYLE_ID = 'tm-avatar-editor-style';
     var TARGET_CLASS = 'tm-avatar-editor-target';
     var AVATAR_CLASS = 'tm-avatar-editor-selected';
+    var DEFAULT_BINDING_KEY = 'avatar-default';
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -7963,6 +7965,7 @@
             x: round(Number.isFinite(Number(view.x)) ? Number(view.x) : 0),
             y: round(Number.isFinite(Number(view.y)) ? Number(view.y) : 0),
             scale: clampScale(view.scale),
+            rotate: round(Math.max(-180, Math.min(180, Number.isFinite(Number(view.rotate)) ? Number(view.rotate) : 0)), 2),
         };
     }
     function getAttribute(element, name) {
@@ -8143,6 +8146,8 @@
         var activeImages = new Set();
         var assetCache = new Map();
         var bindingPlans = [];
+        var promotedBindings = new Map();
+        var rotatedSources = new Map();
         var listeners = [];
         var chatObserver = null;
         var observedChat = null;
@@ -8164,6 +8169,19 @@
         }
         function currentThemeKey() { return themeKey(getThemeName()); }
         function targets() { return getContextInfo(contextSafe()); }
+        function sourceForView(asset, view) {
+            view = normalizeView(view);
+            if (!view.rotate) return asset.imageData;
+            var cached = rotatedSources.get(asset.id);
+            if (cached && cached.rotate === view.rotate && cached.imageData === asset.imageData) return cached.source;
+            var width = Math.max(1, Number(asset.width) || 1);
+            var height = Math.max(1, Number(asset.height) || 1);
+            var href = String(asset.imageData).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '"><image href="' + href + '" width="' + width + '" height="' + height + '" transform="rotate(' + view.rotate + ' ' + round(width / 2, 3) + ' ' + round(height / 2, 3) + ')"/></svg>';
+            var source = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+            rotatedSources.set(asset.id, { rotate: view.rotate, imageData: asset.imageData, source: source });
+            return source;
+        }
         function captureBaseline(image) {
             var record = baselines.get(image);
             if (record) return record;
@@ -8201,7 +8219,7 @@
             var record = captureBaseline(image);
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
             setExactAttribute(image, 'srcset', null);
-            setExactAttribute(image, 'src', asset.imageData);
+            setExactAttribute(image, 'src', sourceForView(asset, view));
             if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
                 throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
             }
@@ -8216,6 +8234,30 @@
                 return asset;
             });
         }
+        function getBindingForTarget(target) {
+            return store.getBinding(DEFAULT_BINDING_KEY, target.key).then(function (binding) {
+                if (binding) {
+                    promotedBindings.set(target.key, binding);
+                    return binding;
+                }
+                if (promotedBindings.has(target.key)) return promotedBindings.get(target.key);
+                var legacyKey = currentThemeKey();
+                if (!legacyKey) return null;
+                return store.getBinding(legacyKey, target.key).then(function (legacy) {
+                    if (!legacy) return null;
+                    var promoted = Object.assign({}, legacy, { themeKey: DEFAULT_BINDING_KEY });
+                    delete promoted.id;
+                    return store.putBinding(promoted).then(function (saved) {
+                        promotedBindings.set(target.key, saved);
+                        return saved;
+                    }).catch(function (error) {
+                        onError(error);
+                        promotedBindings.set(target.key, promoted);
+                        return promoted;
+                    });
+                });
+            });
+        }
         function desiredForBinding(target, binding, asset) {
             return messageImages(doc, target).map(function (entry) { return { entry: entry, binding: binding, asset: asset }; });
         }
@@ -8225,18 +8267,17 @@
             items.forEach(function (item) { applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey); });
         }
         function resolveRuntimeDesired() {
-            var key = currentThemeKey();
             var info = targets();
-            if (!key) return Promise.resolve({ items: [], plans: [], hasBinding: false });
             var targetList = [info.character, info.user].filter(Boolean);
             var foundBinding = false;
             return Promise.all(targetList.map(function (target) {
-                return store.getBinding(key, target.key).then(function (binding) {
+                return getBindingForTarget(target).then(function (binding) {
                     if (!binding) return null;
                     foundBinding = true;
                     return getAsset(binding.avatarId).then(function (asset) {
                         if (!asset) {
-                            return store.deleteBinding(key, target.key).then(function () { return null; });
+                            promotedBindings.delete(target.key);
+                            return store.deleteBinding(DEFAULT_BINDING_KEY, target.key).then(function () { return null; });
                         }
                         return { target: target, binding: binding, asset: asset };
                     });
@@ -8351,7 +8392,7 @@
             if (!representative) return { available: false, reason: '当前聊天中没有可见的目标头像', target: target, count: entries.length };
             return { available: true, reason: '', target: target, count: entries.length, representative: representative };
         }
-        function getCapabilities() { return { character: capability('character'), user: capability('user'), themeKey: currentThemeKey() }; }
+        function getCapabilities() { return { character: capability('character'), user: capability('user'), themeKey: DEFAULT_BINDING_KEY }; }
         function diagnosticsFor(entry, target) {
             var imageStyle = win.getComputedStyle(entry.image);
             var avatarStyle = win.getComputedStyle(entry.avatar);
@@ -8429,16 +8470,23 @@
             var toolbarRoot = typeof toolbarHost.attachShadow === 'function' ? toolbarHost.attachShadow({ mode: 'open' }) : toolbarHost;
             var toolbarStyle = doc.createElement('style');
             toolbarStyle.textContent = [
-                '.tm-avatar-editor-bar{display:flex;align-items:center;gap:7px;max-width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:12px;background:rgba(22,22,28,.95);color:#fff;font:13px/1.2 system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
+                '.tm-avatar-editor-bar{display:flex;flex-direction:column;align-items:center;gap:7px;max-width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:12px;background:rgba(22,22,28,.95);color:#fff;font:13px/1.2 system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
+                '.tm-avatar-editor-main{display:flex;align-items:center;justify-content:center;gap:7px}.tm-avatar-editor-sliders{display:grid;grid-template-columns:auto minmax(110px,220px) 42px;align-items:center;gap:3px 7px;width:100%}.tm-avatar-editor-sliders label{display:contents}.tm-avatar-editor-sliders span{white-space:nowrap;opacity:.78}.tm-avatar-editor-sliders output{text-align:right;font-variant-numeric:tabular-nums;opacity:.72}.tm-avatar-editor-sliders input{width:100%;min-width:0;margin:0;accent-color:#d8a8ff}',
                 'button{appearance:none;border:1px solid rgba(255,255,255,.24);border-radius:7px;background:rgba(255,255,255,.1);color:inherit;min-width:34px;min-height:34px;padding:6px 9px;font:inherit;white-space:nowrap}',
                 '.tm-avatar-editor-scale{min-width:48px;text-align:center;font-variant-numeric:tabular-nums}',
-                '@media(max-width:430px){.tm-avatar-editor-bar{gap:5px;padding:7px 8px}.tm-avatar-editor-title{display:none}button{padding:5px 7px}}',
+                '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:7px 8px}.tm-avatar-editor-main{gap:5px}.tm-avatar-editor-title{display:none}button{padding:5px 7px}.tm-avatar-editor-sliders{grid-template-columns:28px minmax(120px,1fr) 38px;font-size:12px}}',
             ].join('');
             toolbarRoot.appendChild(toolbarStyle);
             toolbar = doc.createElement('div');
             toolbar.className = 'tm-avatar-editor-bar';
-            toolbar.innerHTML = '<span class="tm-avatar-editor-title">头像调整</span><button type="button" data-action="down">−</button><span class="tm-avatar-editor-scale">100%</span><button type="button" data-action="up">+</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" data-action="save">保存</button>';
+            toolbar.innerHTML = '<div class="tm-avatar-editor-main"><span class="tm-avatar-editor-title">头像调整</span><button type="button" data-action="down">−</button><span class="tm-avatar-editor-scale">100%</span><button type="button" data-action="up">+</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" data-action="save">保存</button></div>' +
+                '<div class="tm-avatar-editor-sliders">' +
+                '<label><span>左右</span><input type="range" min="-1" max="1" step="0.01" value="0" data-view="x"><output data-view-output="x">0%</output></label>' +
+                '<label><span>上下</span><input type="range" min="-1" max="1" step="0.01" value="0" data-view="y"><output data-view-output="y">0%</output></label>' +
+                '<label><span>倾斜</span><input type="range" min="-180" max="180" step="1" value="0" data-view="rotate"><output data-view-output="rotate">0°</output></label>' +
+                '</div>';
             toolbar.addEventListener('click', onToolbarClick);
+            toolbar.addEventListener('input', onToolbarInput);
             toolbarRoot.appendChild(toolbar);
             doc.body.appendChild(toolbarHost);
             bindToolbarViewport();
@@ -8449,6 +8497,12 @@
             if (!toolbar || !editor) return;
             var scale = toolbar.querySelector('.tm-avatar-editor-scale');
             if (scale) scale.textContent = Math.round(editor.view.scale * 100) + '%';
+            ['x', 'y', 'rotate'].forEach(function (name) {
+                var input = toolbar.querySelector('[data-view="' + name + '"]');
+                var output = toolbar.querySelector('[data-view-output="' + name + '"]');
+                if (input) input.value = editor.view[name];
+                if (output) output.textContent = name === 'rotate' ? Math.round(editor.view.rotate) + '°' : Math.round(editor.view[name] * 100) + '%';
+            });
         }
         function bindRepresentative() {
             if (!editor || !editor.representative) return;
@@ -8472,6 +8526,7 @@
             unbindRepresentative();
             unbindToolbarViewport();
             if (toolbar) toolbar.removeEventListener('click', onToolbarClick);
+            if (toolbar) toolbar.removeEventListener('input', onToolbarInput);
             if (toolbarHost && toolbarHost.parentNode) toolbarHost.parentNode.removeChild(toolbarHost);
             if (styleNode && styleNode.parentNode) styleNode.parentNode.removeChild(styleNode);
             toolbarHost = null;
@@ -8483,10 +8538,9 @@
             if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
             var kind = input.target && input.target.kind || input.kind;
             var cap = capability(kind);
-            var key = currentThemeKey();
-            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            var key = DEFAULT_BINDING_KEY;
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
-            return Promise.all([getAsset(input.avatarId), store.getBinding(key, cap.target.key)]).then(function (parts) {
+            return Promise.all([getAsset(input.avatarId), getBindingForTarget(cap.target)]).then(function (parts) {
                 var asset = parts[0];
                 if (!asset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
                 editor = {
@@ -8580,6 +8634,7 @@
             };
             var diagnostics = clone(editor.diagnostics);
             return store.putBinding(binding).then(function (saved) {
+                promotedBindings.set(binding.targetKey, saved);
                 finishEditorUi();
                 editor = null;
                 sequence += 1;
@@ -8599,17 +8654,37 @@
             else if (action === 'cancel') cancelEdit();
             else if (action === 'save') saveEdit().catch(onError);
         }
+        function onToolbarInput(event) {
+            if (!editor) return;
+            var input = event.target && event.target.closest ? event.target.closest('[data-view]') : null;
+            if (!input || !toolbar.contains(input)) return;
+            var name = input.getAttribute('data-view');
+            var value = Number(input.value);
+            if (name === 'rotate') editor.view.rotate = round(Math.max(-180, Math.min(180, value)), 2);
+            else if (name === 'x' || name === 'y') editor.view[name] = round(Math.max(-1, Math.min(1, value)));
+            syncEditorInstances();
+            updateToolbar();
+        }
         function clearBinding(kind) {
             var cap = capability(kind);
-            var key = currentThemeKey();
-            if (!cap.target || !key) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
+            if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('binding-cleared').then(function () { return clearBinding(kind); });
-            return store.deleteBinding(key, cap.target.key).then(reconcile);
+            promotedBindings.delete(cap.target.key);
+            return store.listBindings().then(function (bindings) {
+                var targetsToDelete = (bindings || []).filter(function (binding) {
+                    return binding.targetKey === cap.target.key && (binding.themeKey === DEFAULT_BINDING_KEY || /^theme-name:/.test(binding.themeKey));
+                });
+                if (!targetsToDelete.some(function (binding) { return binding.themeKey === DEFAULT_BINDING_KEY; })) {
+                    targetsToDelete.push({ themeKey: DEFAULT_BINDING_KEY, targetKey: cap.target.key });
+                }
+                return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(binding.themeKey, binding.targetKey); }));
+            }).then(reconcile);
         }
         function deleteAsset(id) {
             var cancel = editor && editor.avatarId === id ? cancelEdit('avatar-deleted') : Promise.resolve();
             return cancel.then(function () { return store.deleteAsset(id); }).then(function (result) {
                 assetCache.delete(id);
+                rotatedSources.delete(id);
                 return reconcile().then(function () { return result; });
             });
         }
@@ -8651,6 +8726,7 @@
         MIN_SCALE: MIN_SCALE,
         MAX_SCALE: MAX_SCALE,
         SCALE_STEP: SCALE_STEP,
+        DEFAULT_BINDING_KEY: DEFAULT_BINDING_KEY,
         themeKey: themeKey,
         getContextInfo: getContextInfo,
         messageImages: messageImages,
@@ -8663,7 +8739,7 @@
 })(window);
 /* END MODULE 17/24: src/avatar-runtime.js */
 
-/* BEGIN MODULE 18/24: src/avatar-page.js | sha256:ebaebd4f30de4cfffdec6384fff44a6940996cb55a1fdacb898cdc0a5267ecef */
+/* BEGIN MODULE 18/24: src/avatar-page.js | sha256:e0af266a45a9f555d3c8caeec8fb9f8d50f021fa2352afc263f4589eff70f150 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -8690,7 +8766,6 @@
             '.tm-avatar-page-grid{min-width:0;flex:1 1 auto;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));align-content:start;gap:9px;padding:12px}',
             '.tm-avatar-page-card{min-width:0;aspect-ratio:1;position:relative;overflow:hidden;border:var(--tm-card-border-style,2px solid var(--tm-card-border,transparent));border-radius:var(--tm-card-radius,10px);background:var(--tm-card-bg,rgba(127,127,127,.06));box-shadow:var(--tm-card-shadow,none)}',
             '.tm-avatar-page-thumb{display:block;width:100%;height:100%;object-fit:cover;background:var(--tm-control-bg,rgba(127,127,127,.1))}',
-            '.tm-avatar-page-menu{right:3px!important;bottom:3px!important;opacity:.92!important;background:var(--tm-head-bg,rgba(0,0,0,.38))!important;color:inherit!important}',
             '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}',
             '.tm-avatar-page-empty{width:min(100%,300px);display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 16px;border:var(--tm-control-border-style,1px dashed var(--tm-control-border,rgba(127,127,127,.18)));border-radius:var(--tm-panel-radius,16px);background:var(--tm-control-bg,rgba(127,127,127,.05));box-sizing:border-box}',
             '.tm-avatar-page-empty>i{font-size:1.55em;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.62;margin-bottom:2px}.tm-avatar-page-empty>strong{font-size:.9em}.tm-avatar-page-empty>span{font-size:.76em;opacity:.52}',
@@ -8710,6 +8785,7 @@
         var closeManager = options.closeManager || function () {};
         var createSheet = options.createSheet;
         var closeSheet = options.closeSheet || function (sheet) { if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet); };
+        var openImageLightbox = options.openImageLightbox;
         var onImportingChange = options.onImportingChange || function () {};
         var toast = options.toast || function () {};
         var confirmDelete = options.confirm || global.confirm;
@@ -8760,7 +8836,7 @@
         }
         function cardHtml(asset) {
             return '<article class="tm-avatar-page-card" data-avatar-id="' + esc(asset.id) + '" aria-label="头像 ' + esc(asset.name) + '">' +
-                '<img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" alt="">' +
+                '<img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" data-avatar-action="view" data-avatar-id="' + esc(asset.id) + '" tabindex="0" role="button" aria-label="查看 ' + esc(asset.name) + ' 大图" alt="">' +
                 '<button type="button" class="tm-card-menu tm-avatar-page-menu" data-avatar-action="menu" data-avatar-id="' + esc(asset.id) + '" title="头像操作" aria-label="打开 ' + esc(asset.name) + ' 的操作菜单"><i class="fa-solid fa-ellipsis"></i></button></article>';
         }
         function setupGridLoader() {
@@ -8888,6 +8964,14 @@
                 return sheet;
             });
         }
+        function viewAsset(id) {
+            if (typeof openImageLightbox !== 'function') return Promise.reject(new Error('大图查看器不可用'));
+            return store.getAsset(id).then(function (asset) {
+                if (!asset || !asset.imageData) throw new Error('头像主图不存在');
+                openImageLightbox([{ key: asset.id, label: asset.name, source: asset.imageData }], asset.id);
+                return asset;
+            });
+        }
         function handleClick(event) {
             var action = event.target && event.target.closest ? event.target.closest('[data-avatar-action]') : null;
             if (action && root.contains(action)) {
@@ -8895,8 +8979,20 @@
                 if (name === 'menu') openAssetMenu(action.getAttribute('data-avatar-id')).catch(function (error) {
                     reportError('avatar menu failed', error); setNotice(error.message || '头像操作菜单无法打开', 'error');
                 });
+                else if (name === 'view') viewAsset(action.getAttribute('data-avatar-id')).catch(function (error) {
+                    reportError('avatar preview failed', error); setNotice(error.message || '头像大图无法打开', 'error');
+                });
                 return;
             }
+        }
+        function handleKeydown(event) {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            var action = event.target && event.target.closest ? event.target.closest('[data-avatar-action="view"]') : null;
+            if (!action || !root.contains(action)) return;
+            event.preventDefault();
+            viewAsset(action.getAttribute('data-avatar-id')).catch(function (error) {
+                reportError('avatar preview failed', error); setNotice(error.message || '头像大图无法打开', 'error');
+            });
         }
         function handleFileChange(event) {
             var input = event && event.currentTarget || fileInput;
@@ -8914,6 +9010,7 @@
             ensureStyle();
             fileInput = root.querySelector('[data-avatar-file]');
             root.addEventListener('click', handleClick);
+            root.addEventListener('keydown', handleKeydown);
             fileInput.addEventListener('change', handleFileChange);
             return refresh();
         }
@@ -8925,6 +9022,7 @@
             gridLoader = null;
             if (root) {
                 root.removeEventListener('click', handleClick);
+                root.removeEventListener('keydown', handleKeydown);
             }
             if (fileInput) fileInput.removeEventListener('change', handleFileChange);
             fileInput = null;
@@ -8939,6 +9037,7 @@
             importFiles: importFiles,
             pickFiles: function () { if (!mounted || !fileInput || importing) return false; fileInput.click(); return true; },
             openAssetMenu: openAssetMenu,
+            viewAsset: viewAsset,
             getState: function () { return { mounted: mounted, count: assets.length, importing: importing }; },
         };
     };
@@ -9960,7 +10059,7 @@
 })(window);
 /* END MODULE 21/24: src/backgrounds.js */
 
-/* BEGIN MODULE 22/24: src/ui-sheets.js | sha256:c503d5cf13090cde75d567b6754d6d6cc39c3d6afc37fe68b9e0509c95ff6516 */
+/* BEGIN MODULE 22/24: src/ui-sheets.js | sha256:f4bdab30796bca37147411c8668e84d1ff293fcc5da7f537526dcd5498909d7e */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -10022,13 +10121,12 @@
             return true;
         }
 
-        function openLightbox(themeNames, startName) {
-            var themes = themeNames.filter(function (name) {
-                var meta = load().themeMeta[name];
-                return meta && (meta.imageData || meta.thumbData || meta.previewData);
+        function openImageLightbox(items, startKey) {
+            var images = (items || []).filter(function (item) {
+                return item && item.key != null && (item.source || typeof item.getSource === 'function');
             });
-            if (themes.length === 0) return;
-            var index = themes.indexOf(startName);
+            if (images.length === 0) return;
+            var index = images.findIndex(function (item) { return String(item.key) === String(startKey); });
             if (index === -1) index = 0;
 
             var lightbox = global.document.createElement('div');
@@ -10037,28 +10135,26 @@
             var lightboxRecord = { element: lightbox, close: closeLightbox };
 
             function render() {
-                var data = load();
-                var name = themes[index];
-                var meta = data.themeMeta[name] || {};
-                var image = meta.imageData || meta.thumbData || meta.previewData || '';
+                var item = images[index];
+                var image = typeof item.getSource === 'function' ? item.getSource() : item.source;
                 lightbox.innerHTML =
                     '<button class="tm-lb-close"><i class="fa-solid fa-xmark"></i></button>' +
-                    '<div class="tm-lb-name">' + esc(name) + '</div>' +
-                    (themes.length > 1 ? '<button class="tm-lb-nav tm-lb-prev"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
-                    '<img class="tm-lb-img" src="' + image + '" draggable="false" />' +
-                    (themes.length > 1 ? '<button class="tm-lb-nav tm-lb-next"><i class="fa-solid fa-chevron-right"></i></button>' : '') +
-                    (themes.length > 1 ? '<div class="tm-lb-counter">' + (index + 1) + ' / ' + themes.length + '</div>' : '');
+                    '<div class="tm-lb-name">' + esc(item.label || item.key) + '</div>' +
+                    (images.length > 1 ? '<button class="tm-lb-nav tm-lb-prev"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
+                    '<img class="tm-lb-img" src="' + esc(image || '') + '" draggable="false" />' +
+                    (images.length > 1 ? '<button class="tm-lb-nav tm-lb-next"><i class="fa-solid fa-chevron-right"></i></button>' : '') +
+                    (images.length > 1 ? '<div class="tm-lb-counter">' + (index + 1) + ' / ' + images.length + '</div>' : '');
                 lightbox.querySelector('.tm-lb-close').addEventListener('click', closeLightbox);
                 var previous = lightbox.querySelector('.tm-lb-prev');
                 var next = lightbox.querySelector('.tm-lb-next');
                 if (previous) previous.addEventListener('click', function (event) {
                     event.stopPropagation();
-                    index = (index - 1 + themes.length) % themes.length;
+                    index = (index - 1 + images.length) % images.length;
                     render();
                 });
                 if (next) next.addEventListener('click', function (event) {
                     event.stopPropagation();
-                    index = (index + 1) % themes.length;
+                    index = (index + 1) % images.length;
                     render();
                 });
             }
@@ -10071,11 +10167,11 @@
 
             function handleKey(event) {
                 if (event.key === 'Escape') closeLightbox();
-                else if (event.key === 'ArrowLeft' && themes.length > 1) {
-                    index = (index - 1 + themes.length) % themes.length;
+                else if (event.key === 'ArrowLeft' && images.length > 1) {
+                    index = (index - 1 + images.length) % images.length;
                     render();
-                } else if (event.key === 'ArrowRight' && themes.length > 1) {
-                    index = (index + 1) % themes.length;
+                } else if (event.key === 'ArrowRight' && images.length > 1) {
+                    index = (index + 1) % images.length;
                     render();
                 }
             }
@@ -10087,6 +10183,24 @@
             openLightboxes.add(lightboxRecord);
             render();
             getPopupLayer().appendChild(lightbox);
+            return lightbox;
+        }
+
+        function openLightbox(themeNames, startName) {
+            var themes = themeNames.filter(function (name) {
+                var meta = load().themeMeta[name];
+                return meta && (meta.imageData || meta.thumbData || meta.previewData);
+            });
+            return openImageLightbox(themes.map(function (name) {
+                return {
+                    key: name,
+                    label: name,
+                    getSource: function () {
+                        var meta = load().themeMeta[name] || {};
+                        return meta.imageData || meta.thumbData || meta.previewData || '';
+                    },
+                };
+            }), startName);
         }
 
         return {
@@ -10095,6 +10209,7 @@
             requestClose: requestClose,
             requestCloseAll: requestCloseAll,
             setBeforeClose: setBeforeClose,
+            openImageLightbox: openImageLightbox,
             openLightbox: openLightbox,
         };
     };
@@ -10369,7 +10484,7 @@
 })(window);
 /* END MODULE 23/24: src/ui-events.js */
 
-/* BEGIN MODULE 24/24: src/ui-main.js | sha256:44e1253e4ee5308a7bce09f3df5abeaa45afd483fb82f361de482a242e7b5bff */
+/* BEGIN MODULE 24/24: src/ui-main.js | sha256:d298aa794133279b69e6bbd50bb7d40958d663468d7853950c33ce0d34a610a1 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -10665,6 +10780,7 @@
                 closeManager: closePopup,
                 createSheet: createSheet,
                 closeSheet: closeSheet,
+                openImageLightbox: uiSheetsApi.openImageLightbox,
                 onImportingChange: function (importing) {
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = importing;

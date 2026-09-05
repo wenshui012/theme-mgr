@@ -24,7 +24,6 @@
             '.tm-avatar-page-grid{min-width:0;flex:1 1 auto;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));align-content:start;gap:9px;padding:12px}',
             '.tm-avatar-page-card{min-width:0;aspect-ratio:1;position:relative;overflow:hidden;border:var(--tm-card-border-style,2px solid var(--tm-card-border,transparent));border-radius:var(--tm-card-radius,10px);background:var(--tm-card-bg,rgba(127,127,127,.06));box-shadow:var(--tm-card-shadow,none)}',
             '.tm-avatar-page-thumb{display:block;width:100%;height:100%;object-fit:cover;background:var(--tm-control-bg,rgba(127,127,127,.1))}',
-            '.tm-avatar-page-menu{right:3px!important;bottom:3px!important;opacity:.92!important;background:var(--tm-head-bg,rgba(0,0,0,.38))!important;color:inherit!important}',
             '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}',
             '.tm-avatar-page-empty{width:min(100%,300px);display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 16px;border:var(--tm-control-border-style,1px dashed var(--tm-control-border,rgba(127,127,127,.18)));border-radius:var(--tm-panel-radius,16px);background:var(--tm-control-bg,rgba(127,127,127,.05));box-sizing:border-box}',
             '.tm-avatar-page-empty>i{font-size:1.55em;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.62;margin-bottom:2px}.tm-avatar-page-empty>strong{font-size:.9em}.tm-avatar-page-empty>span{font-size:.76em;opacity:.52}',
@@ -44,6 +43,7 @@
         var closeManager = options.closeManager || function () {};
         var createSheet = options.createSheet;
         var closeSheet = options.closeSheet || function (sheet) { if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet); };
+        var openImageLightbox = options.openImageLightbox;
         var onImportingChange = options.onImportingChange || function () {};
         var toast = options.toast || function () {};
         var confirmDelete = options.confirm || global.confirm;
@@ -94,7 +94,7 @@
         }
         function cardHtml(asset) {
             return '<article class="tm-avatar-page-card" data-avatar-id="' + esc(asset.id) + '" aria-label="头像 ' + esc(asset.name) + '">' +
-                '<img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" alt="">' +
+                '<img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" data-avatar-action="view" data-avatar-id="' + esc(asset.id) + '" tabindex="0" role="button" aria-label="查看 ' + esc(asset.name) + ' 大图" alt="">' +
                 '<button type="button" class="tm-card-menu tm-avatar-page-menu" data-avatar-action="menu" data-avatar-id="' + esc(asset.id) + '" title="头像操作" aria-label="打开 ' + esc(asset.name) + ' 的操作菜单"><i class="fa-solid fa-ellipsis"></i></button></article>';
         }
         function setupGridLoader() {
@@ -222,6 +222,14 @@
                 return sheet;
             });
         }
+        function viewAsset(id) {
+            if (typeof openImageLightbox !== 'function') return Promise.reject(new Error('大图查看器不可用'));
+            return store.getAsset(id).then(function (asset) {
+                if (!asset || !asset.imageData) throw new Error('头像主图不存在');
+                openImageLightbox([{ key: asset.id, label: asset.name, source: asset.imageData }], asset.id);
+                return asset;
+            });
+        }
         function handleClick(event) {
             var action = event.target && event.target.closest ? event.target.closest('[data-avatar-action]') : null;
             if (action && root.contains(action)) {
@@ -229,8 +237,20 @@
                 if (name === 'menu') openAssetMenu(action.getAttribute('data-avatar-id')).catch(function (error) {
                     reportError('avatar menu failed', error); setNotice(error.message || '头像操作菜单无法打开', 'error');
                 });
+                else if (name === 'view') viewAsset(action.getAttribute('data-avatar-id')).catch(function (error) {
+                    reportError('avatar preview failed', error); setNotice(error.message || '头像大图无法打开', 'error');
+                });
                 return;
             }
+        }
+        function handleKeydown(event) {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            var action = event.target && event.target.closest ? event.target.closest('[data-avatar-action="view"]') : null;
+            if (!action || !root.contains(action)) return;
+            event.preventDefault();
+            viewAsset(action.getAttribute('data-avatar-id')).catch(function (error) {
+                reportError('avatar preview failed', error); setNotice(error.message || '头像大图无法打开', 'error');
+            });
         }
         function handleFileChange(event) {
             var input = event && event.currentTarget || fileInput;
@@ -248,6 +268,7 @@
             ensureStyle();
             fileInput = root.querySelector('[data-avatar-file]');
             root.addEventListener('click', handleClick);
+            root.addEventListener('keydown', handleKeydown);
             fileInput.addEventListener('change', handleFileChange);
             return refresh();
         }
@@ -259,6 +280,7 @@
             gridLoader = null;
             if (root) {
                 root.removeEventListener('click', handleClick);
+                root.removeEventListener('keydown', handleKeydown);
             }
             if (fileInput) fileInput.removeEventListener('change', handleFileChange);
             fileInput = null;
@@ -273,6 +295,7 @@
             importFiles: importFiles,
             pickFiles: function () { if (!mounted || !fileInput || importing) return false; fileInput.click(); return true; },
             openAssetMenu: openAssetMenu,
+            viewAsset: viewAsset,
             getState: function () { return { mounted: mounted, count: assets.length, importing: importing }; },
         };
     };

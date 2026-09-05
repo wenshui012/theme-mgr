@@ -59,13 +59,12 @@
             return true;
         }
 
-        function openLightbox(themeNames, startName) {
-            var themes = themeNames.filter(function (name) {
-                var meta = load().themeMeta[name];
-                return meta && (meta.imageData || meta.thumbData || meta.previewData);
+        function openImageLightbox(items, startKey) {
+            var images = (items || []).filter(function (item) {
+                return item && item.key != null && (item.source || typeof item.getSource === 'function');
             });
-            if (themes.length === 0) return;
-            var index = themes.indexOf(startName);
+            if (images.length === 0) return;
+            var index = images.findIndex(function (item) { return String(item.key) === String(startKey); });
             if (index === -1) index = 0;
 
             var lightbox = global.document.createElement('div');
@@ -74,28 +73,26 @@
             var lightboxRecord = { element: lightbox, close: closeLightbox };
 
             function render() {
-                var data = load();
-                var name = themes[index];
-                var meta = data.themeMeta[name] || {};
-                var image = meta.imageData || meta.thumbData || meta.previewData || '';
+                var item = images[index];
+                var image = typeof item.getSource === 'function' ? item.getSource() : item.source;
                 lightbox.innerHTML =
                     '<button class="tm-lb-close"><i class="fa-solid fa-xmark"></i></button>' +
-                    '<div class="tm-lb-name">' + esc(name) + '</div>' +
-                    (themes.length > 1 ? '<button class="tm-lb-nav tm-lb-prev"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
-                    '<img class="tm-lb-img" src="' + image + '" draggable="false" />' +
-                    (themes.length > 1 ? '<button class="tm-lb-nav tm-lb-next"><i class="fa-solid fa-chevron-right"></i></button>' : '') +
-                    (themes.length > 1 ? '<div class="tm-lb-counter">' + (index + 1) + ' / ' + themes.length + '</div>' : '');
+                    '<div class="tm-lb-name">' + esc(item.label || item.key) + '</div>' +
+                    (images.length > 1 ? '<button class="tm-lb-nav tm-lb-prev"><i class="fa-solid fa-chevron-left"></i></button>' : '') +
+                    '<img class="tm-lb-img" src="' + esc(image || '') + '" draggable="false" />' +
+                    (images.length > 1 ? '<button class="tm-lb-nav tm-lb-next"><i class="fa-solid fa-chevron-right"></i></button>' : '') +
+                    (images.length > 1 ? '<div class="tm-lb-counter">' + (index + 1) + ' / ' + images.length + '</div>' : '');
                 lightbox.querySelector('.tm-lb-close').addEventListener('click', closeLightbox);
                 var previous = lightbox.querySelector('.tm-lb-prev');
                 var next = lightbox.querySelector('.tm-lb-next');
                 if (previous) previous.addEventListener('click', function (event) {
                     event.stopPropagation();
-                    index = (index - 1 + themes.length) % themes.length;
+                    index = (index - 1 + images.length) % images.length;
                     render();
                 });
                 if (next) next.addEventListener('click', function (event) {
                     event.stopPropagation();
-                    index = (index + 1) % themes.length;
+                    index = (index + 1) % images.length;
                     render();
                 });
             }
@@ -108,11 +105,11 @@
 
             function handleKey(event) {
                 if (event.key === 'Escape') closeLightbox();
-                else if (event.key === 'ArrowLeft' && themes.length > 1) {
-                    index = (index - 1 + themes.length) % themes.length;
+                else if (event.key === 'ArrowLeft' && images.length > 1) {
+                    index = (index - 1 + images.length) % images.length;
                     render();
-                } else if (event.key === 'ArrowRight' && themes.length > 1) {
-                    index = (index + 1) % themes.length;
+                } else if (event.key === 'ArrowRight' && images.length > 1) {
+                    index = (index + 1) % images.length;
                     render();
                 }
             }
@@ -124,6 +121,24 @@
             openLightboxes.add(lightboxRecord);
             render();
             getPopupLayer().appendChild(lightbox);
+            return lightbox;
+        }
+
+        function openLightbox(themeNames, startName) {
+            var themes = themeNames.filter(function (name) {
+                var meta = load().themeMeta[name];
+                return meta && (meta.imageData || meta.thumbData || meta.previewData);
+            });
+            return openImageLightbox(themes.map(function (name) {
+                return {
+                    key: name,
+                    label: name,
+                    getSource: function () {
+                        var meta = load().themeMeta[name] || {};
+                        return meta.imageData || meta.thumbData || meta.previewData || '';
+                    },
+                };
+            }), startName);
         }
 
         return {
@@ -132,6 +147,7 @@
             requestClose: requestClose,
             requestCloseAll: requestCloseAll,
             setBeforeClose: setBeforeClose,
+            openImageLightbox: openImageLightbox,
             openLightbox: openLightbox,
         };
     };

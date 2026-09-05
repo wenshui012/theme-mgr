@@ -7,6 +7,7 @@
     var STYLE_ID = 'tm-avatar-editor-style';
     var TARGET_CLASS = 'tm-avatar-editor-target';
     var AVATAR_CLASS = 'tm-avatar-editor-selected';
+    var DEFAULT_BINDING_KEY = 'avatar-default';
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -25,6 +26,7 @@
             x: round(Number.isFinite(Number(view.x)) ? Number(view.x) : 0),
             y: round(Number.isFinite(Number(view.y)) ? Number(view.y) : 0),
             scale: clampScale(view.scale),
+            rotate: round(Math.max(-180, Math.min(180, Number.isFinite(Number(view.rotate)) ? Number(view.rotate) : 0)), 2),
         };
     }
     function getAttribute(element, name) {
@@ -205,6 +207,8 @@
         var activeImages = new Set();
         var assetCache = new Map();
         var bindingPlans = [];
+        var promotedBindings = new Map();
+        var rotatedSources = new Map();
         var listeners = [];
         var chatObserver = null;
         var observedChat = null;
@@ -226,6 +230,19 @@
         }
         function currentThemeKey() { return themeKey(getThemeName()); }
         function targets() { return getContextInfo(contextSafe()); }
+        function sourceForView(asset, view) {
+            view = normalizeView(view);
+            if (!view.rotate) return asset.imageData;
+            var cached = rotatedSources.get(asset.id);
+            if (cached && cached.rotate === view.rotate && cached.imageData === asset.imageData) return cached.source;
+            var width = Math.max(1, Number(asset.width) || 1);
+            var height = Math.max(1, Number(asset.height) || 1);
+            var href = String(asset.imageData).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '"><image href="' + href + '" width="' + width + '" height="' + height + '" transform="rotate(' + view.rotate + ' ' + round(width / 2, 3) + ' ' + round(height / 2, 3) + ')"/></svg>';
+            var source = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+            rotatedSources.set(asset.id, { rotate: view.rotate, imageData: asset.imageData, source: source });
+            return source;
+        }
         function captureBaseline(image) {
             var record = baselines.get(image);
             if (record) return record;
@@ -263,7 +280,7 @@
             var record = captureBaseline(image);
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
             setExactAttribute(image, 'srcset', null);
-            setExactAttribute(image, 'src', asset.imageData);
+            setExactAttribute(image, 'src', sourceForView(asset, view));
             if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
                 throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
             }
@@ -278,6 +295,30 @@
                 return asset;
             });
         }
+        function getBindingForTarget(target) {
+            return store.getBinding(DEFAULT_BINDING_KEY, target.key).then(function (binding) {
+                if (binding) {
+                    promotedBindings.set(target.key, binding);
+                    return binding;
+                }
+                if (promotedBindings.has(target.key)) return promotedBindings.get(target.key);
+                var legacyKey = currentThemeKey();
+                if (!legacyKey) return null;
+                return store.getBinding(legacyKey, target.key).then(function (legacy) {
+                    if (!legacy) return null;
+                    var promoted = Object.assign({}, legacy, { themeKey: DEFAULT_BINDING_KEY });
+                    delete promoted.id;
+                    return store.putBinding(promoted).then(function (saved) {
+                        promotedBindings.set(target.key, saved);
+                        return saved;
+                    }).catch(function (error) {
+                        onError(error);
+                        promotedBindings.set(target.key, promoted);
+                        return promoted;
+                    });
+                });
+            });
+        }
         function desiredForBinding(target, binding, asset) {
             return messageImages(doc, target).map(function (entry) { return { entry: entry, binding: binding, asset: asset }; });
         }
@@ -287,18 +328,17 @@
             items.forEach(function (item) { applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey); });
         }
         function resolveRuntimeDesired() {
-            var key = currentThemeKey();
             var info = targets();
-            if (!key) return Promise.resolve({ items: [], plans: [], hasBinding: false });
             var targetList = [info.character, info.user].filter(Boolean);
             var foundBinding = false;
             return Promise.all(targetList.map(function (target) {
-                return store.getBinding(key, target.key).then(function (binding) {
+                return getBindingForTarget(target).then(function (binding) {
                     if (!binding) return null;
                     foundBinding = true;
                     return getAsset(binding.avatarId).then(function (asset) {
                         if (!asset) {
-                            return store.deleteBinding(key, target.key).then(function () { return null; });
+                            promotedBindings.delete(target.key);
+                            return store.deleteBinding(DEFAULT_BINDING_KEY, target.key).then(function () { return null; });
                         }
                         return { target: target, binding: binding, asset: asset };
                     });
@@ -413,7 +453,7 @@
             if (!representative) return { available: false, reason: '当前聊天中没有可见的目标头像', target: target, count: entries.length };
             return { available: true, reason: '', target: target, count: entries.length, representative: representative };
         }
-        function getCapabilities() { return { character: capability('character'), user: capability('user'), themeKey: currentThemeKey() }; }
+        function getCapabilities() { return { character: capability('character'), user: capability('user'), themeKey: DEFAULT_BINDING_KEY }; }
         function diagnosticsFor(entry, target) {
             var imageStyle = win.getComputedStyle(entry.image);
             var avatarStyle = win.getComputedStyle(entry.avatar);
@@ -491,16 +531,23 @@
             var toolbarRoot = typeof toolbarHost.attachShadow === 'function' ? toolbarHost.attachShadow({ mode: 'open' }) : toolbarHost;
             var toolbarStyle = doc.createElement('style');
             toolbarStyle.textContent = [
-                '.tm-avatar-editor-bar{display:flex;align-items:center;gap:7px;max-width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:12px;background:rgba(22,22,28,.95);color:#fff;font:13px/1.2 system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
+                '.tm-avatar-editor-bar{display:flex;flex-direction:column;align-items:center;gap:7px;max-width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:12px;background:rgba(22,22,28,.95);color:#fff;font:13px/1.2 system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
+                '.tm-avatar-editor-main{display:flex;align-items:center;justify-content:center;gap:7px}.tm-avatar-editor-sliders{display:grid;grid-template-columns:auto minmax(110px,220px) 42px;align-items:center;gap:3px 7px;width:100%}.tm-avatar-editor-sliders label{display:contents}.tm-avatar-editor-sliders span{white-space:nowrap;opacity:.78}.tm-avatar-editor-sliders output{text-align:right;font-variant-numeric:tabular-nums;opacity:.72}.tm-avatar-editor-sliders input{width:100%;min-width:0;margin:0;accent-color:#d8a8ff}',
                 'button{appearance:none;border:1px solid rgba(255,255,255,.24);border-radius:7px;background:rgba(255,255,255,.1);color:inherit;min-width:34px;min-height:34px;padding:6px 9px;font:inherit;white-space:nowrap}',
                 '.tm-avatar-editor-scale{min-width:48px;text-align:center;font-variant-numeric:tabular-nums}',
-                '@media(max-width:430px){.tm-avatar-editor-bar{gap:5px;padding:7px 8px}.tm-avatar-editor-title{display:none}button{padding:5px 7px}}',
+                '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:7px 8px}.tm-avatar-editor-main{gap:5px}.tm-avatar-editor-title{display:none}button{padding:5px 7px}.tm-avatar-editor-sliders{grid-template-columns:28px minmax(120px,1fr) 38px;font-size:12px}}',
             ].join('');
             toolbarRoot.appendChild(toolbarStyle);
             toolbar = doc.createElement('div');
             toolbar.className = 'tm-avatar-editor-bar';
-            toolbar.innerHTML = '<span class="tm-avatar-editor-title">头像调整</span><button type="button" data-action="down">−</button><span class="tm-avatar-editor-scale">100%</span><button type="button" data-action="up">+</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" data-action="save">保存</button>';
+            toolbar.innerHTML = '<div class="tm-avatar-editor-main"><span class="tm-avatar-editor-title">头像调整</span><button type="button" data-action="down">−</button><span class="tm-avatar-editor-scale">100%</span><button type="button" data-action="up">+</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" data-action="save">保存</button></div>' +
+                '<div class="tm-avatar-editor-sliders">' +
+                '<label><span>左右</span><input type="range" min="-1" max="1" step="0.01" value="0" data-view="x"><output data-view-output="x">0%</output></label>' +
+                '<label><span>上下</span><input type="range" min="-1" max="1" step="0.01" value="0" data-view="y"><output data-view-output="y">0%</output></label>' +
+                '<label><span>倾斜</span><input type="range" min="-180" max="180" step="1" value="0" data-view="rotate"><output data-view-output="rotate">0°</output></label>' +
+                '</div>';
             toolbar.addEventListener('click', onToolbarClick);
+            toolbar.addEventListener('input', onToolbarInput);
             toolbarRoot.appendChild(toolbar);
             doc.body.appendChild(toolbarHost);
             bindToolbarViewport();
@@ -511,6 +558,12 @@
             if (!toolbar || !editor) return;
             var scale = toolbar.querySelector('.tm-avatar-editor-scale');
             if (scale) scale.textContent = Math.round(editor.view.scale * 100) + '%';
+            ['x', 'y', 'rotate'].forEach(function (name) {
+                var input = toolbar.querySelector('[data-view="' + name + '"]');
+                var output = toolbar.querySelector('[data-view-output="' + name + '"]');
+                if (input) input.value = editor.view[name];
+                if (output) output.textContent = name === 'rotate' ? Math.round(editor.view.rotate) + '°' : Math.round(editor.view[name] * 100) + '%';
+            });
         }
         function bindRepresentative() {
             if (!editor || !editor.representative) return;
@@ -534,6 +587,7 @@
             unbindRepresentative();
             unbindToolbarViewport();
             if (toolbar) toolbar.removeEventListener('click', onToolbarClick);
+            if (toolbar) toolbar.removeEventListener('input', onToolbarInput);
             if (toolbarHost && toolbarHost.parentNode) toolbarHost.parentNode.removeChild(toolbarHost);
             if (styleNode && styleNode.parentNode) styleNode.parentNode.removeChild(styleNode);
             toolbarHost = null;
@@ -545,10 +599,9 @@
             if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
             var kind = input.target && input.target.kind || input.kind;
             var cap = capability(kind);
-            var key = currentThemeKey();
-            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            var key = DEFAULT_BINDING_KEY;
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
-            return Promise.all([getAsset(input.avatarId), store.getBinding(key, cap.target.key)]).then(function (parts) {
+            return Promise.all([getAsset(input.avatarId), getBindingForTarget(cap.target)]).then(function (parts) {
                 var asset = parts[0];
                 if (!asset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
                 editor = {
@@ -642,6 +695,7 @@
             };
             var diagnostics = clone(editor.diagnostics);
             return store.putBinding(binding).then(function (saved) {
+                promotedBindings.set(binding.targetKey, saved);
                 finishEditorUi();
                 editor = null;
                 sequence += 1;
@@ -661,17 +715,37 @@
             else if (action === 'cancel') cancelEdit();
             else if (action === 'save') saveEdit().catch(onError);
         }
+        function onToolbarInput(event) {
+            if (!editor) return;
+            var input = event.target && event.target.closest ? event.target.closest('[data-view]') : null;
+            if (!input || !toolbar.contains(input)) return;
+            var name = input.getAttribute('data-view');
+            var value = Number(input.value);
+            if (name === 'rotate') editor.view.rotate = round(Math.max(-180, Math.min(180, value)), 2);
+            else if (name === 'x' || name === 'y') editor.view[name] = round(Math.max(-1, Math.min(1, value)));
+            syncEditorInstances();
+            updateToolbar();
+        }
         function clearBinding(kind) {
             var cap = capability(kind);
-            var key = currentThemeKey();
-            if (!cap.target || !key) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
+            if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('binding-cleared').then(function () { return clearBinding(kind); });
-            return store.deleteBinding(key, cap.target.key).then(reconcile);
+            promotedBindings.delete(cap.target.key);
+            return store.listBindings().then(function (bindings) {
+                var targetsToDelete = (bindings || []).filter(function (binding) {
+                    return binding.targetKey === cap.target.key && (binding.themeKey === DEFAULT_BINDING_KEY || /^theme-name:/.test(binding.themeKey));
+                });
+                if (!targetsToDelete.some(function (binding) { return binding.themeKey === DEFAULT_BINDING_KEY; })) {
+                    targetsToDelete.push({ themeKey: DEFAULT_BINDING_KEY, targetKey: cap.target.key });
+                }
+                return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(binding.themeKey, binding.targetKey); }));
+            }).then(reconcile);
         }
         function deleteAsset(id) {
             var cancel = editor && editor.avatarId === id ? cancelEdit('avatar-deleted') : Promise.resolve();
             return cancel.then(function () { return store.deleteAsset(id); }).then(function (result) {
                 assetCache.delete(id);
+                rotatedSources.delete(id);
                 return reconcile().then(function () { return result; });
             });
         }
@@ -713,6 +787,7 @@
         MIN_SCALE: MIN_SCALE,
         MAX_SCALE: MAX_SCALE,
         SCALE_STEP: SCALE_STEP,
+        DEFAULT_BINDING_KEY: DEFAULT_BINDING_KEY,
         themeKey: themeKey,
         getContextInfo: getContextInfo,
         messageImages: messageImages,

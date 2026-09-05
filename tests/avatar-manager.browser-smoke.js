@@ -3,7 +3,7 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '..');
-const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'avatar-runtime.js', 'avatar-page.js'];
+const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'ui-sheets.js', 'avatar-runtime.js', 'avatar-page.js'];
 const viewports = [
     { label: 'desktop', width: 1280, height: 800 },
     { label: 'mobile-360', width: 360, height: 720, isMobile: true, hasTouch: true },
@@ -69,6 +69,12 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const context = { characters: [{ avatar: 'char.png', name: 'Character' }], characterId: 0, groupId: null, name1: 'User', eventSource: { on() {}, removeListener() {} }, eventTypes: {} };
                 const runtime = modules.createAvatarRuntime({ store, getContext: () => context, getThemeName: () => document.querySelector('#themes').value });
                 await runtime.start();
+                const themePreviewSource = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+                const sheets = modules.createUiSheets({
+                    getPopupLayer: () => document.body,
+                    load: () => ({ themeMeta: { 'Theme Preview': { imageData: themePreviewSource } } }),
+                    esc: (value) => String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'),
+                });
                 let managerClosed = 0;
                 let loaderDisconnects = 0;
                 const loaderApi = Object.assign({}, modules.imageLoader, {
@@ -82,14 +88,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const pageController = modules.createAvatarPage({
                     store, processor, runtime, imageLoader: loaderApi,
                     getRoot: () => document.querySelector('[data-tm-page="avatars"]'),
-                    createSheet: (html) => {
-                        const overlay = document.createElement('div');
-                        overlay.className = 'tm-sheet-overlay';
-                        overlay.innerHTML = '<div class="tm-sheet"><div class="tm-sheet-content">' + html + '</div></div>';
-                        document.body.appendChild(overlay);
-                        return overlay;
-                    },
-                    closeSheet: (sheet) => sheet.remove(),
+                    createSheet: sheets.createSheet,
+                    closeSheet: sheets.closeSheet,
+                    openImageLightbox: sheets.openImageLightbox,
                     closeManager: () => { managerClosed++; }, toast() {}, confirm: () => true,
                 });
                 document.querySelector('[data-tm-page="avatars"]').innerHTML = modules.avatarPage.buildPageHtml(modules.imageLoader.PLACEHOLDER_SRC);
@@ -115,6 +116,16 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const imageOnlyCard = Boolean(document.querySelector('.tm-avatar-page-card .tm-avatar-page-thumb')) &&
                     !document.querySelector('.tm-avatar-page-name') && Boolean(document.querySelector('[data-avatar-action="menu"]'));
 
+                document.querySelector('[data-avatar-action="view"]').click();
+                for (let attempt = 0; attempt < 20 && !document.querySelector('.tm-lightbox'); attempt++) await delay(10);
+                const previewImage = document.querySelector('.tm-lightbox .tm-lb-img');
+                const fullPreview = Boolean(previewImage && previewImage.src === persisted.imageData);
+                document.querySelector('.tm-lightbox .tm-lb-close').click();
+                sheets.openLightbox(['Theme Preview'], 'Theme Preview');
+                const themePreviewImage = document.querySelector('.tm-lightbox .tm-lb-img');
+                const sharedThemePreview = Boolean(themePreviewImage && themePreviewImage.src === themePreviewSource);
+                document.querySelector('.tm-lightbox .tm-lb-close').click();
+
                 document.querySelector('[data-avatar-action="menu"]').click();
                 let userMenuAction = null;
                 for (let attempt = 0; attempt < 20 && !userMenuAction; attempt++) {
@@ -136,6 +147,20 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const toolbarIsolated = Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="save"]'));
                 const userImages = [...document.querySelectorAll('.mes[is_user="true"] .avatar img')];
                 const highQualityApplied = userImages.every((image) => image.src === persisted.imageData);
+                const userBoxBeforeSliders = userImages.map((image) => image.getBoundingClientRect().toJSON());
+                const sliderRoot = toolbarHost.shadowRoot;
+                const horizontalSlider = sliderRoot.querySelector('[data-view="x"]');
+                const verticalSlider = sliderRoot.querySelector('[data-view="y"]');
+                const rotateSlider = sliderRoot.querySelector('[data-view="rotate"]');
+                horizontalSlider.value = '.3'; horizontalSlider.dispatchEvent(new Event('input',{bubbles:true}));
+                verticalSlider.value = '-.2'; verticalSlider.dispatchEvent(new Event('input',{bubbles:true}));
+                rotateSlider.value = '15'; rotateSlider.dispatchEvent(new Event('input',{bubbles:true}));
+                const sliderView = runtime.getState().view;
+                const userBoxAfterSliders = userImages.map((image) => image.getBoundingClientRect().toJSON());
+                const sliderControls = sliderView.x === .3 && sliderView.y === -.2 && sliderView.rotate === 15 &&
+                    userImages.every((image) => image.src.startsWith('data:image/svg+xml')) &&
+                    JSON.stringify(userBoxBeforeSliders) === JSON.stringify(userBoxAfterSliders);
+                runtime.reset();
                 const representative = document.querySelector('.tm-avatar-editor-target');
                 if (!representative) throw new Error('avatar editor did not expose a draggable target');
                 const repAvatar = representative.parentElement;
@@ -163,8 +188,11 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 runtime.setScale(1.2);
                 const scaledRects = characterImages.map((image) => Array.from(['left','top','width','height'],(key)=>Math.round(image.getBoundingClientRect()[key]*1000)/1000));
                 const cropAfterScale = characterImages[0].style.getPropertyValue('object-view-box');
+                const characterTilt = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot.querySelector('[data-view="rotate"]');
+                characterTilt.value = '12'; characterTilt.dispatchEvent(new Event('input',{bubbles:true}));
                 const saveResult = await runtime.saveEdit();
-                const persistedBindingAfterSave = await reloadedStore.getBinding('theme-name:A','character:char.png');
+                const persistedBindingAfterSave = await reloadedStore.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'character:char.png');
+                const tiltPersisted = persistedBindingAfterSave && persistedBindingAfterSave.view.rotate === 12 && characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
                 const afterVisuals = characterImages.map((image) => ({
                     radius:getComputedStyle(image).borderRadius, clip:getComputedStyle(image).clipPath,
                     mask:getComputedStyle(image).webkitMaskImage || getComputedStyle(image).maskImage,
@@ -177,23 +205,22 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
 
                 const rerender = document.createElement('div'); rerender.className='mes transformed'; rerender.setAttribute('is_user','false'); rerender.setAttribute('is_system','false'); rerender.innerHTML='<div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div>'; document.querySelector('#chat').appendChild(rerender);
                 await runtime.reconcile();
-                const rerenderApplied = rerender.querySelector('img').src === persisted.imageData;
+                const rerenderApplied = rerender.querySelector('img').src.startsWith('data:image/svg+xml');
 
-                await store.putBinding({ themeKey:'theme-name:B', targetKey:'character:char.png', avatarId, view:{x:.4,y:.2,scale:1.4} });
                 const transformA = characterImages[0].style.getPropertyValue('object-view-box');
                 document.querySelector('#themes').value='B'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true}));
                 await delay(150);
                 const transformB = characterImages[0].style.getPropertyValue('object-view-box');
-                const themesIsolated = transformA !== transformB;
+                const themesIsolated = transformA === transformB && characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
 
-                await store.putBinding({ themeKey:'theme-name:B', targetKey:'user:global', avatarId, view:{x:.25,y:.125,scale:1} });
+                await store.putBinding({ themeKey:modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey:'user:global', avatarId, view:{x:.25,y:.125,scale:1} });
                 await runtime.reconcile();
                 const responsiveCrops = userImages.map((image) => image.style.getPropertyValue('object-view-box'));
                 const responsive = responsiveCrops.every((value) => value && value === responsiveCrops[0]);
                 await runtime.beginEdit({ kind:'user', avatarId });
-                const otherTargetSurvivesEdit = characterImages.every((image) => image.src === persisted.imageData);
+                const otherTargetSurvivesEdit = characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
                 await runtime.cancelEdit();
-                const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image) => image.src === persisted.imageData) && userImages.every((image) => image.src === persisted.imageData);
+                const simultaneousBindings = otherTargetSurvivesEdit && characterImages.every((image) => image.src.startsWith('data:image/svg+xml')) && userImages.every((image) => image.src === persisted.imageData);
                 await runtime.clearBinding('user');
                 const restoredUser = userImages.every((image) => image.src.includes('R0lGOD'));
                 document.querySelector('[data-avatar-action="menu"]').click();
@@ -220,15 +247,15 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     I_scale:dragged.view.scale===1.05, J_cancel:cancelledToRaw, K_save:Boolean(persistedBindingAfterSave&&persistedBindingAfterSave.avatarId===avatarId),
                     L_rerender:rerenderApplied, M_themeSwitch:themesIsolated, N_circle:visualsPreserved,
                     O_clip:visualsPreserved, P_mask:visualsPreserved, Q_transform:visualsPreserved,
-                    R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1,
+                    R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0,
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls,
-                    emptyLayout, toolbarVisible, toolbarIsolated, contentOnlyScale, simultaneousBindings, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
+                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','toolbarVisible','toolbarIsolated','contentOnlyScale','simultaneousBindings','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);
