@@ -35,6 +35,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
             const page = await context.newPage();
             await page.goto(origin);
             await page.setContent(`<!doctype html><html><head><style>
+                :root{--SmartThemeQuoteColor:rgb(12,34,56);--SmartThemeBodyColor:rgb(210,220,230);--SmartThemeBackgroundColor:rgb(40,42,48);--SmartThemeBlurTintColor:rgba(40,42,48,.95)}
                 html,body{margin:0;width:100%;height:100%;font-family:system-ui;overflow-x:hidden}
                 #themes{position:fixed;left:-999px}.tm-app-page{width:100%;height:470px;box-sizing:border-box}
                 #chat{padding:16px;display:grid;gap:12px}.mes{display:flex}.avatar{width:72px;height:72px;overflow:visible}.avatar img{width:100%;height:100%;object-fit:cover;object-position:35% 50%}
@@ -149,17 +150,30 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const highQualityApplied = userImages.every((image) => image.src === persisted.imageData);
                 const userBoxBeforeSliders = userImages.map((image) => image.getBoundingClientRect().toJSON());
                 const sliderRoot = toolbarHost.shadowRoot;
+                const sizeSlider = sliderRoot.querySelector('[data-view="scale"]');
                 const horizontalSlider = sliderRoot.querySelector('[data-view="x"]');
                 const verticalSlider = sliderRoot.querySelector('[data-view="y"]');
                 const rotateSlider = sliderRoot.querySelector('[data-view="rotate"]');
+                sizeSlider.value = '1.25'; sizeSlider.dispatchEvent(new Event('input',{bubbles:true}));
                 horizontalSlider.value = '.3'; horizontalSlider.dispatchEvent(new Event('input',{bubbles:true}));
                 verticalSlider.value = '-.2'; verticalSlider.dispatchEvent(new Event('input',{bubbles:true}));
                 rotateSlider.value = '15'; rotateSlider.dispatchEvent(new Event('input',{bubbles:true}));
+                sliderRoot.querySelector('[data-step-view="scale"][data-step-direction="-1"]').click();
+                sliderRoot.querySelector('[data-step-view="x"][data-step-direction="1"]').click();
+                sliderRoot.querySelector('[data-step-view="y"][data-step-direction="-1"]').click();
+                sliderRoot.querySelector('[data-step-view="rotate"][data-step-direction="1"]').click();
+                const horizontalFlip = sliderRoot.querySelector('[data-action="flip-x"]');
+                const verticalFlip = sliderRoot.querySelector('[data-action="flip-y"]');
+                horizontalFlip.click(); verticalFlip.click();
                 const sliderView = runtime.getState().view;
                 const userBoxAfterSliders = userImages.map((image) => image.getBoundingClientRect().toJSON());
-                const sliderControls = sliderView.x === .3 && sliderView.y === -.2 && sliderView.rotate === 15 &&
+                const sliderControls = sliderView.scale === 1.2 && sliderView.x === .35 && sliderView.y === -.25 && sliderView.rotate === 16 &&
                     userImages.every((image) => image.src.startsWith('data:image/svg+xml')) &&
                     JSON.stringify(userBoxBeforeSliders) === JSON.stringify(userBoxAfterSliders);
+                const mirrorControls = sliderView.flipX && sliderView.flipY && horizontalFlip.classList.contains('is-active') && verticalFlip.classList.contains('is-active') &&
+                    horizontalFlip.getAttribute('aria-pressed') === 'true' && verticalFlip.getAttribute('aria-pressed') === 'true' && decodeURIComponent(userImages[0].src).includes('scale(-1 -1)');
+                const themedToolbar = getComputedStyle(horizontalSlider).accentColor === 'rgb(12, 34, 56)' &&
+                    getComputedStyle(sliderRoot.querySelector('.tm-avatar-editor-bar')).color === 'rgb(210, 220, 230)';
                 runtime.reset();
                 const representative = document.querySelector('.tm-avatar-editor-target');
                 if (!representative) throw new Error('avatar editor did not expose a draggable target');
@@ -190,9 +204,10 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const cropAfterScale = characterImages[0].style.getPropertyValue('object-view-box');
                 const characterTilt = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot.querySelector('[data-view="rotate"]');
                 characterTilt.value = '12'; characterTilt.dispatchEvent(new Event('input',{bubbles:true}));
+                document.querySelector('#tm-avatar-editor-toolbar').shadowRoot.querySelector('[data-action="flip-x"]').click();
                 const saveResult = await runtime.saveEdit();
                 const persistedBindingAfterSave = await reloadedStore.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'character:char.png');
-                const tiltPersisted = persistedBindingAfterSave && persistedBindingAfterSave.view.rotate === 12 && characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
+                const tiltPersisted = persistedBindingAfterSave && persistedBindingAfterSave.view.rotate === 12 && persistedBindingAfterSave.view.flipX === true && characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
                 const afterVisuals = characterImages.map((image) => ({
                     radius:getComputedStyle(image).borderRadius, clip:getComputedStyle(image).clipPath,
                     mask:getComputedStyle(image).webkitMaskImage || getComputedStyle(image).maskImage,
@@ -247,15 +262,15 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     I_scale:dragged.view.scale===1.05, J_cancel:cancelledToRaw, K_save:Boolean(persistedBindingAfterSave&&persistedBindingAfterSave.avatarId===avatarId),
                     L_rerender:rerenderApplied, M_themeSwitch:themesIsolated, N_circle:visualsPreserved,
                     O_clip:visualsPreserved, P_mask:visualsPreserved, Q_transform:visualsPreserved,
-                    R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0,
+                    R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls,
-                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
+                    emptyLayout, fullPreview, sharedThemePreview, toolbarVisible, toolbarIsolated, sliderControls, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, menuDelete, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','toolbarVisible','toolbarIsolated','sliderControls','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','menuDelete','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

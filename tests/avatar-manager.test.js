@@ -216,9 +216,9 @@ test('16 group chat refuses a current-character target', () => assert.equal(modu
 test('17 editor start has no selecting state', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.notEqual(f.runtime.getState().state,'selecting'); });
 test('18 known target enters editing directly', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); const state=await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.equal(state.state,'editing'); });
 test('19 temporary high resolution src replaces every same-target instance', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.ok(f.chars.every((x)=>x.image.getAttribute('src').includes('main-a'))); });
-test('20 pointer drag updates normalized x and y', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); const entry=f.chars.find((x)=>x.image.classList.contains('tm-avatar-editor-target')); const rect=entry.avatar.getBoundingClientRect(); entry.image.dispatchEvent({type:'pointerdown',pointerId:1,button:0,clientX:0,clientY:0}); f.doc.dispatchEvent({type:'pointermove',pointerId:1,clientX:rect.width*.2,clientY:rect.height*.1}); f.doc.dispatchEvent({type:'pointerup',pointerId:1}); assert.deepEqual(JSON.parse(JSON.stringify(f.runtime.getState().view)),{x:.2,y:.1,scale:1,rotate:0}); });
+test('20 pointer drag updates normalized x and y', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); const entry=f.chars.find((x)=>x.image.classList.contains('tm-avatar-editor-target')); const rect=entry.avatar.getBoundingClientRect(); entry.image.dispatchEvent({type:'pointerdown',pointerId:1,button:0,clientX:0,clientY:0}); f.doc.dispatchEvent({type:'pointermove',pointerId:1,clientX:rect.width*.2,clientY:rect.height*.1}); f.doc.dispatchEvent({type:'pointerup',pointerId:1}); assert.deepEqual(JSON.parse(JSON.stringify(f.runtime.getState().view)),{x:.2,y:.1,scale:1,rotate:0,flipX:false,flipY:false}); });
 test('21 scale plus uses 0.05 step', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); f.runtime.scaleUp(); assert.equal(f.runtime.getState().view.scale,1.05); });
-test('22 reset restores normalized zero zero one', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); f.runtime.setScale(2); f.runtime.reset(); assert.deepEqual(f.runtime.getState().view,{x:0,y:0,scale:1,rotate:0}); });
+test('22 reset restores normalized zero zero one', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); f.runtime.setScale(2); f.runtime.reset(); assert.deepEqual(f.runtime.getState().view,{x:0,y:0,scale:1,rotate:0,flipX:false,flipY:false}); });
 test('23 Cancel restores the previous binding rather than raw avatar', async () => { const f=runtimeFixture({seed:{assets:[asset('a'),asset('b')],bindings:[{themeKey:'theme-name:A',targetKey:'character:char.png',avatarId:'a',view:{x:.1,y:.1,scale:1}}]}}); await f.runtime.start(); await f.runtime.beginEdit({kind:'character',avatarId:'b'}); await f.runtime.cancelEdit(); assert.ok(f.chars.every((x)=>x.image.getAttribute('src').includes('main-a'))); });
 test('24 Save persists the formal default binding', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'user',avatarId:'a'}); const result=await f.runtime.saveEdit(); assert.equal(result.binding.avatarId,'a'); assert.equal((await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'user:global')).avatarId,'a'); });
 test('25 normalized view yields proportionate pixels across avatar sizes', () => { assert.deepEqual({ ...modules.avatarRuntime.pixelsForView({x:.2,y:.1,scale:1.5},{getBoundingClientRect:()=>({x:0,y:0,width:50,height:80,left:0,top:0,right:50,bottom:80})}) },{x:10,y:8,scale:1.5}); });
@@ -310,6 +310,14 @@ test('46 editor toolbar uses a host-level important layout and Shadow DOM isolat
     assert.match(source, /data-view="x"/);
     assert.match(source, /data-view="y"/);
     assert.match(source, /data-view="rotate"/);
+    assert.match(source, /data-view="scale"/);
+    assert.match(source, /data-step-view="scale"/);
+    assert.match(source, /data-step-view="x"/);
+    assert.match(source, /data-step-view="y"/);
+    assert.match(source, /data-step-view="rotate"/);
+    assert.match(source, /data-action="flip-x"/);
+    assert.match(source, /data-action="flip-y"/);
+    assert.match(source, /--SmartThemeQuoteColor/);
 });
 test('47 editing either target preserves the other target binding', async () => {
     const f = runtimeFixture({ seed: { assets: [asset('a'), asset('b')], bindings: [
@@ -340,4 +348,10 @@ test('48 explicit restore clears the default and every legacy theme-scoped avata
     await f.runtime.clearBinding('user');
     assert.equal((await f.store.listBindings()).filter((binding) => binding.targetKey === 'user:global').length, 0);
     assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+});
+test('49 mirror flags normalize safely and survive binding persistence', async () => {
+    const { store } = memoryStore({ assets: [asset()] });
+    const saved = await store.putBinding({ themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'a', view: { flipX: true, flipY: true } });
+    assert.deepEqual(saved.view, { x: 0, y: 0, scale: 1, rotate: 0, flipX: true, flipY: true });
+    assert.deepEqual(JSON.parse(JSON.stringify(modules.avatarRuntime.normalizeView({ flipX: 'true', flipY: 1 }))), { x: 0, y: 0, scale: 1, rotate: 0, flipX: false, flipY: false });
 });

@@ -3,6 +3,9 @@
     var MIN_SCALE = 0.5;
     var MAX_SCALE = 3;
     var SCALE_STEP = 0.05;
+    var POSITION_STEP = 0.05;
+    var ROTATE_STEP = 1;
+    var SOURCE_CACHE_LIMIT = 8;
     var TOOLBAR_ID = 'tm-avatar-editor-toolbar';
     var STYLE_ID = 'tm-avatar-editor-style';
     var TARGET_CLASS = 'tm-avatar-editor-target';
@@ -27,6 +30,8 @@
             y: round(Number.isFinite(Number(view.y)) ? Number(view.y) : 0),
             scale: clampScale(view.scale),
             rotate: round(Math.max(-180, Math.min(180, Number.isFinite(Number(view.rotate)) ? Number(view.rotate) : 0)), 2),
+            flipX: view.flipX === true,
+            flipY: view.flipY === true,
         };
     }
     function getAttribute(element, name) {
@@ -232,15 +237,24 @@
         function targets() { return getContextInfo(contextSafe()); }
         function sourceForView(asset, view) {
             view = normalizeView(view);
-            if (!view.rotate) return asset.imageData;
+            if (!view.rotate && !view.flipX && !view.flipY) return asset.imageData;
+            var signature = [view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1].join(':');
             var cached = rotatedSources.get(asset.id);
-            if (cached && cached.rotate === view.rotate && cached.imageData === asset.imageData) return cached.source;
+            if (!cached || cached.imageData !== asset.imageData) {
+                cached = { imageData: asset.imageData, sources: new Map() };
+                rotatedSources.set(asset.id, cached);
+            }
+            if (cached.sources.has(signature)) return cached.sources.get(signature);
             var width = Math.max(1, Number(asset.width) || 1);
             var height = Math.max(1, Number(asset.height) || 1);
+            var centerX = round(width / 2, 3);
+            var centerY = round(height / 2, 3);
             var href = String(asset.imageData).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '"><image href="' + href + '" width="' + width + '" height="' + height + '" transform="rotate(' + view.rotate + ' ' + round(width / 2, 3) + ' ' + round(height / 2, 3) + ')"/></svg>';
+            var transform = 'translate(' + centerX + ' ' + centerY + ') rotate(' + view.rotate + ') scale(' + (view.flipX ? -1 : 1) + ' ' + (view.flipY ? -1 : 1) + ') translate(' + (-centerX) + ' ' + (-centerY) + ')';
+            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '"><image href="' + href + '" width="' + width + '" height="' + height + '" transform="' + transform + '"/></svg>';
             var source = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-            rotatedSources.set(asset.id, { rotate: view.rotate, imageData: asset.imageData, source: source });
+            if (cached.sources.size >= SOURCE_CACHE_LIMIT) cached.sources.delete(cached.sources.keys().next().value);
+            cached.sources.set(signature, source);
             return source;
         }
         function captureBaseline(image) {
@@ -522,7 +536,7 @@
             styleNode.id = STYLE_ID;
             styleNode.textContent = [
                 '.' + TARGET_CLASS + '{touch-action:none!important;user-select:none!important;-webkit-user-select:none!important;-webkit-user-drag:none!important;cursor:grab!important}',
-                '.' + AVATAR_CLASS + '{outline:2px solid #d8a8ff!important;outline-offset:3px!important}',
+                '.' + AVATAR_CLASS + '{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf)!important;outline-offset:3px!important}',
             ].join('');
             doc.head.appendChild(styleNode);
             toolbarHost = doc.createElement('div');
@@ -531,21 +545,23 @@
             var toolbarRoot = typeof toolbarHost.attachShadow === 'function' ? toolbarHost.attachShadow({ mode: 'open' }) : toolbarHost;
             var toolbarStyle = doc.createElement('style');
             toolbarStyle.textContent = [
-                '.tm-avatar-editor-bar{display:flex;flex-direction:column;align-items:center;gap:7px;max-width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:12px;background:rgba(22,22,28,.95);color:#fff;font:13px/1.2 system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.38);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
-                '.tm-avatar-editor-main{display:flex;align-items:center;justify-content:center;gap:7px}.tm-avatar-editor-sliders{display:grid;grid-template-columns:auto minmax(110px,220px) 42px;align-items:center;gap:3px 7px;width:100%}.tm-avatar-editor-sliders label{display:contents}.tm-avatar-editor-sliders span{white-space:nowrap;opacity:.78}.tm-avatar-editor-sliders output{text-align:right;font-variant-numeric:tabular-nums;opacity:.72}.tm-avatar-editor-sliders input{width:100%;min-width:0;margin:0;accent-color:#d8a8ff}',
-                'button{appearance:none;border:1px solid rgba(255,255,255,.24);border-radius:7px;background:rgba(255,255,255,.1);color:inherit;min-width:34px;min-height:34px;padding:6px 9px;font:inherit;white-space:nowrap}',
-                '.tm-avatar-editor-scale{min-width:48px;text-align:center;font-variant-numeric:tabular-nums}',
-                '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:7px 8px}.tm-avatar-editor-main{gap:5px}.tm-avatar-editor-title{display:none}button{padding:5px 7px}.tm-avatar-editor-sliders{grid-template-columns:28px minmax(120px,1fr) 38px;font-size:12px}}',
+                ':host{--tm-avatar-accent:var(--SmartThemeQuoteColor,#7c6daf);--tm-avatar-text:var(--SmartThemeBodyColor,#eee);--tm-avatar-bg:var(--SmartThemeBlurTintColor,var(--SmartThemeBackgroundColor,#16161a))}',
+                '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
+                '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 44px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:.76}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}',
+                'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(5,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
+                '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:8px;font-size:12px}.tm-avatar-editor-controls{gap:3px}.tm-avatar-editor-row{grid-template-columns:30px 30px minmax(92px,1fr) 40px 30px;gap:4px;min-height:32px}button{min-height:30px;padding:4px 6px}.tm-avatar-editor-footer{gap:4px}}',
             ].join('');
             toolbarRoot.appendChild(toolbarStyle);
             toolbar = doc.createElement('div');
             toolbar.className = 'tm-avatar-editor-bar';
-            toolbar.innerHTML = '<div class="tm-avatar-editor-main"><span class="tm-avatar-editor-title">头像调整</span><button type="button" data-action="down">−</button><span class="tm-avatar-editor-scale">100%</span><button type="button" data-action="up">+</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" data-action="save">保存</button></div>' +
-                '<div class="tm-avatar-editor-sliders">' +
-                '<label><span>左右</span><input type="range" min="-1" max="1" step="0.01" value="0" data-view="x"><output data-view-output="x">0%</output></label>' +
-                '<label><span>上下</span><input type="range" min="-1" max="1" step="0.01" value="0" data-view="y"><output data-view-output="y">0%</output></label>' +
-                '<label><span>倾斜</span><input type="range" min="-180" max="180" step="1" value="0" data-view="rotate"><output data-view-output="rotate">0°</output></label>' +
-                '</div>';
+            toolbar.setAttribute('role', 'dialog');
+            toolbar.setAttribute('aria-label', '头像调整');
+            toolbar.innerHTML = '<div class="tm-avatar-editor-controls">' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">大小</span><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="-1" aria-label="缩小">−</button><input type="range" min="0.5" max="3" step="0.05" value="1" data-view="scale" aria-label="调整大小"><output class="tm-avatar-editor-value" data-view-output="scale">100%</output><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="1" aria-label="放大">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">左右</span><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="-1" aria-label="向左移动">−</button><input type="range" min="-1" max="1" step="0.01" value="0" data-view="x" aria-label="左右位置"><output class="tm-avatar-editor-value" data-view-output="x">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="1" aria-label="向右移动">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">上下</span><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="-1" aria-label="向上移动">−</button><input type="range" min="-1" max="1" step="0.01" value="0" data-view="y" aria-label="上下位置"><output class="tm-avatar-editor-value" data-view-output="y">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="1" aria-label="向下移动">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input type="range" min="-180" max="180" step="1" value="0" data-view="rotate" aria-label="倾斜角度"><output class="tm-avatar-editor-value" data-view-output="rotate">0°</output><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
+                '</div><div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">↔ 水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">↕ 垂直</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
             toolbar.addEventListener('click', onToolbarClick);
             toolbar.addEventListener('input', onToolbarInput);
             toolbarRoot.appendChild(toolbar);
@@ -556,13 +572,18 @@
         }
         function updateToolbar() {
             if (!toolbar || !editor) return;
-            var scale = toolbar.querySelector('.tm-avatar-editor-scale');
-            if (scale) scale.textContent = Math.round(editor.view.scale * 100) + '%';
-            ['x', 'y', 'rotate'].forEach(function (name) {
+            ['scale', 'x', 'y', 'rotate'].forEach(function (name) {
                 var input = toolbar.querySelector('[data-view="' + name + '"]');
                 var output = toolbar.querySelector('[data-view-output="' + name + '"]');
                 if (input) input.value = editor.view[name];
                 if (output) output.textContent = name === 'rotate' ? Math.round(editor.view.rotate) + '°' : Math.round(editor.view[name] * 100) + '%';
+            });
+            ['flipX', 'flipY'].forEach(function (name) {
+                var action = name === 'flipX' ? 'flip-x' : 'flip-y';
+                var button = toolbar.querySelector('[data-action="' + action + '"]');
+                if (!button) return;
+                button.classList.toggle('is-active', editor.view[name]);
+                button.setAttribute('aria-pressed', editor.view[name] ? 'true' : 'false');
             });
         }
         function bindRepresentative() {
@@ -669,6 +690,25 @@
             syncEditorInstances(); updateToolbar();
             return getState();
         }
+        function setViewValue(name, value) {
+            if (!editor) return getState();
+            if (name === 'scale') editor.view.scale = clampScale(value);
+            else if (name === 'rotate') editor.view.rotate = round(Math.max(-180, Math.min(180, Number(value) || 0)), 2);
+            else if (name === 'x' || name === 'y') editor.view[name] = round(Math.max(-1, Math.min(1, Number(value) || 0)));
+            syncEditorInstances(); updateToolbar();
+            return getState();
+        }
+        function stepView(name, direction) {
+            if (!editor) return getState();
+            var step = name === 'scale' ? SCALE_STEP : name === 'rotate' ? ROTATE_STEP : POSITION_STEP;
+            return setViewValue(name, Number(editor.view[name]) + step * (direction < 0 ? -1 : 1));
+        }
+        function toggleFlip(name) {
+            if (!editor || (name !== 'flipX' && name !== 'flipY')) return getState();
+            editor.view[name] = !editor.view[name];
+            syncEditorInstances(); updateToolbar();
+            return getState();
+        }
         function resetEdit() {
             if (!editor) return getState();
             editor.view = normalizeView(null);
@@ -706,11 +746,16 @@
             }).catch(function (error) { editorClosing = false; throw error; });
         }
         function onToolbarClick(event) {
+            var stepButton = event.target && event.target.closest ? event.target.closest('[data-step-view]') : null;
+            if (stepButton && toolbar.contains(stepButton)) {
+                stepView(stepButton.getAttribute('data-step-view'), Number(stepButton.getAttribute('data-step-direction')));
+                return;
+            }
             var button = event.target && event.target.closest ? event.target.closest('[data-action]') : null;
             if (!button || !toolbar.contains(button)) return;
             var action = button.getAttribute('data-action');
-            if (action === 'down') setScale(editor.view.scale - SCALE_STEP);
-            else if (action === 'up') setScale(editor.view.scale + SCALE_STEP);
+            if (action === 'flip-x') toggleFlip('flipX');
+            else if (action === 'flip-y') toggleFlip('flipY');
             else if (action === 'reset') resetEdit();
             else if (action === 'cancel') cancelEdit();
             else if (action === 'save') saveEdit().catch(onError);
@@ -721,10 +766,7 @@
             if (!input || !toolbar.contains(input)) return;
             var name = input.getAttribute('data-view');
             var value = Number(input.value);
-            if (name === 'rotate') editor.view.rotate = round(Math.max(-180, Math.min(180, value)), 2);
-            else if (name === 'x' || name === 'y') editor.view[name] = round(Math.max(-1, Math.min(1, value)));
-            syncEditorInstances();
-            updateToolbar();
+            setViewValue(name, value);
         }
         function clearBinding(kind) {
             var cap = capability(kind);
@@ -760,7 +802,7 @@
                 diagnostics: clone(editor.diagnostics),
             } : { state: 'idle' };
         }
-        function notifyAssetChanged(id) { if (id) assetCache.delete(id); return reconcile(); }
+        function notifyAssetChanged(id) { if (id) { assetCache.delete(id); rotatedSources.delete(id); } return reconcile(); }
 
         return {
             start: start,
