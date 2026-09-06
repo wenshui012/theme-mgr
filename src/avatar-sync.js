@@ -211,72 +211,157 @@
         var getPostHeaders = options.getPostHeaders || function () { return { 'Content-Type': 'application/json' }; };
         var base = options.serverBase || SERVER_BASE;
         var timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : REQUEST_TIMEOUT_MS;
-        function request(url, init) {
-            if (typeof fetchFn !== 'function') return Promise.reject(makeError('AVATAR_BACKEND_ERROR', '头像后端请求不可用'));
+        function request(url, init, stage) {
+            var method = clean(init && init.method || 'GET').toUpperCase() || 'GET';
+            var details = { endpoint: url, method: method, stage: stage };
+            if (typeof fetchFn !== 'function') return Promise.reject(makeError('AVATAR_BACKEND_ERROR', '头像后端请求不可用', details));
             var timeout;
             return Promise.race([
                 Promise.resolve().then(function () { return fetchFn(url, init); }),
                 new Promise(function (_, reject) {
-                    timeout = global.setTimeout(function () { reject(makeError('AVATAR_BACKEND_ERROR', '头像后端请求超时')); }, timeoutMs);
+                    timeout = global.setTimeout(function () {
+                        reject(makeError('AVATAR_BACKEND_ERROR', '头像后端请求超时', Object.assign({}, details, { cause: 'TIMEOUT' })));
+                    }, timeoutMs);
                 }),
             ]).catch(function (error) {
                 if (error && error.name === 'AvatarSyncError') throw error;
-                throw makeError('AVATAR_BACKEND_ERROR', '头像后端请求失败', { cause: error && error.message });
+                throw makeError('AVATAR_BACKEND_ERROR', '头像后端请求失败', Object.assign({}, details, {
+                    cause: clean(error && (error.code || error.name)) || 'FETCH_FAILED',
+                }));
             }).finally(function () { if (timeout) global.clearTimeout(timeout); });
         }
-        function body(response) {
-            return Promise.resolve().then(function () { return response.json(); }).catch(function (error) {
-                throw makeError('AVATAR_BACKEND_INVALID', '头像后端返回了无效 JSON', { cause: error.message });
+        function contentType(response) {
+            try { return clean(response && response.headers && response.headers.get && response.headers.get('content-type')).toLowerCase(); }
+            catch (_) { return ''; }
+        }
+        function responseDetails(response, method, endpoint, stage, cause) {
+            var details = {
+                status: Number(response && response.status) || 0,
+                endpoint: endpoint,
+                method: method,
+                stage: stage,
+                contentType: contentType(response),
+            };
+            if (cause) details.cause = cause;
+            return details;
+        }
+        function safeRemoteCause(data, fallback) {
+            var candidate = data && (data.code || data.name || (isObject(data.error) && (data.error.code || data.error.name)));
+            candidate = clean(candidate);
+            return /^[A-Za-z][A-Za-z0-9_.:-]{0,47}$/.test(candidate) ? candidate : fallback;
+        }
+        function readResponse(response, method, endpoint, stage) {
+            var details = responseDetails(response, method, endpoint, stage);
+            var read;
+            if (response && typeof response.text === 'function') {
+                read = Promise.resolve().then(function () { return response.text(); }).then(function (text) {
+                    if (!clean(text)) return { data: null, parseCause: 'EMPTY_RESPONSE_BODY' };
+                    try { return { data: JSON.parse(text), parseCause: '' }; }
+                    catch (error) { return { data: null, parseCause: clean(error && error.name) || 'JSON_PARSE_FAILED' }; }
+                });
+            } else if (response && typeof response.json === 'function') {
+                read = Promise.resolve().then(function () { return response.json(); }).then(function (data) {
+                    return { data: data, parseCause: '' };
+                }).catch(function (error) {
+                    return { data: null, parseCause: clean(error && error.name) || 'JSON_PARSE_FAILED' };
+                });
+            } else {
+                read = Promise.resolve({ data: null, parseCause: 'RESPONSE_BODY_UNAVAILABLE' });
+            }
+            return read.then(function (payload) {
+                return { response: response, details: details, data: payload.data, parseCause: payload.parseCause };
+            });
+        }
+        function throwHttpError(record) {
+            var status = record.details.status;
+            var details = Object.assign({}, record.details, {
+                cause: safeRemoteCause(record.data, record.parseCause || ('HTTP_' + status)),
+            });
+            if (status === 403) throw makeError('AVATAR_CSRF_REJECTED', '头像后端拒绝了 CSRF 凭据', details);
+            if (status === 409) {
+                if (record.data && hasOwn(record.data, 'current')) details.current = clone(record.data.current);
+                throw makeError('AVATAR_REVISION_CONFLICT', '头像数据已被其他客户端修改', details);
+            }
+            throw makeError('AVATAR_HTTP_ERROR', '头像后端 HTTP 请求失败', details);
+        }
+        function successfulJson(record) {
+            if (!record.response || !record.response.ok) throwHttpError(record);
+            if (record.parseCause) {
+                throw makeError('AVATAR_BACKEND_INVALID', '头像后端返回了无效 JSON', Object.assign({}, record.details, { cause: record.parseCause }));
+            }
+            return record.data;
+        }
+        function invalidProtocol(record, message, cause) {
+            throw makeError('AVATAR_BACKEND_INVALID', message, Object.assign({}, record.details, { cause: cause || 'PROTOCOL_INVALID' }));
+        }
+        function resolvePostHeaders(method, endpoint, stage) {
+            return Promise.resolve().then(function () { return getPostHeaders(); }).catch(function (error) {
+                throw makeError('AVATAR_BACKEND_ERROR', '头像后端请求凭据获取失败', {
+                    endpoint: endpoint,
+                    method: method,
+                    stage: stage,
+                    cause: clean(error && (error.code || error.name)) || 'HEADERS_FAILED',
+                });
             });
         }
         function probeCapability() {
-            return request(base + '/status', { method: 'GET' }).then(function (response) {
+            var endpoint = base + '/status';
+            return request(endpoint, { method: 'GET' }, 'capability').then(function (response) {
                 if (response.status === 404) return { status: 'unsupported', reason: 'backend-absent' };
-                if (!response.ok) throw makeError('AVATAR_BACKEND_ERROR', '头像后端 capability 请求失败', { status: response.status });
-                return body(response).then(function (data) {
-                    if (!isObject(data) || data.ok !== true) throw makeError('AVATAR_BACKEND_INVALID', '头像后端 capability 响应无效');
+                return readResponse(response, 'GET', endpoint, 'capability').then(function (record) {
+                    var data = successfulJson(record);
+                    if (!isObject(data) || data.ok !== true) invalidProtocol(record, '头像后端 capability 响应无效');
                     var capability = data.capabilities && data.capabilities.avatarStorage;
                     if (!isObject(capability)) return { status: 'unsupported', reason: 'capability-absent' };
                     if (capability.version !== 1 || capability.manifestVersion !== 1 || capability.revisionCas !== true || capability.verifiedImageMetadata !== true) {
-                        throw makeError('AVATAR_BACKEND_INVALID', '头像后端 capability 版本或能力不兼容');
+                        invalidProtocol(record, '头像后端 capability 版本或能力不兼容', 'CAPABILITY_INCOMPATIBLE');
                     }
                     return { status: 'supported', capability: clone(capability) };
                 });
             });
         }
         function readState() {
-            return request(base + '/avatars/state', { method: 'GET' }).then(function (response) {
-                return body(response).then(function (data) {
-                    if (response.status === 422 && data && data.state === 'invalid') return { status: 'invalid', error: data.error || 'AVATAR_REMOTE_INVALID' };
-                    if (!response.ok) throw makeError('AVATAR_BACKEND_ERROR', '头像后端状态请求失败', { status: response.status });
-                    if (!isObject(data) || data.ok !== true) throw makeError('AVATAR_BACKEND_INVALID', '头像后端状态响应无效');
+            var endpoint = base + '/avatars/state';
+            return request(endpoint, { method: 'GET' }, 'state').then(function (response) {
+                return readResponse(response, 'GET', endpoint, 'state').then(function (record) {
+                    if (response.status === 422 && !record.parseCause && record.data && record.data.state === 'invalid') {
+                        return { status: 'invalid', error: safeRemoteCause(record.data, 'AVATAR_REMOTE_INVALID') };
+                    }
+                    var data = successfulJson(record);
+                    if (!isObject(data) || data.ok !== true) invalidProtocol(record, '头像后端状态响应无效');
                     if (data.state === 'empty' && data.datasetId === null && data.revision === 0 && data.manifest === null) return { status: 'empty' };
                     if (data.state !== 'present' || typeof data.datasetId !== 'string' || !/^[A-Za-z0-9._-]{8,128}$/.test(data.datasetId) ||
                         !Number.isSafeInteger(data.revision) || data.revision < 1 || !/^sha256:[a-f0-9]{64}$/.test(data.fingerprint) || !isObject(data.manifest)) {
-                        throw makeError('AVATAR_BACKEND_INVALID', '头像后端状态协议无效');
+                        invalidProtocol(record, '头像后端状态协议无效');
                     }
                     return { status: 'present', datasetId: data.datasetId, revision: data.revision, fingerprint: data.fingerprint, manifest: data.manifest };
                 });
             });
         }
         function upload(dataUrl) {
-            return request(base + '/images', { method: 'POST', headers: getPostHeaders(), body: JSON.stringify({ dataUrl: dataUrl }) }).then(function (response) {
-                return body(response).then(function (data) {
-                    if (!response.ok || !isObject(data) || data.ok !== true || !isObject(data.image)) {
-                        throw makeError('AVATAR_IMAGE_UPLOAD_FAILED', '头像图片上传失败', { status: response.status });
-                    }
-                    return normalizeImageRef(data.image);
+            var endpoint = base + '/images';
+            return resolvePostHeaders('POST', endpoint, 'upload').then(function (headers) {
+                return request(endpoint, { method: 'POST', headers: headers, body: JSON.stringify({ dataUrl: dataUrl }) }, 'upload');
+            }).then(function (response) {
+                return readResponse(response, 'POST', endpoint, 'upload').then(function (record) {
+                    var data = successfulJson(record);
+                    if (!isObject(data) || data.ok !== true || !isObject(data.image)) invalidProtocol(record, '头像图片上传响应无效');
+                    try { return normalizeImageRef(data.image); }
+                    catch (error) { invalidProtocol(record, '头像图片上传响应无效', error && error.code || 'IMAGE_REFERENCE_INVALID'); }
                 });
             });
         }
         function commit(input) {
-            return request(base + '/avatars/manifest', { method: 'PUT', headers: getPostHeaders(), body: JSON.stringify(input) }).then(function (response) {
-                return body(response).then(function (data) {
-                    if (response.status === 409) throw makeError('AVATAR_REVISION_CONFLICT', '头像数据已被其他客户端修改', { current: data && data.current });
-                    if (!response.ok || !isObject(data) || data.ok !== true || data.state !== 'present' ||
+            var endpoint = base + '/avatars/manifest';
+            return resolvePostHeaders('PUT', endpoint, 'commit').then(function (headers) {
+                return request(endpoint, { method: 'PUT', headers: headers, body: JSON.stringify(input) }, 'commit');
+            }).then(function (response) {
+                return readResponse(response, 'PUT', endpoint, 'commit').then(function (record) {
+                    var data = successfulJson(record);
+                    if (!isObject(data) || data.ok !== true || data.state !== 'present' ||
                         typeof data.datasetId !== 'string' || !/^[A-Za-z0-9._-]{8,128}$/.test(data.datasetId) || !Number.isSafeInteger(data.revision) || data.revision < 1 ||
                         !/^sha256:[a-f0-9]{64}$/.test(data.fingerprint) || !isObject(data.manifest)) {
-                        throw makeError('AVATAR_MANIFEST_COMMIT_FAILED', '头像 manifest 提交失败', { status: response.status, remoteError: data && data.error });
+                        invalidProtocol(record, '头像 manifest 提交响应无效');
                     }
                     return { status: 'present', datasetId: data.datasetId, revision: data.revision, fingerprint: data.fingerprint, manifest: data.manifest };
                 });
@@ -284,8 +369,13 @@
         }
         function download(ref) {
             ref = normalizeImageRef(ref);
-            return request(ref.url, { method: 'GET' }).then(function (response) {
-                if (!response.ok || typeof response.arrayBuffer !== 'function') throw makeError('AVATAR_IMAGE_DOWNLOAD_FAILED', '头像图片下载失败', { status: response.status });
+            return request(ref.url, { method: 'GET' }, 'download').then(function (response) {
+                if (!response.ok) {
+                    return readResponse(response, 'GET', ref.url, 'download').then(function (record) { throwHttpError(record); });
+                }
+                if (typeof response.arrayBuffer !== 'function') {
+                    throw makeError('AVATAR_BACKEND_INVALID', '头像图片下载响应无效', responseDetails(response, 'GET', ref.url, 'download', 'ARRAY_BUFFER_UNAVAILABLE'));
+                }
                 return response.arrayBuffer().then(function (buffer) { return arrayBufferToDataUrl(buffer, ref.mime); });
             });
         }
@@ -332,7 +422,7 @@
         var remote = options.remote || createRemoteApi(options);
         var inspectDataUrl = options.inspectDataUrl || defaultInspectDataUrl;
         var onStateChange = options.onStateChange || function () {};
-        var state = { phase: 'idle', authoritative: null, writable: false, offline: false, local: 'unknown', remote: 'unknown', reason: '' };
+        var state = { phase: 'idle', authoritative: null, writable: false, offline: false, local: 'unknown', remote: 'unknown', reason: '', error: null };
         var initialization = null;
         var activeStore = null;
         var activeSnapshot = null;
@@ -348,8 +438,26 @@
             try { onStateChange(clone(state)); } catch (_) {}
             return clone(state);
         }
-        function block(reason, localStatus, remoteStatus, phase) {
-            publish({ phase: phase || 'blocked', authoritative: null, writable: false, offline: false, local: localStatus || state.local, remote: remoteStatus || state.remote, reason: reason || 'blocked' });
+        function errorSummary(error) {
+            if (!error) return null;
+            var summary = {
+                code: clean(error.code) || 'AVATAR_UNKNOWN_ERROR',
+                name: clean(error.name) || 'Error',
+            };
+            if (error.details) summary.details = clone(error.details);
+            return summary;
+        }
+        function block(reason, localStatus, remoteStatus, phase, underlyingError) {
+            publish({
+                phase: phase || 'blocked',
+                authoritative: null,
+                writable: false,
+                offline: false,
+                local: localStatus || state.local,
+                remote: remoteStatus || state.remote,
+                reason: reason || 'blocked',
+                error: errorSummary(underlyingError),
+            });
             throw makeError(
                 phase === 'conflict' ? 'AVATAR_STORAGE_CONFLICT' : 'AVATAR_STORAGE_BLOCKED',
                 phase === 'conflict' ? '本地和后端头像数据存在冲突，已停止自动接管' : '头像存储尚未安全就绪',
@@ -438,7 +546,7 @@
                 datasetId = remoteState.datasetId;
                 revision = remoteState.revision;
                 fingerprint = remoteState.fingerprint;
-                return publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'present', reason: '' });
+                return publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'present', reason: '', error: null });
             });
         }
         function loadOfflineCache(control, localStatus) {
@@ -452,7 +560,7 @@
                 fingerprint = control.fingerprint;
                 return publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: true, local: localStatus, remote: 'error', reason: 'last-known-good-cache' });
             }).catch(function (error) {
-                return block(error.code || 'offline-cache-invalid', localStatus, 'error');
+                return block(error.code || 'offline-cache-invalid', localStatus, 'error', undefined, error);
             });
         }
         function migrateLocal(local) {
@@ -482,21 +590,21 @@
             });
         }
         function initializeImpl() {
-            publish({ phase: 'probing', authoritative: null, writable: false, offline: false, reason: '' });
+            publish({ phase: 'probing', authoritative: null, writable: false, offline: false, reason: '', error: null });
             return Promise.all([classifyLocal(), readControl()]).then(function (parts) {
                 var local = parts[0];
                 var controlResult = parts[1];
                 publish({ local: local.status });
-                if (controlResult.status === 'error') return block('control-error', local.status, 'unknown');
+                if (controlResult.status === 'error') return block('control-error', local.status, 'unknown', undefined, controlResult.error);
                 if (controlResult.status !== 'present' && (local.status === 'invalid' || local.status === 'error')) {
-                    return block('local-' + local.status, local.status, 'unknown');
+                    return block('local-' + local.status, local.status, 'unknown', undefined, local.error);
                 }
                 return Promise.resolve(remote.probeCapability()).then(function (capability) {
                     if (!capability || capability.status === 'unsupported') {
                         if (controlResult.status === 'present') return block('remote-capability-lost', local.status, 'unsupported');
                         setActiveSnapshot(local.snapshot);
                         activeStore = localStore;
-                        return publish({ phase: 'local-ready', authoritative: 'local', writable: true, offline: false, remote: 'unsupported', reason: capability && capability.reason || 'unsupported' });
+                        return publish({ phase: 'local-ready', authoritative: 'local', writable: true, offline: false, remote: 'unsupported', reason: capability && capability.reason || 'unsupported', error: null });
                     }
                     if (capability.status !== 'supported') return block('capability-invalid', local.status, 'invalid');
                     return Promise.resolve(remote.readState()).then(function (remoteState) {
@@ -509,7 +617,7 @@
                             revision = 0;
                             remoteManifest = null;
                             remoteRefs = new Map();
-                            return publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'empty', reason: 'cas-initialize-on-first-write' });
+                            return publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'empty', reason: 'cas-initialize-on-first-write', error: null });
                         }
                         if (remoteState.status !== 'present') return block('remote-state-invalid', local.status, 'invalid');
                         if (controlResult.status !== 'present' && local.status === 'present') return block('both-present', local.status, 'present', 'conflict');
@@ -523,12 +631,12 @@
                 }).catch(function (error) {
                     if (error && (error.code === 'AVATAR_STORAGE_BLOCKED' || error.code === 'AVATAR_STORAGE_CONFLICT')) throw error;
                     if (error && error.code === 'AVATAR_REVISION_CONFLICT') {
-                        return block('revision-conflict', local.status, 'present', 'conflict');
+                        return block('revision-conflict', local.status, 'present', 'conflict', error);
                     }
-                    if (controlResult.status === 'present' && error && error.code === 'AVATAR_BACKEND_ERROR') {
+                    if (controlResult.status === 'present' && error && (error.code === 'AVATAR_BACKEND_ERROR' || error.code === 'AVATAR_HTTP_ERROR')) {
                         return loadOfflineCache(controlResult.control, local.status);
                     }
-                    return block(error && error.code || 'backend-error', local.status, error && error.code === 'AVATAR_BACKEND_INVALID' ? 'invalid' : 'error');
+                    return block(error && error.code || 'backend-error', local.status, error && error.code === 'AVATAR_BACKEND_INVALID' ? 'invalid' : 'error', undefined, error);
                 });
             });
         }
@@ -580,7 +688,7 @@
                                 remoteRefs = normalized.refs;
                                 revision = committed.revision;
                                 fingerprint = committed.fingerprint;
-                                publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'present', reason: '' });
+                                publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'present', reason: '', error: null });
                                 return result;
                             }).catch(function (cacheError) {
                                 publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'present', reason: 'cache-update-failed' });
@@ -588,9 +696,9 @@
                             });
                         }).catch(function (error) {
                             if (error && error.code === 'AVATAR_REVISION_CONFLICT') {
-                                publish({ phase: 'conflict', authoritative: null, writable: false, offline: false, remote: 'present', reason: 'revision-conflict' });
+                                publish({ phase: 'conflict', authoritative: null, writable: false, offline: false, remote: 'present', reason: 'revision-conflict', error: errorSummary(error) });
                             } else if (!error || error.code !== 'AVATAR_CACHE_UPDATE_FAILED') {
-                                publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'error', reason: 'commit-uncertain' });
+                                publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'error', reason: 'commit-uncertain', error: errorSummary(error) });
                             }
                             throw error;
                         });

@@ -59,6 +59,28 @@ function emptyManifest() {
     return { schemaVersion: 1, assets: [], bindings: [], nativeViews: [], sourceIntents: [] };
 }
 
+function httpResponse(status, body, contentType = 'application/json') {
+    return {
+        status,
+        ok: status >= 200 && status < 300,
+        headers: {
+            get(name) { return String(name).toLowerCase() === 'content-type' ? contentType : null; },
+        },
+        text() { return Promise.resolve(body); },
+    };
+}
+
+function validCommitResponse(input) {
+    return {
+        ok: true,
+        state: 'present',
+        datasetId: input.datasetId,
+        revision: input.expectedRevision + 1,
+        fingerprint: fingerprint(input.expectedRevision + 1),
+        manifest: input.manifest,
+    };
+}
+
 function createRemote(initial, options = {}) {
     let current = initial || { status: 'empty' };
     let readCount = 0;
@@ -122,6 +144,147 @@ function coordinator({ local, cache, control, remote }) {
         avatarStorage: modules.avatarStorage,
     });
 }
+
+test('remote upload and manifest commit await asynchronous post headers', async () => {
+    const calls = [];
+    const token = 'test-csrf-token';
+    const remote = modules.avatarSync.createRemoteApi({
+        serverBase: '/avatar-test',
+        getPostHeaders() {
+            return Promise.resolve({ 'Content-Type': 'application/json', 'X-CSRF-Token': token });
+        },
+        fetch(endpoint, init) {
+            calls.push({ endpoint, init });
+            if (endpoint.endsWith('/images')) {
+                return Promise.resolve(httpResponse(200, JSON.stringify({ ok: true, image: refFor('upload-body') })));
+            }
+            const input = JSON.parse(init.body);
+            return Promise.resolve(httpResponse(200, JSON.stringify(validCommitResponse(input))));
+        },
+    });
+
+    await remote.upload('upload-body');
+    await remote.commit({ expectedRevision: 0, datasetId: 'dataset-test', manifest: emptyManifest() });
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].init.method, 'POST');
+    assert.equal(calls[1].init.method, 'PUT');
+    for (const call of calls) {
+        assert.equal(typeof call.init.headers.then, 'undefined', 'fetch received a Promise as HeadersInit');
+        assert.equal(call.init.headers['X-CSRF-Token'], token);
+        assert.equal(call.init.headers['Content-Type'], 'application/json');
+    }
+});
+
+test('remote HTTP errors preserve method endpoint status stage and do not expose response bodies', async () => {
+    const cases = [
+        {
+            label: '403 text/html upload',
+            status: 403,
+            contentType: 'text/html',
+            body: '<html>Invalid CSRF token raw-secret-token</html>',
+            code: 'AVATAR_CSRF_REJECTED',
+            method: 'POST',
+            stage: 'upload',
+            invoke(remote) { return remote.upload('upload-body'); },
+        },
+        {
+            label: '403 text/plain commit',
+            status: 403,
+            contentType: 'text/plain',
+            body: 'Invalid CSRF token raw-secret-token',
+            code: 'AVATAR_CSRF_REJECTED',
+            method: 'PUT',
+            stage: 'commit',
+            invoke(remote) { return remote.commit({ expectedRevision: 0, datasetId: 'dataset-test', manifest: emptyManifest() }); },
+        },
+        {
+            label: '403 JSON body cannot leak a token-shaped server error',
+            status: 403,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' }),
+            code: 'AVATAR_CSRF_REJECTED',
+            method: 'POST',
+            stage: 'upload',
+            invoke(remote) { return remote.upload('upload-body'); },
+        },
+        {
+            label: '500 non-JSON upload',
+            status: 500,
+            contentType: 'text/plain',
+            body: 'server exploded raw-secret-token',
+            code: 'AVATAR_HTTP_ERROR',
+            method: 'POST',
+            stage: 'upload',
+            invoke(remote) { return remote.upload('upload-body'); },
+        },
+        {
+            label: '200 invalid JSON upload',
+            status: 200,
+            contentType: 'application/json',
+            body: '{invalid',
+            code: 'AVATAR_BACKEND_INVALID',
+            method: 'POST',
+            stage: 'upload',
+            invoke(remote) { return remote.upload('upload-body'); },
+        },
+        {
+            label: '409 manifest conflict',
+            status: 409,
+            contentType: 'application/json',
+            body: JSON.stringify({ ok: false, code: 'REVISION_CONFLICT', current: { revision: 4 } }),
+            code: 'AVATAR_REVISION_CONFLICT',
+            method: 'PUT',
+            stage: 'commit',
+            invoke(remote) { return remote.commit({ expectedRevision: 3, datasetId: 'dataset-test', manifest: emptyManifest() }); },
+        },
+    ];
+
+    for (const item of cases) {
+        const remote = modules.avatarSync.createRemoteApi({
+            serverBase: '/avatar-test',
+            getPostHeaders: () => Promise.resolve({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'test-csrf-token' }),
+            fetch: () => Promise.resolve(httpResponse(item.status, item.body, item.contentType)),
+        });
+        await assert.rejects(item.invoke(remote), error => {
+            assert.equal(error.code, item.code, item.label);
+            assert.equal(error.details.status, item.status, item.label);
+            assert.equal(error.details.method, item.method, item.label);
+            assert.equal(error.details.stage, item.stage, item.label);
+            assert.match(error.details.endpoint, /^\/avatar-test\//, item.label);
+            assert.equal(error.details.contentType, item.contentType, item.label);
+            assert.equal(typeof error.details.cause, 'string', item.label);
+            assert.equal(JSON.stringify(error).includes('raw-secret-token'), false, item.label);
+            assert.equal(JSON.stringify(error).includes('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'), false, item.label);
+            return true;
+        });
+    }
+});
+
+test('coordinator blocked state retains the sanitized underlying HTTP error', async () => {
+    const failure = modules.avatarSync.makeError('AVATAR_CSRF_REJECTED', 'rejected', {
+        status: 403,
+        endpoint: '/api/plugins/theme-manager/images',
+        method: 'POST',
+        stage: 'upload',
+        cause: 'SyntaxError',
+    });
+    const sync = coordinator({
+        local: memoryStore({ assets: [asset()] }),
+        remote: createRemote({ status: 'empty' }, { uploadError: failure }),
+    });
+    await assert.rejects(sync.initialize(), error => {
+        assert.equal(error.code, 'AVATAR_STORAGE_BLOCKED');
+        assert.equal(error.details.reason, 'AVATAR_CSRF_REJECTED');
+        assert.equal(error.details.error.code, 'AVATAR_CSRF_REJECTED');
+        assert.equal(error.details.error.details.status, 403);
+        assert.equal(error.details.error.details.endpoint, '/api/plugins/theme-manager/images');
+        assert.equal(error.details.error.details.method, 'POST');
+        assert.equal(error.details.error.details.stage, 'upload');
+        assert.equal(error.details.error.details.cause, 'SyntaxError');
+        return true;
+    });
+});
 
 test('old backend without avatar capability stays local-ready and is never classified as remote empty', async () => {
     const local = memoryStore({ assets: [asset()] });

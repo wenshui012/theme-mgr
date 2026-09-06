@@ -31,6 +31,7 @@ async function chromium() {
     let offline = false;
     let remoteState = { status: 'empty' };
     const calls = [];
+    const csrfToken = 'browser-csrf-token';
 
     await page.route('**/api/plugins/theme-manager/**', async route => {
         const request = route.request();
@@ -51,6 +52,8 @@ async function chromium() {
             return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
         }
         if (url.pathname.endsWith('/images') && request.method() === 'POST') {
+            assert(request.headers()['x-csrf-token'] === csrfToken, 'upload omitted the resolved CSRF header');
+            assert(request.headers()['content-type'] === 'application/json', 'upload omitted the JSON content type');
             const dataUrl = request.postDataJSON().dataUrl;
             const match = /^data:image\/(png);base64,(.+)$/i.exec(dataUrl);
             assert(match, 'unexpected uploaded image');
@@ -66,6 +69,8 @@ async function chromium() {
             return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, image }) });
         }
         if (url.pathname.endsWith('/avatars/manifest') && request.method() === 'PUT') {
+            assert(request.headers()['x-csrf-token'] === csrfToken, 'manifest commit omitted the resolved CSRF header');
+            assert(request.headers()['content-type'] === 'application/json', 'manifest commit omitted the JSON content type');
             const body = request.postDataJSON();
             assert(remoteState.status === 'empty' && body.expectedRevision === 0, 'initial CAS was not revision 0');
             remoteState = { status: 'present', datasetId: body.datasetId, revision: 1, fingerprint: 'sha256:' + '1'.repeat(64), manifest: body.manifest };
@@ -102,7 +107,7 @@ async function chromium() {
             localStore: local,
             cacheDbName: names.cache,
             controlDbName: names.control,
-            getPostHeaders: () => ({ 'Content-Type': 'application/json' }),
+            getPostHeaders: () => Promise.resolve({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'browser-csrf-token' }),
         });
         const state = await coordinator.initialize();
         const after = await local.readSnapshot();
@@ -126,7 +131,7 @@ async function chromium() {
             localStore: local,
             cacheDbName: names.cache,
             controlDbName: names.control,
-            getPostHeaders: () => ({ 'Content-Type': 'application/json' }),
+            getPostHeaders: () => Promise.resolve({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'browser-csrf-token' }),
             timeoutMs: 500,
         });
         const state = await coordinator.initialize();
