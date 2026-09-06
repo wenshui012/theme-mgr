@@ -5,6 +5,7 @@
     var LIBRARY_VERSION = 1;
     var BINDINGS_VERSION = 4;
     var NATIVE_VIEWS_VERSION = 1;
+    var SOURCE_INTENTS_VERSION = 1;
     var STORES = { assets: 'assets', main: 'main-images', thumbs: 'thumbnails', bindings: 'bindings', meta: 'meta' };
 
     function clone(value) {
@@ -81,6 +82,10 @@
         return 'native-view\u001f' + cleanText(targetKey);
     }
 
+    function sourceIntentId(targetKey) {
+        return 'source-intent\u001f' + cleanText(targetKey);
+    }
+
     function normalizeBinding(binding) {
         binding = binding && typeof binding === 'object' ? binding : {};
         var themeKey = cleanText(binding.themeKey);
@@ -115,6 +120,19 @@
         };
     }
 
+    function normalizeSourceIntent(record) {
+        record = record && typeof record === 'object' ? record : {};
+        var targetKey = cleanText(record.targetKey);
+        if (!targetKey) throw makeError('AVATAR_SOURCE_INTENT_INVALID', '原头像显示意图数据无效');
+        return {
+            version: SOURCE_INTENTS_VERSION,
+            id: sourceIntentId(targetKey),
+            targetKey: targetKey,
+            mode: 'host-source',
+            updatedAt: cleanText(record.updatedAt) || new Date().toISOString(),
+        };
+    }
+
     function metadataFromAsset(asset) {
         var result = clone(asset);
         delete result.imageData;
@@ -129,6 +147,7 @@
         var thumbs = new Map();
         var bindings = new Map();
         var nativeViews = new Map();
+        var sourceIntents = new Map();
         (seed.assets || []).forEach(function (raw) {
             var asset = normalizeAsset(raw);
             assets.set(asset.id, metadataFromAsset(asset));
@@ -142,6 +161,10 @@
         (seed.nativeViews || []).forEach(function (raw) {
             var record = normalizeNativeView(raw);
             nativeViews.set(record.id, record);
+        });
+        (seed.sourceIntents || []).forEach(function (raw) {
+            var record = normalizeSourceIntent(raw);
+            sourceIntents.set(record.id, record);
         });
         return {
             ready: Promise.resolve(),
@@ -176,6 +199,13 @@
                 return Promise.resolve(clone(record));
             },
             deleteNativeView: function (targetKey) { return Promise.resolve(nativeViews.delete(nativeViewId(targetKey))); },
+            getSourceIntent: function (targetKey) { return Promise.resolve(clone(sourceIntents.get(sourceIntentId(targetKey)) || null)); },
+            putSourceIntent: function (record) {
+                record = normalizeSourceIntent(record);
+                sourceIntents.set(record.id, record);
+                return Promise.resolve(clone(record));
+            },
+            deleteSourceIntent: function (targetKey) { return Promise.resolve(sourceIntents.delete(sourceIntentId(targetKey))); },
             deleteAsset: function (id) {
                 id = cleanText(id);
                 var removedBindings = [];
@@ -187,7 +217,7 @@
                 thumbs.delete(id);
                 return Promise.resolve({ removed: removed, bindings: removedBindings });
             },
-            clear: function () { assets.clear(); mains.clear(); thumbs.clear(); bindings.clear(); nativeViews.clear(); return Promise.resolve(); },
+            clear: function () { assets.clear(); mains.clear(); thumbs.clear(); bindings.clear(); nativeViews.clear(); sourceIntents.clear(); return Promise.resolve(); },
         };
     }
 
@@ -334,6 +364,25 @@
                     setResult(true);
                 });
             },
+            getSourceIntent: function (targetKey) {
+                return databasePromise.then(function (db) {
+                    var tx = db.transaction([STORES.meta], 'readonly');
+                    return requestPromise(tx.objectStore(STORES.meta).get(sourceIntentId(targetKey)), 'AVATAR_IDB_READ_FAILED', '原头像显示意图读取失败');
+                }).then(function (result) { return clone(result || null); });
+            },
+            putSourceIntent: function (raw) {
+                var record = normalizeSourceIntent(raw);
+                return transaction([STORES.meta], 'readwrite', function (tx, setResult) {
+                    tx.objectStore(STORES.meta).put(record);
+                    setResult(record);
+                });
+            },
+            deleteSourceIntent: function (targetKey) {
+                return transaction([STORES.meta], 'readwrite', function (tx, setResult) {
+                    tx.objectStore(STORES.meta).delete(sourceIntentId(targetKey));
+                    setResult(true);
+                });
+            },
             deleteAsset: function (id) {
                 id = cleanText(id);
                 return transaction([STORES.assets, STORES.main, STORES.thumbs, STORES.bindings], 'readwrite', function (tx, setResult) {
@@ -379,9 +428,12 @@
             getNativeView: function (targetKey) { return Promise.resolve(adapter.getNativeView(targetKey)).then(clone); },
             putNativeView: function (record) { return Promise.resolve(adapter.putNativeView(normalizeNativeView(record))).then(clone); },
             deleteNativeView: function (targetKey) { return Promise.resolve(adapter.deleteNativeView(targetKey)); },
+            getSourceIntent: function (targetKey) { return Promise.resolve(adapter.getSourceIntent(targetKey)).then(clone); },
+            putSourceIntent: function (record) { return Promise.resolve(adapter.putSourceIntent(normalizeSourceIntent(record))).then(clone); },
+            deleteSourceIntent: function (targetKey) { return Promise.resolve(adapter.deleteSourceIntent(targetKey)); },
             deleteAsset: function (id) { return Promise.resolve(adapter.deleteAsset(id)).then(clone); },
             clear: function () { return Promise.resolve(adapter.clear()); },
-            versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION, nativeViews: NATIVE_VIEWS_VERSION },
+            versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION, nativeViews: NATIVE_VIEWS_VERSION, sourceIntents: SOURCE_INTENTS_VERSION },
         };
     };
 
@@ -391,13 +443,16 @@
         LIBRARY_VERSION: LIBRARY_VERSION,
         BINDINGS_VERSION: BINDINGS_VERSION,
         NATIVE_VIEWS_VERSION: NATIVE_VIEWS_VERSION,
+        SOURCE_INTENTS_VERSION: SOURCE_INTENTS_VERSION,
         STORES: STORES,
         normalizeAsset: normalizeAsset,
         normalizeBinding: normalizeBinding,
         normalizeNativeView: normalizeNativeView,
+        normalizeSourceIntent: normalizeSourceIntent,
         normalizeView: normalizeView,
         bindingId: bindingId,
         nativeViewId: nativeViewId,
+        sourceIntentId: sourceIntentId,
         createMemoryAdapter: createMemoryAdapter,
         createIndexedDbAdapter: createIndexedDbAdapter,
         makeError: makeError,

@@ -439,7 +439,7 @@ test('55 Avatar Page keeps the grid for library assets and exposes current-chara
     assert.equal(status.available, true);
     assert.equal(status.targetKey, 'character:c');
 });
-test('56 User original avatar can be adjusted independently and restored exactly', async () => {
+test('56 User original avatar restores its exact host source while retaining content neutralization', async () => {
     const f = runtimeFixture();
     f.user.image.setAttribute('srcset', 'raw-user@2x.png 2x');
     await f.runtime.start();
@@ -456,7 +456,7 @@ test('56 User original avatar can be adjusted independently and restored exactly
     assert.equal(await f.store.getNativeView('user:global'), null);
     assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
     assert.equal(f.user.image.getAttribute('srcset'), 'raw-user@2x.png 2x');
-    assert.equal(f.user.image.getAttribute('style'), 'opacity:.99');
+    assert.match(f.user.image.getAttribute('style'), /^opacity:\.99;content:normal!important;$/);
 });
 test('57 a saved character original-avatar adjustment can be cleared without touching User', async () => {
     const f = runtimeFixture({ seed: { nativeViews: [
@@ -468,8 +468,9 @@ test('57 a saved character original-avatar adjustment can be cleared without tou
     await f.runtime.clearNativeView('character');
     assert.equal(await f.store.getNativeView('character:char.png'), null);
     assert.equal(f.chars[0].image.getAttribute('src'), 'raw-char.png');
-    assert.equal(f.chars[0].image.getAttribute('style'), 'opacity:.99');
+    assert.match(f.chars[0].image.getAttribute('style'), /^opacity:\.99;content:normal!important;$/);
     assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+    assert.equal(f.user.image.getAttribute('style'), 'opacity:.99');
 });
 test('58 native live adjustment updates only the representative until Save', async () => {
     const f = runtimeFixture();
@@ -713,12 +714,51 @@ test('75 runtime neutralizes theme CSS content overrides when applying an avatar
     assert.match(f.user.image.getAttribute('style'), /content:normal!important/);
 });
 
-test('76 runtime observes host avatar source rewrites without broad attribute watching', () => {
+test('76 an unmanaged target leaves the theme content override untouched', async () => {
+    const f = runtimeFixture();
+    f.user.image.computed.content = 'url(old-avatar.png)';
+    const baselineStyle = f.user.image.getAttribute('style');
+    await f.runtime.start();
+    assert.equal(f.user.image.getAttribute('style'), baselineStyle);
+    assert.equal(await f.store.getSourceIntent('user:global'), null);
+});
+
+test('77 explicit global User restore keeps the host source and neutralizes stale content across reconcile reload and new messages', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a')], bindings: [
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'a', view: {} },
+    ] } });
+    f.user.image.computed.content = 'url(old-avatar.png)';
+    await f.runtime.start();
+    await f.runtime.clearBinding('user');
+    assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+    assert.match(f.user.image.getAttribute('style'), /content:normal!important/);
+    assert.equal((await f.store.getSourceIntent('user:global')).mode, 'host-source');
+
+    await f.runtime.reconcile();
+    assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+    assert.match(f.user.image.getAttribute('style'), /content:normal!important/);
+
+    const next = message('user', { x: 20, y: 350, width: 60, height: 60 }, 'raw-user-new.png');
+    next.image.computed.content = 'url(old-avatar.png)';
+    f.chat.appendChild(next.mes);
+    const observer = MutationObserver.instances[MutationObserver.instances.length - 1];
+    observer.fn([{ type: 'childList', addedNodes: [next.mes] }]);
+    assert.equal(next.image.getAttribute('src'), 'raw-user-new.png');
+    assert.match(next.image.getAttribute('style'), /content:normal!important/);
+
+    f.runtime.stop();
+    assert.doesNotMatch(f.user.image.getAttribute('style'), /content:normal!important/);
+    await f.runtime.start();
+    assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+    assert.match(f.user.image.getAttribute('style'), /content:normal!important/);
+});
+
+test('78 runtime observes host avatar source rewrites without broad attribute watching', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-runtime.js'), 'utf8');
     assert.match(source, /attributeFilter:\s*\['is_user', 'is_system', 'src', 'srcset'\]/);
 });
 
-test('77 theme editor keeps User avatar bindings collapsed and places sheet actions above the bound pool', () => {
+test('79 theme editor keeps User avatar bindings collapsed and places sheet actions above the bound pool', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     assert.match(source, /id=\"tm-user-avatar-bind-overview\"/);
     assert.match(source, /function openUserAvatarBindingsSheet\(/);
@@ -726,7 +766,7 @@ test('77 theme editor keeps User avatar bindings collapsed and places sheet acti
     assert.doesNotMatch(source, /<div class=\"tm-field\"><label>User 头像绑定<\/label><div class=\"tm-user-avatar-bind\"/);
 });
 
-test('78 complete User recovery clears every User override while preserving assets and Character state', async () => {
+test('80 complete User recovery clears every User override while preserving assets and Character state', async () => {
     const candidateKey = modules.avatarRuntime.themeUserCandidateTargetKey('candidate');
     const f = runtimeFixture({ seed: {
         assets: [asset('global'), asset('legacy'), asset('active'), asset('candidate'), asset('character')],
@@ -742,6 +782,7 @@ test('78 complete User recovery clears every User override while preserving asse
             { targetKey: 'character:char.png', sourceKey: 'char.png', view: { scale: 1.1 } },
         ],
     } });
+    f.user.image.computed.content = 'url(old-avatar.png)';
     let hostChatReloads = 0;
     f.context.reloadCurrentChat = async () => { hostChatReloads += 1; };
     await f.runtime.start();
@@ -757,10 +798,11 @@ test('78 complete User recovery clears every User override while preserving asse
     assert.equal((await f.store.getNativeView('character:char.png')).sourceKey, 'char.png');
     assert.equal((await f.store.listAssets()).length, 5);
     assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+    assert.match(f.user.image.getAttribute('style'), /content:normal!important/);
     assert.equal(f.chars[0].image.getAttribute('src'), characterSource);
 });
 
-test('78 avatar settings exposes a confirmed complete User recovery action', () => {
+test('81 avatar settings exposes a confirmed complete User recovery action', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     assert.match(source, /id=\"tm-clear-all-user-avatar-overrides\"/);
     assert.match(source, /avatarRuntime\.clearAllUserOverrides\(\)/);
@@ -769,9 +811,9 @@ test('78 avatar settings exposes a confirmed complete User recovery action', () 
     assert.match(source, /global\.location\.reload\(\)/);
 });
 
-test('79 development module loading replaces stale-build scripts and uses a build cache token', () => {
+test('82 development module loading replaces stale-build scripts and uses a build cache token', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-    assert.match(source, /TM_BUILD = 'avatar-recovery-r2'/);
+    assert.match(source, /TM_BUILD = 'avatar-content-restore-r1'/);
     assert.match(source, /existing\.dataset\.themeMgrBuild === TM_BUILD/);
     assert.match(source, /existing\.parentNode\.removeChild\(existing\)/);
     assert.match(source, /encodeURIComponent\(MODULE_LOAD_TOKEN\)/);

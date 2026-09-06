@@ -7476,7 +7476,7 @@
 })(window);
 /* END MODULE 14/24: src/image-loader.js */
 
-/* BEGIN MODULE 15/24: src/avatar-storage.js | sha256:89940f9a496f22aa756b1af78bbd2a27ae8ac5283692419c2000c8b8058bd1b3 */
+/* BEGIN MODULE 15/24: src/avatar-storage.js | sha256:123b31af45a1312b6bc78ccc03f9898b7f3ac5354117413936f8230913317a3e */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var DB_NAME = 'theme_mgr_avatar_db';
@@ -7484,6 +7484,7 @@
     var LIBRARY_VERSION = 1;
     var BINDINGS_VERSION = 4;
     var NATIVE_VIEWS_VERSION = 1;
+    var SOURCE_INTENTS_VERSION = 1;
     var STORES = { assets: 'assets', main: 'main-images', thumbs: 'thumbnails', bindings: 'bindings', meta: 'meta' };
 
     function clone(value) {
@@ -7560,6 +7561,10 @@
         return 'native-view\u001f' + cleanText(targetKey);
     }
 
+    function sourceIntentId(targetKey) {
+        return 'source-intent\u001f' + cleanText(targetKey);
+    }
+
     function normalizeBinding(binding) {
         binding = binding && typeof binding === 'object' ? binding : {};
         var themeKey = cleanText(binding.themeKey);
@@ -7594,6 +7599,19 @@
         };
     }
 
+    function normalizeSourceIntent(record) {
+        record = record && typeof record === 'object' ? record : {};
+        var targetKey = cleanText(record.targetKey);
+        if (!targetKey) throw makeError('AVATAR_SOURCE_INTENT_INVALID', '原头像显示意图数据无效');
+        return {
+            version: SOURCE_INTENTS_VERSION,
+            id: sourceIntentId(targetKey),
+            targetKey: targetKey,
+            mode: 'host-source',
+            updatedAt: cleanText(record.updatedAt) || new Date().toISOString(),
+        };
+    }
+
     function metadataFromAsset(asset) {
         var result = clone(asset);
         delete result.imageData;
@@ -7608,6 +7626,7 @@
         var thumbs = new Map();
         var bindings = new Map();
         var nativeViews = new Map();
+        var sourceIntents = new Map();
         (seed.assets || []).forEach(function (raw) {
             var asset = normalizeAsset(raw);
             assets.set(asset.id, metadataFromAsset(asset));
@@ -7621,6 +7640,10 @@
         (seed.nativeViews || []).forEach(function (raw) {
             var record = normalizeNativeView(raw);
             nativeViews.set(record.id, record);
+        });
+        (seed.sourceIntents || []).forEach(function (raw) {
+            var record = normalizeSourceIntent(raw);
+            sourceIntents.set(record.id, record);
         });
         return {
             ready: Promise.resolve(),
@@ -7655,6 +7678,13 @@
                 return Promise.resolve(clone(record));
             },
             deleteNativeView: function (targetKey) { return Promise.resolve(nativeViews.delete(nativeViewId(targetKey))); },
+            getSourceIntent: function (targetKey) { return Promise.resolve(clone(sourceIntents.get(sourceIntentId(targetKey)) || null)); },
+            putSourceIntent: function (record) {
+                record = normalizeSourceIntent(record);
+                sourceIntents.set(record.id, record);
+                return Promise.resolve(clone(record));
+            },
+            deleteSourceIntent: function (targetKey) { return Promise.resolve(sourceIntents.delete(sourceIntentId(targetKey))); },
             deleteAsset: function (id) {
                 id = cleanText(id);
                 var removedBindings = [];
@@ -7666,7 +7696,7 @@
                 thumbs.delete(id);
                 return Promise.resolve({ removed: removed, bindings: removedBindings });
             },
-            clear: function () { assets.clear(); mains.clear(); thumbs.clear(); bindings.clear(); nativeViews.clear(); return Promise.resolve(); },
+            clear: function () { assets.clear(); mains.clear(); thumbs.clear(); bindings.clear(); nativeViews.clear(); sourceIntents.clear(); return Promise.resolve(); },
         };
     }
 
@@ -7813,6 +7843,25 @@
                     setResult(true);
                 });
             },
+            getSourceIntent: function (targetKey) {
+                return databasePromise.then(function (db) {
+                    var tx = db.transaction([STORES.meta], 'readonly');
+                    return requestPromise(tx.objectStore(STORES.meta).get(sourceIntentId(targetKey)), 'AVATAR_IDB_READ_FAILED', '原头像显示意图读取失败');
+                }).then(function (result) { return clone(result || null); });
+            },
+            putSourceIntent: function (raw) {
+                var record = normalizeSourceIntent(raw);
+                return transaction([STORES.meta], 'readwrite', function (tx, setResult) {
+                    tx.objectStore(STORES.meta).put(record);
+                    setResult(record);
+                });
+            },
+            deleteSourceIntent: function (targetKey) {
+                return transaction([STORES.meta], 'readwrite', function (tx, setResult) {
+                    tx.objectStore(STORES.meta).delete(sourceIntentId(targetKey));
+                    setResult(true);
+                });
+            },
             deleteAsset: function (id) {
                 id = cleanText(id);
                 return transaction([STORES.assets, STORES.main, STORES.thumbs, STORES.bindings], 'readwrite', function (tx, setResult) {
@@ -7858,9 +7907,12 @@
             getNativeView: function (targetKey) { return Promise.resolve(adapter.getNativeView(targetKey)).then(clone); },
             putNativeView: function (record) { return Promise.resolve(adapter.putNativeView(normalizeNativeView(record))).then(clone); },
             deleteNativeView: function (targetKey) { return Promise.resolve(adapter.deleteNativeView(targetKey)); },
+            getSourceIntent: function (targetKey) { return Promise.resolve(adapter.getSourceIntent(targetKey)).then(clone); },
+            putSourceIntent: function (record) { return Promise.resolve(adapter.putSourceIntent(normalizeSourceIntent(record))).then(clone); },
+            deleteSourceIntent: function (targetKey) { return Promise.resolve(adapter.deleteSourceIntent(targetKey)); },
             deleteAsset: function (id) { return Promise.resolve(adapter.deleteAsset(id)).then(clone); },
             clear: function () { return Promise.resolve(adapter.clear()); },
-            versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION, nativeViews: NATIVE_VIEWS_VERSION },
+            versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION, nativeViews: NATIVE_VIEWS_VERSION, sourceIntents: SOURCE_INTENTS_VERSION },
         };
     };
 
@@ -7870,13 +7922,16 @@
         LIBRARY_VERSION: LIBRARY_VERSION,
         BINDINGS_VERSION: BINDINGS_VERSION,
         NATIVE_VIEWS_VERSION: NATIVE_VIEWS_VERSION,
+        SOURCE_INTENTS_VERSION: SOURCE_INTENTS_VERSION,
         STORES: STORES,
         normalizeAsset: normalizeAsset,
         normalizeBinding: normalizeBinding,
         normalizeNativeView: normalizeNativeView,
+        normalizeSourceIntent: normalizeSourceIntent,
         normalizeView: normalizeView,
         bindingId: bindingId,
         nativeViewId: nativeViewId,
+        sourceIntentId: sourceIntentId,
         createMemoryAdapter: createMemoryAdapter,
         createIndexedDbAdapter: createIndexedDbAdapter,
         makeError: makeError,
@@ -8005,7 +8060,7 @@
 })(window);
 /* END MODULE 16/24: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:a3ce35790d2fb299ef8c25096a4554ffba51bff5c36e744d4b8dc5c028be7eb3 */
+/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:df1e09884edabfae9df5b66a47fd667dc7094d149777bd5c5c5a055d8b5e5e49 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -8268,6 +8323,7 @@
         var activePointer = null;
         var dragOrigin = null;
         var temporaryUserOverride = null;
+        var hostSourceTargets = new Set();
 
         function contextSafe() {
             try { return getContext() || {}; } catch (_) { return {}; }
@@ -8365,16 +8421,22 @@
             nativeImageCache.set(asset.id, cached);
             return cached;
         }
-        function restoreImage(image) {
+        function restoreImage(image, hostSourceTargetKey) {
             var record = baselines.get(image);
             if (!record) return;
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
-            setExactAttribute(image, 'src', record.src);
-            setExactAttribute(image, 'srcset', record.srcset);
+            syncExactAttribute(image, 'src', record.src);
+            syncExactAttribute(image, 'srcset', record.srcset);
             setExactAttribute(image, 'style', record.style);
             if (!record.targetClass) image.classList.remove(TARGET_CLASS);
             if (image.parentElement && !record.avatarClass) image.parentElement.classList.remove(AVATAR_CLASS);
             record.animation = null;
+            if (hostSourceTargetKey) {
+                setImportantStyle(image, 'content', 'normal');
+                record.targetKey = hostSourceTargetKey;
+                activeImages.add(image);
+                return;
+            }
             activeImages.delete(image);
             baselines.delete(image);
         }
@@ -8432,6 +8494,27 @@
             if (frame.clipPath && frame.clipPath !== 'none') setImportantStyle(image, 'clip-path', frame.clipPath);
             if (frame.webkitMaskImage && frame.webkitMaskImage !== 'none') setImportantStyle(image, '-webkit-mask-image', frame.webkitMaskImage);
             if (frame.maskImage && frame.maskImage !== 'none') setImportantStyle(image, 'mask-image', frame.maskImage);
+        }
+        function applyHostSourceToEntry(entry, target) {
+            captureBaseline(entry.image);
+            restoreImage(entry.image, target && target.key);
+        }
+        function putHostSourceIntent(targetKey) {
+            targetKey = clean(targetKey);
+            if (!targetKey) return Promise.resolve(null);
+            hostSourceTargets.add(targetKey);
+            if (typeof store.putSourceIntent !== 'function') return Promise.resolve({ targetKey: targetKey, mode: 'host-source' });
+            return store.putSourceIntent({ targetKey: targetKey, mode: 'host-source' });
+        }
+        function getHostSourceIntent(targetKey) {
+            targetKey = clean(targetKey);
+            if (!targetKey) return Promise.resolve(null);
+            if (hostSourceTargets.has(targetKey)) return Promise.resolve({ targetKey: targetKey, mode: 'host-source' });
+            if (typeof store.getSourceIntent !== 'function') return Promise.resolve(null);
+            return store.getSourceIntent(targetKey).then(function (record) {
+                if (record && record.mode === 'host-source') hostSourceTargets.add(targetKey);
+                return record && record.mode === 'host-source' ? record : null;
+            });
         }
         function getAsset(id) {
             if (assetCache.has(id)) return Promise.resolve(assetCache.get(id));
@@ -8491,8 +8574,15 @@
                 return { entry: entry, binding: record, asset: asset, native: true, target: target };
             });
         }
+        function desiredForHostSource(target, record) {
+            return messageImages(doc, target).map(function (entry) {
+                return { entry: entry, binding: record, hostSource: true, target: target };
+            });
+        }
         function desiredForPlan(plan) {
-            return plan.native
+            return plan.hostSource
+                ? desiredForHostSource(plan.target, plan.binding)
+                : plan.native
                 ? desiredForNativeView(plan.target, plan.binding, plan.asset)
                 : desiredForBinding(plan.target, plan.binding, plan.asset);
         }
@@ -8500,7 +8590,8 @@
             var desired = new Set(items.map(function (item) { return item.entry.image; }));
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
             items.forEach(function (item) {
-                if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
+                if (item.hostSource) applyHostSourceToEntry(item.entry, item.target);
+                else if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
                 else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
             });
         }
@@ -8519,7 +8610,9 @@
                                 if (wasTemporary) temporaryUserOverride = null;
                                 var removeMissing = wasTemporary
                                     ? Promise.resolve()
-                                    : store.deleteBinding(binding.themeKey, target.key);
+                                    : putHostSourceIntent(target.key).then(function () {
+                                        return store.deleteBinding(binding.themeKey, target.key);
+                                    });
                                 return removeMissing.then(function () {
                                     if (binding.themeKey !== DEFAULT_BINDING_KEY) {
                                         return getDefaultBinding(target).then(function (fallback) {
@@ -8536,11 +8629,19 @@
                         });
                     }
                     return store.getNativeView(target.key).then(function (record) {
-                        if (!record) return null;
+                        if (!record) {
+                            return getHostSourceIntent(target.key).then(function (intent) {
+                                if (!intent) return null;
+                                foundBinding = true;
+                                return { target: target, binding: intent, asset: null, native: false, hostSource: true };
+                            });
+                        }
                         var representative = messageImages(doc, target)[0] || null;
                         var sourceKey = nativeSourceKey(target, representative);
                         if (sourceKey && record.sourceKey !== sourceKey) {
-                            return store.deleteNativeView(target.key).then(function () { return null; });
+                            return putHostSourceIntent(target.key).then(function () {
+                                return store.deleteNativeView(target.key);
+                            }).then(function () { return null; });
                         }
                         foundBinding = true;
                         return embeddedNativeAsset(representative, target).then(function (asset) {
@@ -8571,7 +8672,8 @@
                 desiredForPlan(plan).forEach(function (item) {
                     desired.add(item.entry.image);
                     if (!lightweightNative || !activeImages.has(item.entry.image)) {
-                        if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
+                        if (item.hostSource) applyHostSourceToEntry(item.entry, item.target);
+                        else if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
                         else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
                     }
                 });
@@ -8690,6 +8792,7 @@
             hasRuntimeBinding = false;
             bindingPlans = [];
             temporaryUserOverride = null;
+            hostSourceTargets.clear();
             nativeImageCache.clear();
             sequence += 1;
             restoreAll();
@@ -9190,7 +9293,9 @@
             if (editor) return cancelEdit('binding-cleared').then(function () { return clearBinding(kind); });
             promotedBindings.delete(cap.target.key);
             if (kind === 'user') temporaryUserOverride = null;
-            return deleteTargetBindings(cap.target.key).then(reconcile);
+            return putHostSourceIntent(cap.target.key).then(function () {
+                return deleteTargetBindings(cap.target.key);
+            }).then(reconcile);
         }
         function getThemeUserBinding(themeName) {
             var key = themeKey(themeName || getThemeName());
@@ -9297,14 +9402,16 @@
             temporaryUserOverride = null;
             promotedBindings.delete(USER_TARGET_KEY);
             sequence += 1;
-            bindingPlans = bindingPlans.filter(function (plan) {
-                return !plan.target || plan.target.key !== USER_TARGET_KEY;
-            });
-            Array.from(activeImages).forEach(function (image) {
-                var record = baselines.get(image);
-                if (record && record.targetKey === USER_TARGET_KEY) restoreImage(image);
-            });
-            return Promise.resolve(store.ready).then(function () { return store.listBindings(); }).then(function (bindings) {
+            return putHostSourceIntent(USER_TARGET_KEY).then(function () {
+                bindingPlans = bindingPlans.filter(function (plan) {
+                    return !plan.target || plan.target.key !== USER_TARGET_KEY;
+                });
+                Array.from(activeImages).forEach(function (image) {
+                    var record = baselines.get(image);
+                    if (record && record.targetKey === USER_TARGET_KEY) restoreImage(image, USER_TARGET_KEY);
+                });
+                return Promise.resolve(store.ready);
+            }).then(function () { return store.listBindings(); }).then(function (bindings) {
                 var targetsToDelete = (bindings || []).filter(function (binding) {
                     return binding.targetKey === USER_TARGET_KEY || binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0;
                 });
@@ -9333,14 +9440,23 @@
             var cap = capability(kind === 'user' ? 'user' : 'character');
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('native-view-cleared').then(function () { return clearNativeView(kind); });
-            return store.deleteNativeView(cap.target.key).then(reconcile);
+            return putHostSourceIntent(cap.target.key).then(function () {
+                return store.deleteNativeView(cap.target.key);
+            }).then(reconcile);
         }
         function deleteAsset(id) {
             var cancel = editor && editor.avatarId === id ? cancelEdit('avatar-deleted') : Promise.resolve();
             return cancel.then(function () { return store.deleteAsset(id); }).then(function (result) {
                 assetCache.delete(id);
                 rotatedSources.delete(id);
-                return reconcile().then(function () { return result; });
+                var targetKeys = Array.from(new Set((result && result.bindings || []).map(function (binding) {
+                    return binding && binding.targetKey;
+                }).filter(function (targetKey) {
+                    return targetKey === USER_TARGET_KEY || /^character:/.test(targetKey || '');
+                })));
+                return Promise.all(targetKeys.map(putHostSourceIntent)).then(function () {
+                    return reconcile().then(function () { return result; });
+                });
             });
         }
         function getState() {

@@ -260,6 +260,7 @@
         var activePointer = null;
         var dragOrigin = null;
         var temporaryUserOverride = null;
+        var hostSourceTargets = new Set();
 
         function contextSafe() {
             try { return getContext() || {}; } catch (_) { return {}; }
@@ -357,16 +358,22 @@
             nativeImageCache.set(asset.id, cached);
             return cached;
         }
-        function restoreImage(image) {
+        function restoreImage(image, hostSourceTargetKey) {
             var record = baselines.get(image);
             if (!record) return;
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
-            setExactAttribute(image, 'src', record.src);
-            setExactAttribute(image, 'srcset', record.srcset);
+            syncExactAttribute(image, 'src', record.src);
+            syncExactAttribute(image, 'srcset', record.srcset);
             setExactAttribute(image, 'style', record.style);
             if (!record.targetClass) image.classList.remove(TARGET_CLASS);
             if (image.parentElement && !record.avatarClass) image.parentElement.classList.remove(AVATAR_CLASS);
             record.animation = null;
+            if (hostSourceTargetKey) {
+                setImportantStyle(image, 'content', 'normal');
+                record.targetKey = hostSourceTargetKey;
+                activeImages.add(image);
+                return;
+            }
             activeImages.delete(image);
             baselines.delete(image);
         }
@@ -424,6 +431,27 @@
             if (frame.clipPath && frame.clipPath !== 'none') setImportantStyle(image, 'clip-path', frame.clipPath);
             if (frame.webkitMaskImage && frame.webkitMaskImage !== 'none') setImportantStyle(image, '-webkit-mask-image', frame.webkitMaskImage);
             if (frame.maskImage && frame.maskImage !== 'none') setImportantStyle(image, 'mask-image', frame.maskImage);
+        }
+        function applyHostSourceToEntry(entry, target) {
+            captureBaseline(entry.image);
+            restoreImage(entry.image, target && target.key);
+        }
+        function putHostSourceIntent(targetKey) {
+            targetKey = clean(targetKey);
+            if (!targetKey) return Promise.resolve(null);
+            hostSourceTargets.add(targetKey);
+            if (typeof store.putSourceIntent !== 'function') return Promise.resolve({ targetKey: targetKey, mode: 'host-source' });
+            return store.putSourceIntent({ targetKey: targetKey, mode: 'host-source' });
+        }
+        function getHostSourceIntent(targetKey) {
+            targetKey = clean(targetKey);
+            if (!targetKey) return Promise.resolve(null);
+            if (hostSourceTargets.has(targetKey)) return Promise.resolve({ targetKey: targetKey, mode: 'host-source' });
+            if (typeof store.getSourceIntent !== 'function') return Promise.resolve(null);
+            return store.getSourceIntent(targetKey).then(function (record) {
+                if (record && record.mode === 'host-source') hostSourceTargets.add(targetKey);
+                return record && record.mode === 'host-source' ? record : null;
+            });
         }
         function getAsset(id) {
             if (assetCache.has(id)) return Promise.resolve(assetCache.get(id));
@@ -483,8 +511,15 @@
                 return { entry: entry, binding: record, asset: asset, native: true, target: target };
             });
         }
+        function desiredForHostSource(target, record) {
+            return messageImages(doc, target).map(function (entry) {
+                return { entry: entry, binding: record, hostSource: true, target: target };
+            });
+        }
         function desiredForPlan(plan) {
-            return plan.native
+            return plan.hostSource
+                ? desiredForHostSource(plan.target, plan.binding)
+                : plan.native
                 ? desiredForNativeView(plan.target, plan.binding, plan.asset)
                 : desiredForBinding(plan.target, plan.binding, plan.asset);
         }
@@ -492,7 +527,8 @@
             var desired = new Set(items.map(function (item) { return item.entry.image; }));
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
             items.forEach(function (item) {
-                if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
+                if (item.hostSource) applyHostSourceToEntry(item.entry, item.target);
+                else if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
                 else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
             });
         }
@@ -511,7 +547,9 @@
                                 if (wasTemporary) temporaryUserOverride = null;
                                 var removeMissing = wasTemporary
                                     ? Promise.resolve()
-                                    : store.deleteBinding(binding.themeKey, target.key);
+                                    : putHostSourceIntent(target.key).then(function () {
+                                        return store.deleteBinding(binding.themeKey, target.key);
+                                    });
                                 return removeMissing.then(function () {
                                     if (binding.themeKey !== DEFAULT_BINDING_KEY) {
                                         return getDefaultBinding(target).then(function (fallback) {
@@ -528,11 +566,19 @@
                         });
                     }
                     return store.getNativeView(target.key).then(function (record) {
-                        if (!record) return null;
+                        if (!record) {
+                            return getHostSourceIntent(target.key).then(function (intent) {
+                                if (!intent) return null;
+                                foundBinding = true;
+                                return { target: target, binding: intent, asset: null, native: false, hostSource: true };
+                            });
+                        }
                         var representative = messageImages(doc, target)[0] || null;
                         var sourceKey = nativeSourceKey(target, representative);
                         if (sourceKey && record.sourceKey !== sourceKey) {
-                            return store.deleteNativeView(target.key).then(function () { return null; });
+                            return putHostSourceIntent(target.key).then(function () {
+                                return store.deleteNativeView(target.key);
+                            }).then(function () { return null; });
                         }
                         foundBinding = true;
                         return embeddedNativeAsset(representative, target).then(function (asset) {
@@ -563,7 +609,8 @@
                 desiredForPlan(plan).forEach(function (item) {
                     desired.add(item.entry.image);
                     if (!lightweightNative || !activeImages.has(item.entry.image)) {
-                        if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
+                        if (item.hostSource) applyHostSourceToEntry(item.entry, item.target);
+                        else if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
                         else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
                     }
                 });
@@ -682,6 +729,7 @@
             hasRuntimeBinding = false;
             bindingPlans = [];
             temporaryUserOverride = null;
+            hostSourceTargets.clear();
             nativeImageCache.clear();
             sequence += 1;
             restoreAll();
@@ -1182,7 +1230,9 @@
             if (editor) return cancelEdit('binding-cleared').then(function () { return clearBinding(kind); });
             promotedBindings.delete(cap.target.key);
             if (kind === 'user') temporaryUserOverride = null;
-            return deleteTargetBindings(cap.target.key).then(reconcile);
+            return putHostSourceIntent(cap.target.key).then(function () {
+                return deleteTargetBindings(cap.target.key);
+            }).then(reconcile);
         }
         function getThemeUserBinding(themeName) {
             var key = themeKey(themeName || getThemeName());
@@ -1289,14 +1339,16 @@
             temporaryUserOverride = null;
             promotedBindings.delete(USER_TARGET_KEY);
             sequence += 1;
-            bindingPlans = bindingPlans.filter(function (plan) {
-                return !plan.target || plan.target.key !== USER_TARGET_KEY;
-            });
-            Array.from(activeImages).forEach(function (image) {
-                var record = baselines.get(image);
-                if (record && record.targetKey === USER_TARGET_KEY) restoreImage(image);
-            });
-            return Promise.resolve(store.ready).then(function () { return store.listBindings(); }).then(function (bindings) {
+            return putHostSourceIntent(USER_TARGET_KEY).then(function () {
+                bindingPlans = bindingPlans.filter(function (plan) {
+                    return !plan.target || plan.target.key !== USER_TARGET_KEY;
+                });
+                Array.from(activeImages).forEach(function (image) {
+                    var record = baselines.get(image);
+                    if (record && record.targetKey === USER_TARGET_KEY) restoreImage(image, USER_TARGET_KEY);
+                });
+                return Promise.resolve(store.ready);
+            }).then(function () { return store.listBindings(); }).then(function (bindings) {
                 var targetsToDelete = (bindings || []).filter(function (binding) {
                     return binding.targetKey === USER_TARGET_KEY || binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0;
                 });
@@ -1325,14 +1377,23 @@
             var cap = capability(kind === 'user' ? 'user' : 'character');
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('native-view-cleared').then(function () { return clearNativeView(kind); });
-            return store.deleteNativeView(cap.target.key).then(reconcile);
+            return putHostSourceIntent(cap.target.key).then(function () {
+                return store.deleteNativeView(cap.target.key);
+            }).then(reconcile);
         }
         function deleteAsset(id) {
             var cancel = editor && editor.avatarId === id ? cancelEdit('avatar-deleted') : Promise.resolve();
             return cancel.then(function () { return store.deleteAsset(id); }).then(function (result) {
                 assetCache.delete(id);
                 rotatedSources.delete(id);
-                return reconcile().then(function () { return result; });
+                var targetKeys = Array.from(new Set((result && result.bindings || []).map(function (binding) {
+                    return binding && binding.targetKey;
+                }).filter(function (targetKey) {
+                    return targetKey === USER_TARGET_KEY || /^character:/.test(targetKey || '');
+                })));
+                return Promise.all(targetKeys.map(putHostSourceIntent)).then(function () {
+                    return reconcile().then(function () { return result; });
+                });
             });
         }
         function getState() {

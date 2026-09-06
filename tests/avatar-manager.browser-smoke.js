@@ -33,6 +33,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
     const reports = [];
     try {
         for (const viewport of viewports) {
+            console.log('[avatar-smoke] starting ' + viewport.label);
             const context = await browser.newContext({
                 viewport: { width: viewport.width, height: viewport.height },
                 isMobile: Boolean(viewport.isMobile),
@@ -49,6 +50,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 .masked .avatar img{-webkit-mask-image:radial-gradient(circle,#000 60%,transparent 61%);mask-image:radial-gradient(circle,#000 60%,transparent 61%)}
                 .transformed .avatar img{transform:rotate(9deg) translateX(4px);translate:3px 2px;scale:1.08;rotate:4deg;transform-origin:30% 40%}
                 .responsive .avatar{width:120px;height:96px;overflow:hidden}.responsive-small .avatar{width:60px;height:48px;overflow:hidden}
+                .stale-user .avatar img{content:url("/stale-theme-user.png")}
             </style><style id="custom-style">.sentinel{color:red}</style></head><body>
                 <select id="themes"><option selected>A</option><option>B</option></select>
                 <section class="tm-app-page tm-app-page-avatars" data-tm-page="avatars"></section>
@@ -56,8 +58,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     <div class="mes circle native-sensitive" is_user="false" is_system="false"><div class="avatar"><img src="/avatar.gif" style="opacity:.99"></div></div>
                     <div class="mes clipped" is_user="false" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></div>
                     <div class="mes masked transformed" is_user="false" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></div>
-                    <div class="mes responsive" is_user="true" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></div>
-                    <div class="mes responsive-small" is_user="true" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></div>
+                    <div class="mes responsive stale-user" is_user="true" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></div>
+                    <div class="mes responsive-small stale-user" is_user="true" is_system="false"><div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></div>
                 </div>
             </body></html>`);
             for (const name of MODULES) await page.addScriptTag({ path: path.join(ROOT, 'src', name) });
@@ -353,7 +355,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const persistedUserNativeView = await reloadedStore.getNativeView('user:global');
                 const nativeUserMoved = runtime.getState().state === 'idle' && userImages.every((image) => image.src.startsWith('data:image/') && image.style.getPropertyValue('object-view-box'));
                 await runtime.clearNativeView('user');
-                const nativeUserRestored = userImages.every((image,index) => image.getAttribute('src') === originalUserSources[index].src && image.getAttribute('srcset') === originalUserSources[index].srcset);
+                const nativeUserRestored = userImages.every((image,index) => image.getAttribute('src') === originalUserSources[index].src &&
+                    image.getAttribute('srcset') === originalUserSources[index].srcset && image.style.getPropertyPriority('content') === 'important' &&
+                    getComputedStyle(image).content === 'normal');
 
                 await store.putBinding({ themeKey:modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey:'user:global', avatarId, view:{x:.25,y:.125,scale:1} });
                 await runtime.reconcile();
@@ -436,11 +440,22 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const assetsBeforeRecovery = (await store.listAssets()).length;
                 const recoveryResult = await runtime.clearAllUserOverrides();
                 const bindingsAfterRecovery = await store.listBindings();
+                await runtime.reconcile();
+                const recoveredUserMessage = document.createElement('div');
+                recoveredUserMessage.className='mes stale-user'; recoveredUserMessage.setAttribute('is_user','true'); recoveredUserMessage.setAttribute('is_system','false');
+                recoveredUserMessage.innerHTML='<div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div>';
+                document.querySelector('#chat').appendChild(recoveredUserMessage);
+                await Promise.resolve();
+                const recoveredUserImage = recoveredUserMessage.querySelector('img');
+                const recoverySurvivesNewMessage = recoveredUserImage.src.includes('R0lGOD') && recoveredUserImage.style.getPropertyPriority('content') === 'important' &&
+                    getComputedStyle(recoveredUserImage).content === 'normal';
+                recoveredUserMessage.remove();
                 const completeUserRecovery = recoveryResult.bindingsCleared >= 3 && recoveryResult.hostChatReloaded === true && hostChatReloads === 1 &&
                     !bindingsAfterRecovery.some((binding) => binding.targetKey === 'user:global' || binding.targetKey.startsWith('user:global:theme-avatar:')) &&
                     !(await store.getNativeView('user:global')) &&
                     (await store.listAssets()).length === assetsBeforeRecovery &&
-                    userImages.every((image) => image.src.includes('R0lGOD')) &&
+                    userImages.every((image) => image.src.includes('R0lGOD') && image.style.getPropertyPriority('content') === 'important' &&
+                        getComputedStyle(image).content === 'normal') && recoverySurvivesNewMessage &&
                     characterImages.every((image,index) => image.src === characterBeforeThemeBindings[index].src && image.style.getPropertyValue('object-view-box') === characterBeforeThemeBindings[index].crop);
                 await runtime.clearThemeUserBinding('B');
                 await store.deleteAsset(themeAAsset.id); await store.deleteAsset(themeBAsset.id); await store.deleteAsset(temporaryAsset.id);
@@ -508,6 +523,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);
             assert(report.loaderDisconnects >= 1, `${viewport.label}: page loader was not disconnected`);
             reports.push(report);
+            console.log('[avatar-smoke] passed ' + viewport.label);
             await context.close();
         }
         console.log(JSON.stringify({ ok:true, reports }, null, 2));
