@@ -1,7 +1,7 @@
 // ST美化管理扩展 v4.0.5 - 模块装配与总入口
 (function () {
     var TM_VERSION = '4.0.5';
-    var TM_BUILD = 'avatar-content-restore-r1';
+    var TM_BUILD = 'avatar-backend-mvp-r1';
     var MODULE_LOAD_TOKEN = TM_VERSION + '-' + TM_BUILD;
 
     function getExtensionBaseUrl() {
@@ -56,6 +56,7 @@
             'src/image-tools.js',
             'src/image-loader.js',
             'src/avatar-storage.js',
+            'src/avatar-sync.js',
             'src/avatar-image-tools.js',
             'src/avatar-runtime.js',
             'src/avatar-page.js',

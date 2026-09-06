@@ -37,6 +37,7 @@
         var store = options.store;
         var processor = options.processor;
         var runtime = options.runtime;
+        var canMutate = options.canMutate || function () { return true; };
         var imageLoaderApi = options.imageLoader;
         var imageToolsApi = options.imageTools || ns.imageTools;
         var getRoot = options.getRoot;
@@ -92,6 +93,11 @@
             if (!root) return;
             if (importing) setNotice('正在添加头像…', 'loading');
         }
+        function mutationBlocked() {
+            if (canMutate()) return false;
+            setNotice('头像存储当前只读或尚未安全就绪', 'error');
+            return true;
+        }
         function cardHtml(asset) {
             return '<article class="tm-avatar-page-card" data-avatar-id="' + esc(asset.id) + '" aria-label="头像 ' + esc(asset.name) + '">' +
                 '<img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" data-avatar-action="view" data-avatar-id="' + esc(asset.id) + '" tabindex="0" role="button" aria-label="查看 ' + esc(asset.name) + ' 大图" alt="">' +
@@ -129,6 +135,7 @@
             });
         }
         function importFiles(files) {
+            if (mutationBlocked()) return Promise.reject(Object.assign(new Error('头像存储当前不可写'), { code: 'AVATAR_STORAGE_READ_ONLY' }));
             files = Array.prototype.slice.call(files || []);
             if (!files.length) return Promise.resolve([]);
             setImporting(true);
@@ -158,6 +165,7 @@
             }).finally(function () { setImporting(false); });
         }
         function beginEdit(kind, avatarId, sheet, bindingMode, themeName) {
+            if (mutationBlocked()) return;
             var caps = runtime.getCapabilities();
             var cap = kind === 'character' ? caps.character : caps.user;
             if (!caps.themeKey || !cap.target) { setNotice(!caps.themeKey ? '头像存储暂不可用' : cap.reason); return; }
@@ -173,6 +181,7 @@
             beginEdit('user', asset.id, sheet, 'adaptive');
         }
         function beginNativeEdit(kind, sheet) {
+            if (mutationBlocked()) return;
             kind = kind === 'user' ? 'user' : 'character';
             var cap = runtime.getCapabilities()[kind];
             if (!cap || !cap.available) { setNotice(cap && cap.reason || '当前角色原头像无法调整'); return; }
@@ -185,12 +194,14 @@
             }, 32);
         }
         function clearNativeView(kind, sheet) {
+            if (mutationBlocked()) return Promise.resolve(false);
             if (sheet) closeSheet(sheet);
             return runtime.clearNativeView(kind).then(function () {
                 toast(kind === 'user' ? '已恢复 User 原头像显示' : '已恢复当前角色原头像显示');
             }).catch(function (error) { setNotice(error.message || '无法恢复原头像显示', 'error'); });
         }
         function deleteAvatar(id, sheet) {
+            if (mutationBlocked()) return;
             var asset = assets.find(function (item) { return item.id === id; });
             if (!asset || !confirmDelete('确定删除头像「' + asset.name + '」吗？使用它的绑定会同时清理。')) return;
             if (sheet) closeSheet(sheet);
@@ -221,15 +232,16 @@
                 caps.user.target && caps.themeKey ? store.getBinding(caps.themeKey, caps.user.target.key) : null,
             ]).then(function (bindings) {
                 if (!mounted) return;
-                var characterDisabled = !caps.themeKey || !caps.character.target;
-                var userDisabled = !caps.themeKey || !caps.user.target;
+                var writable = canMutate();
+                var characterDisabled = !writable || !caps.themeKey || !caps.character.target;
+                var userDisabled = !writable || !caps.themeKey || !caps.user.target;
                 var sheet = createSheet([
                     '<div class="tm-ctx-theme-name"><i class="fa-solid fa-user" style="margin-right:6px;opacity:.5"></i>' + esc(asset.name) + '</div>',
                     menuItem('apply-character', 'fa-wand-magic-sparkles', '用于当前角色并调整', characterDisabled, caps.character.reason, false),
                     menuItem('apply-user', 'fa-wand-magic-sparkles', '用于 User 并调整', userDisabled, caps.user.reason, false),
-                    bindings[0] ? menuItem('restore-character', 'fa-rotate-left', '恢复当前角色原头像', false, '', false) : '',
-                    bindings[1] ? menuItem('restore-user', 'fa-rotate-left', '清除全局 User 头像', false, '', false) : '',
-                    menuItem('delete', 'fa-trash', '删除头像', false, '', true),
+                    bindings[0] ? menuItem('restore-character', 'fa-rotate-left', '恢复当前角色原头像', !writable, !writable ? '头像存储当前只读' : '', false) : '',
+                    bindings[1] ? menuItem('restore-user', 'fa-rotate-left', '清除全局 User 头像', !writable, !writable ? '头像存储当前只读' : '', false) : '',
+                    menuItem('delete', 'fa-trash', '删除头像', !writable, !writable ? '头像存储当前只读' : '', true),
                 ].join(''));
                 bindSheetAction(sheet, 'apply-character', function () { beginEdit('character', asset.id, sheet); });
                 bindSheetAction(sheet, 'apply-user', function () { beginUserEditFromLibrary(asset, sheet); });
@@ -252,13 +264,14 @@
                 character.target ? store.getNativeView(character.target.key) : null,
                 user.target ? store.getNativeView(user.target.key) : null,
             ]).then(function (views) {
+                var writable = canMutate();
                 var heading = character.target && character.target.label || '原头像调整';
                 var sheet = createSheet([
                     '<div class="tm-ctx-theme-name"><i class="fa-solid fa-user" style="margin-right:6px;opacity:.5"></i>' + esc(heading) + '</div>',
-                    menuItem('adjust-native-character', 'fa-sliders', '调整当前角色原头像', !character.available, character.reason, false),
-                    views[0] ? menuItem('reset-native-character', 'fa-rotate-left', '恢复当前角色原始显示', false, '', false) : '',
-                    menuItem('adjust-native-user', 'fa-sliders', '调整 User 原头像', !user.available, user.reason, false),
-                    views[1] ? menuItem('reset-native-user', 'fa-rotate-left', '恢复 User 原始显示', false, '', false) : '',
+                    menuItem('adjust-native-character', 'fa-sliders', '调整当前角色原头像', !writable || !character.available, !writable ? '头像存储当前只读' : character.reason, false),
+                    views[0] ? menuItem('reset-native-character', 'fa-rotate-left', '恢复当前角色原始显示', !writable, !writable ? '头像存储当前只读' : '', false) : '',
+                    menuItem('adjust-native-user', 'fa-sliders', '调整 User 原头像', !writable || !user.available, !writable ? '头像存储当前只读' : user.reason, false),
+                    views[1] ? menuItem('reset-native-user', 'fa-rotate-left', '恢复 User 原始显示', !writable, !writable ? '头像存储当前只读' : '', false) : '',
                 ].join(''));
                 bindSheetAction(sheet, 'adjust-native-character', function () { beginNativeEdit('character', sheet); });
                 bindSheetAction(sheet, 'reset-native-character', function () { clearNativeView('character', sheet); });
@@ -338,7 +351,7 @@
             unmount: unmount,
             refresh: refresh,
             importFiles: importFiles,
-            pickFiles: function () { if (!mounted || !fileInput || importing) return false; fileInput.click(); return true; },
+            pickFiles: function () { if (!mounted || !fileInput || importing || mutationBlocked()) return false; fileInput.click(); return true; },
             beginNativeEdit: beginNativeEdit,
             openNativeMenu: openNativeMenu,
             getNativeStatus: function (kind) {

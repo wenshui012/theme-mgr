@@ -77,7 +77,7 @@ function main() {
     assert(actual === expected.source, 'dist/index.js differs from a fresh deterministic build');
     assert(normalizeNewlines(fs.readFileSync(DIST_MANIFEST_PATH, 'utf8')) === read('manifest.json'), 'dist/manifest.json differs from the source manifest');
     assert(normalizeNewlines(fs.readFileSync(DIST_README_PATH, 'utf8')) === read('README.md'), 'dist/README.md differs from the source README');
-    assert(expected.modules.length === 24, `expected 24 modules, found ${expected.modules.length}`);
+    assert(expected.modules.length === 25, `expected 25 modules, found ${expected.modules.length}`);
 
     verifyModuleMarkers(actual);
     verifyNoDevelopmentLoader(actual);

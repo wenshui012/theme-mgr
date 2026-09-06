@@ -213,6 +213,8 @@
         var win = options.window || global;
         var doc = options.document || win.document;
         var store = options.store;
+        var canMutate = options.canMutate || function () { return true; };
+        var canStart = options.canStart || function () { return true; };
         var getContext = options.getContext || function () { return {}; };
         var getThemeName = options.getThemeName || function () { return ''; };
         var onError = options.onError || function () {};
@@ -261,6 +263,11 @@
         var dragOrigin = null;
         var temporaryUserOverride = null;
         var hostSourceTargets = new Set();
+
+        function requireMutable() {
+            if (canMutate()) return null;
+            return Object.assign(new Error('头像存储当前只读或尚未安全就绪'), { code: 'AVATAR_STORAGE_READ_ONLY' });
+        }
 
         function contextSafe() {
             try { return getContext() || {}; } catch (_) { return {}; }
@@ -703,6 +710,7 @@
         }
         function start() {
             if (started) return Promise.resolve(false);
+            if (!canStart()) return Promise.reject(Object.assign(new Error('头像存储尚未安全就绪'), { code: 'AVATAR_STORAGE_NOT_READY' }));
             started = true;
             var context = contextSafe();
             var source = context.eventSource;
@@ -906,6 +914,8 @@
             styleNode = null;
         }
         function beginEdit(input) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             input = input || {};
             if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
             var kind = input.target && input.target.kind || input.kind;
@@ -986,6 +996,8 @@
             });
         }
         function beginNativeEdit(kind) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
             kind = kind === 'user' ? 'user' : 'character';
             var cap = capability(kind);
@@ -1123,6 +1135,8 @@
             return reconcile().then(function () { editorClosing = false; return result; }, function (error) { editorClosing = false; throw error; });
         }
         function saveEdit() {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             if (!editor || editorClosing) return Promise.resolve(null);
             if (editor.mode === 'library' && editor.bindingMode !== 'global' && editor.themeKey !== currentThemeKey()) {
                 return cancelEdit('superseded').then(function () {
@@ -1225,6 +1239,8 @@
             setViewValue(name, value);
         }
         function clearBinding(kind) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             var cap = capability(kind);
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('binding-cleared').then(function () { return clearBinding(kind); });
@@ -1288,6 +1304,8 @@
             }).then(function () { return store.putBinding(candidate); }).then(function () { return store.putBinding(active); });
         }
         function setThemeUserBinding(themeName, avatarId) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             var key = themeKey(themeName || getThemeName());
             if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             return getThemeUserBindingSet(themeName).then(function (bindingSet) {
@@ -1301,6 +1319,8 @@
             });
         }
         function removeThemeUserBinding(themeName, avatarId) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             var key = themeKey(themeName || getThemeName());
             if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             return getThemeUserBindingSet(themeName).then(function (bindingSet) {
@@ -1319,6 +1339,8 @@
             });
         }
         function clearThemeUserBinding(themeName) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             var key = themeKey(themeName || getThemeName());
             if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             if (editor) return cancelEdit('theme-binding-cleared').then(function () { return clearThemeUserBinding(themeName); });
@@ -1335,6 +1357,8 @@
             }).then(reconcile);
         }
         function clearAllUserOverrides() {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             if (editor) return cancelEdit('all-user-overrides-cleared').then(clearAllUserOverrides);
             temporaryUserOverride = null;
             promotedBindings.delete(USER_TARGET_KEY);
@@ -1374,6 +1398,8 @@
             });
         }
         function clearNativeView(kind) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             var cap = capability(kind === 'user' ? 'user' : 'character');
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('native-view-cleared').then(function () { return clearNativeView(kind); });
@@ -1382,6 +1408,8 @@
             }).then(reconcile);
         }
         function deleteAsset(id) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
             var cancel = editor && editor.avatarId === id ? cancelEdit('avatar-deleted') : Promise.resolve();
             return cancel.then(function () { return store.deleteAsset(id); }).then(function (result) {
                 assetCache.delete(id);
@@ -1391,9 +1419,8 @@
                 }).filter(function (targetKey) {
                     return targetKey === USER_TARGET_KEY || /^character:/.test(targetKey || '');
                 })));
-                return Promise.all(targetKeys.map(putHostSourceIntent)).then(function () {
-                    return reconcile().then(function () { return result; });
-                });
+                targetKeys.forEach(function (targetKey) { hostSourceTargets.add(targetKey); });
+                return reconcile().then(function () { return result; });
             });
         }
         function getState() {

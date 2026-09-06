@@ -58,6 +58,7 @@
     var imageToolsApi = null;
     var imageLoaderApi = null;
     var gridImageLoader = null;
+    var avatarCoordinator = null;
     var avatarStore = null;
     var avatarImageProcessor = null;
     var avatarRuntime = null;
@@ -139,7 +140,7 @@
                 !modules.themeSeries ||
                 !modules.themeBindings ||
                 !modules.themeAppearance ||
-                !modules.createAvatarStore || !modules.createAvatarImageProcessor ||
+                !modules.createAvatarStore || !modules.createAvatarStorageCoordinator || !modules.createAvatarImageProcessor ||
                 !modules.createAvatarRuntime || !modules.createAvatarPage || !modules.avatarPage ||
                 !modules.createBackgrounds ||
                 !modules.createUiSheets ||
@@ -165,6 +166,7 @@
                     if (!modules.themeBindings) missing.push('theme-bindings.js');
                     if (!modules.themeAppearance) missing.push('theme-appearance.js');
                     if (!modules.createAvatarStore) missing.push('avatar-storage.js');
+                    if (!modules.createAvatarStorageCoordinator) missing.push('avatar-sync.js');
                     if (!modules.createAvatarImageProcessor) missing.push('avatar-image-tools.js');
                     if (!modules.createAvatarRuntime) missing.push('avatar-runtime.js');
                     if (!modules.createAvatarPage || !modules.avatarPage) missing.push('avatar-page.js');
@@ -268,12 +270,27 @@
                 try { previousAvatarRuntime.stop(); }
                 catch (error) { console.warn('[头像管理] 旧 runtime 清理失败，将继续重建:', error); }
             }
-            avatarStore = modules.createAvatarStore({});
+            var localAvatarStore = modules.createAvatarStore({});
+            avatarCoordinator = modules.createAvatarStorageCoordinator({
+                localStore: localAvatarStore,
+                getPostHeaders: getPostHeaders,
+                onStateChange: function (avatarState) {
+                    var button = document.getElementById('tm-avatar-add');
+                    if (button) button.disabled = !avatarCoordinator || !avatarCoordinator.canMutate();
+                    if (avatarRuntime && avatarState && (avatarState.phase === 'blocked' || avatarState.phase === 'conflict')) {
+                        avatarRuntime.stop();
+                    }
+                },
+            });
+            avatarStore = avatarCoordinator.store;
+            global.ThemeMgrAvatarStorageCoordinator = avatarCoordinator;
             avatarImageProcessor = modules.createAvatarImageProcessor({ imageTools: imageToolsApi });
             avatarRuntime = modules.createAvatarRuntime({
                 window: global,
                 document: document,
                 store: avatarStore,
+                canMutate: function () { return avatarCoordinator && avatarCoordinator.canMutate(); },
+                canStart: function () { return avatarCoordinator && avatarCoordinator.isRuntimeReady(); },
                 getContext: function () {
                     try {
                         return global.SillyTavern && typeof global.SillyTavern.getContext === 'function'
@@ -292,6 +309,7 @@
                 store: avatarStore,
                 processor: avatarImageProcessor,
                 runtime: avatarRuntime,
+                canMutate: function () { return avatarCoordinator && avatarCoordinator.canMutate(); },
                 imageLoader: imageLoaderApi,
                 imageTools: imageToolsApi,
                 getRoot: function () { return document.querySelector('[data-tm-page="avatars"]'); },
@@ -301,7 +319,7 @@
                 openImageLightbox: uiSheetsApi.openImageLightbox,
                 onImportingChange: function (importing) {
                     var button = document.getElementById('tm-avatar-add');
-                    if (button) button.disabled = importing;
+                    if (button) button.disabled = importing || !avatarCoordinator || !avatarCoordinator.canMutate();
                 },
                 toast: toast,
                 confirm: global.confirm.bind(global),
@@ -3584,7 +3602,8 @@
             '<div class="tm-head">' +
             pageSwitcherHtml +
             '<div class="tm-head-actions">' +
-            '<button class="tm-icon-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"><i class="fa-solid fa-plus"></i></button>' +
+            '<button class="tm-icon-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
+            (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
             '<button class="tm-icon-btn tm-themes-only" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
             '<button class="tm-icon-btn" id="tm-theme-toggle" title="切换明暗"><i class="fa-solid fa-circle-half-stroke"></i></button>' +
@@ -6780,10 +6799,15 @@
             if (eventsApi && typeof eventsApi.syncFabVisibility === 'function') eventsApi.syncFabVisibility(d);
             bindColorSchemeListener();
             if (bindingController) bindingController.start();
-            if (avatarRuntime) avatarRuntime.start().catch(function (error) {
-                console.warn('[头像管理] 初始化失败:', error);
-                toast(error.message || '头像管理初始化失败', true);
-            });
+            if (avatarCoordinator && avatarRuntime) {
+                avatarCoordinator.initialize().then(function () {
+                    if (!avatarCoordinator.isRuntimeReady()) return;
+                    return avatarRuntime.start();
+                }).catch(function (error) {
+                    console.warn('[头像管理] 安全接管未就绪:', error);
+                    toast(error.message || '头像存储尚未安全就绪', true);
+                });
+            }
             updateBtn();
         });
     }

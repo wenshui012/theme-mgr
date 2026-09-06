@@ -140,6 +140,47 @@
         return result;
     }
 
+    function normalizeSnapshot(raw) {
+        raw = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+        var assetIds = new Set();
+        var bindingIds = new Set();
+        var nativeIds = new Set();
+        var sourceIntentIds = new Set();
+        var assets = (raw.assets || []).map(function (item) {
+            var asset = normalizeAsset(item);
+            if (assetIds.has(asset.id)) throw makeError('AVATAR_SNAPSHOT_INVALID', '头像快照包含重复资产');
+            assetIds.add(asset.id);
+            return asset;
+        });
+        var bindings = (raw.bindings || []).map(function (item) {
+            var binding = normalizeBinding(item);
+            if (bindingIds.has(binding.id) || !assetIds.has(binding.avatarId)) {
+                throw makeError('AVATAR_SNAPSHOT_INVALID', '头像快照包含重复或悬空绑定');
+            }
+            bindingIds.add(binding.id);
+            return binding;
+        });
+        var nativeViews = (raw.nativeViews || []).map(function (item) {
+            var record = normalizeNativeView(item);
+            if (nativeIds.has(record.id)) throw makeError('AVATAR_SNAPSHOT_INVALID', '头像快照包含重复原头像调整');
+            nativeIds.add(record.id);
+            return record;
+        });
+        var sourceIntents = (raw.sourceIntents || []).map(function (item) {
+            var record = normalizeSourceIntent(item);
+            if (sourceIntentIds.has(record.id)) throw makeError('AVATAR_SNAPSHOT_INVALID', '头像快照包含重复原头像显示意图');
+            sourceIntentIds.add(record.id);
+            return record;
+        });
+        return { assets: assets, bindings: bindings, nativeViews: nativeViews, sourceIntents: sourceIntents };
+    }
+
+    function snapshotIsEmpty(snapshot) {
+        snapshot = snapshot || {};
+        return !(snapshot.assets && snapshot.assets.length) && !(snapshot.bindings && snapshot.bindings.length) &&
+            !(snapshot.nativeViews && snapshot.nativeViews.length) && !(snapshot.sourceIntents && snapshot.sourceIntents.length);
+    }
+
     function createMemoryAdapter(seed) {
         seed = seed || {};
         var assets = new Map();
@@ -206,11 +247,42 @@
                 return Promise.resolve(clone(record));
             },
             deleteSourceIntent: function (targetKey) { return Promise.resolve(sourceIntents.delete(sourceIntentId(targetKey))); },
+            listNativeViews: function () { return Promise.resolve(Array.from(nativeViews.values()).map(clone)); },
+            listSourceIntents: function () { return Promise.resolve(Array.from(sourceIntents.values()).map(clone)); },
+            readSnapshot: function () {
+                return Promise.resolve(normalizeSnapshot({
+                    assets: Array.from(assets.keys()).map(function (id) {
+                        return Object.assign(clone(assets.get(id)), { imageData: mains.get(id), thumbData: thumbs.get(id) });
+                    }),
+                    bindings: Array.from(bindings.values()),
+                    nativeViews: Array.from(nativeViews.values()),
+                    sourceIntents: Array.from(sourceIntents.values()),
+                }));
+            },
+            replaceSnapshot: function (raw) {
+                var snapshot = normalizeSnapshot(raw);
+                assets.clear(); mains.clear(); thumbs.clear(); bindings.clear(); nativeViews.clear(); sourceIntents.clear();
+                snapshot.assets.forEach(function (asset) {
+                    assets.set(asset.id, metadataFromAsset(asset));
+                    mains.set(asset.id, asset.imageData);
+                    thumbs.set(asset.id, asset.thumbData);
+                });
+                snapshot.bindings.forEach(function (binding) { bindings.set(binding.id, binding); });
+                snapshot.nativeViews.forEach(function (record) { nativeViews.set(record.id, record); });
+                snapshot.sourceIntents.forEach(function (record) { sourceIntents.set(record.id, record); });
+                return Promise.resolve(clone(snapshot));
+            },
             deleteAsset: function (id) {
                 id = cleanText(id);
                 var removedBindings = [];
                 bindings.forEach(function (binding, key) {
                     if (binding.avatarId === id) { removedBindings.push(clone(binding)); bindings.delete(key); }
+                });
+                removedBindings.forEach(function (binding) {
+                    if (binding.targetKey === 'user:global' || /^character:/.test(binding.targetKey || '')) {
+                        var intent = normalizeSourceIntent({ targetKey: binding.targetKey });
+                        sourceIntents.set(intent.id, intent);
+                    }
                 });
                 var removed = assets.delete(id);
                 mains.delete(id);
@@ -383,14 +455,67 @@
                     setResult(true);
                 });
             },
+            listNativeViews: function () {
+                return readonlyGetAll(STORES.meta).then(function (items) {
+                    return items.filter(function (item) { return /^native-view\u001f/.test(item && item.id || ''); });
+                });
+            },
+            listSourceIntents: function () {
+                return readonlyGetAll(STORES.meta).then(function (items) {
+                    return items.filter(function (item) { return /^source-intent\u001f/.test(item && item.id || ''); });
+                });
+            },
+            readSnapshot: function () {
+                return databasePromise.then(function (db) {
+                    var names = [STORES.assets, STORES.main, STORES.thumbs, STORES.bindings, STORES.meta];
+                    var tx = db.transaction(names, 'readonly');
+                    return Promise.all(names.map(function (name) {
+                        return requestPromise(tx.objectStore(name).getAll(), 'AVATAR_IDB_READ_FAILED', '头像完整快照读取失败');
+                    }));
+                }).then(function (parts) {
+                    var mains = new Map((parts[1] || []).map(function (item) { return [item.id, item.imageData]; }));
+                    var thumbs = new Map((parts[2] || []).map(function (item) { return [item.id, item.thumbData]; }));
+                    var meta = parts[4] || [];
+                    return normalizeSnapshot({
+                        assets: (parts[0] || []).map(function (asset) {
+                            return Object.assign(clone(asset), { imageData: mains.get(asset.id), thumbData: thumbs.get(asset.id) });
+                        }),
+                        bindings: parts[3] || [],
+                        nativeViews: meta.filter(function (item) { return /^native-view\u001f/.test(item && item.id || ''); }),
+                        sourceIntents: meta.filter(function (item) { return /^source-intent\u001f/.test(item && item.id || ''); }),
+                    });
+                });
+            },
+            replaceSnapshot: function (raw) {
+                var snapshot = normalizeSnapshot(raw);
+                return transaction(Object.keys(STORES).map(function (key) { return STORES[key]; }), 'readwrite', function (tx, setResult) {
+                    Object.keys(STORES).forEach(function (key) { tx.objectStore(STORES[key]).clear(); });
+                    snapshot.assets.forEach(function (asset) {
+                        tx.objectStore(STORES.assets).put(metadataFromAsset(asset));
+                        tx.objectStore(STORES.main).put({ id: asset.id, imageData: asset.imageData });
+                        tx.objectStore(STORES.thumbs).put({ id: asset.id, thumbData: asset.thumbData });
+                    });
+                    snapshot.bindings.forEach(function (binding) { tx.objectStore(STORES.bindings).put(binding); });
+                    snapshot.nativeViews.forEach(function (record) { tx.objectStore(STORES.meta).put(record); });
+                    snapshot.sourceIntents.forEach(function (record) { tx.objectStore(STORES.meta).put(record); });
+                    tx.objectStore(STORES.meta).put({ id: 'library-version', version: LIBRARY_VERSION });
+                    tx.objectStore(STORES.meta).put({ id: 'bindings-version', version: BINDINGS_VERSION });
+                    setResult(snapshot);
+                });
+            },
             deleteAsset: function (id) {
                 id = cleanText(id);
-                return transaction([STORES.assets, STORES.main, STORES.thumbs, STORES.bindings], 'readwrite', function (tx, setResult) {
+                return transaction([STORES.assets, STORES.main, STORES.thumbs, STORES.bindings, STORES.meta], 'readwrite', function (tx, setResult) {
                     var bindingStore = tx.objectStore(STORES.bindings);
                     var request = bindingStore.getAll();
                     request.onsuccess = function () {
                         var removedBindings = (request.result || []).filter(function (binding) { return binding.avatarId === id; });
                         removedBindings.forEach(function (binding) { bindingStore.delete(binding.id); });
+                        removedBindings.forEach(function (binding) {
+                            if (binding.targetKey === 'user:global' || /^character:/.test(binding.targetKey || '')) {
+                                tx.objectStore(STORES.meta).put(normalizeSourceIntent({ targetKey: binding.targetKey }));
+                            }
+                        });
                         tx.objectStore(STORES.assets).delete(id);
                         tx.objectStore(STORES.main).delete(id);
                         tx.objectStore(STORES.thumbs).delete(id);
@@ -431,6 +556,10 @@
             getSourceIntent: function (targetKey) { return Promise.resolve(adapter.getSourceIntent(targetKey)).then(clone); },
             putSourceIntent: function (record) { return Promise.resolve(adapter.putSourceIntent(normalizeSourceIntent(record))).then(clone); },
             deleteSourceIntent: function (targetKey) { return Promise.resolve(adapter.deleteSourceIntent(targetKey)); },
+            listNativeViews: function () { return Promise.resolve(adapter.listNativeViews()).then(function (items) { return (items || []).map(clone); }); },
+            listSourceIntents: function () { return Promise.resolve(adapter.listSourceIntents()).then(function (items) { return (items || []).map(clone); }); },
+            readSnapshot: function () { return Promise.resolve(adapter.readSnapshot()).then(normalizeSnapshot).then(clone); },
+            replaceSnapshot: function (snapshot) { return Promise.resolve(adapter.replaceSnapshot(normalizeSnapshot(snapshot))).then(clone); },
             deleteAsset: function (id) { return Promise.resolve(adapter.deleteAsset(id)).then(clone); },
             clear: function () { return Promise.resolve(adapter.clear()); },
             versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION, nativeViews: NATIVE_VIEWS_VERSION, sourceIntents: SOURCE_INTENTS_VERSION },
@@ -449,6 +578,8 @@
         normalizeBinding: normalizeBinding,
         normalizeNativeView: normalizeNativeView,
         normalizeSourceIntent: normalizeSourceIntent,
+        normalizeSnapshot: normalizeSnapshot,
+        snapshotIsEmpty: snapshotIsEmpty,
         normalizeView: normalizeView,
         bindingId: bindingId,
         nativeViewId: nativeViewId,

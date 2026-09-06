@@ -17,7 +17,7 @@ function loadModules(window) {
     window.JSON = JSON;
     window.Number = Number;
     const context = vm.createContext(window);
-    ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'avatar-runtime.js', 'avatar-page.js'].forEach((name) => {
+    ['image-tools.js', 'avatar-storage.js', 'avatar-sync.js', 'avatar-image-tools.js', 'avatar-runtime.js', 'avatar-page.js'].forEach((name) => {
         vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', name), 'utf8'), context, { filename: name });
     });
     return window.ThemeMgrModules;
@@ -194,6 +194,8 @@ function runtimeFixture(options = {}) {
     const win = { document: doc, innerWidth: 800, innerHeight: 600, MutationObserver, setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), getComputedStyle: (el) => el.computed, confirm: () => true };
     const mods = loadModules(win); const bundle = memoryStore(options.seed); const runtimeStore = options.store || bundle.store; const runtime = mods.createAvatarRuntime({
         window: win, document: doc, store: runtimeStore, getContext: () => context, getThemeName: () => theme,
+        canMutate: options.canMutate,
+        canStart: options.canStart,
         loadNativeImage: async (nativeAsset) => ({ ...nativeAsset, imageData: 'data:image/png;base64,AA==' }),
     });
     return { win, doc, chat, chars, user, context, store: bundle.store, runtime, mods, setTheme: (x) => { theme = x; } };
@@ -205,14 +207,14 @@ class PageRoot extends Events {
     querySelectorAll() { return []; }
     contains() { return true; }
 }
-function pageFixture(seed = [], bindings = []) {
+function pageFixture(seed = [], bindings = [], options = {}) {
     const doc = new Document(); const pageRoot = new PageRoot(); doc.pageRoot = pageRoot;
     const { store } = memoryStore({ assets: seed, bindings }); let disconnected = 0; let observed = 0;
     const imageLoader = { PLACEHOLDER_SRC: 'placeholder', createImageLoader: () => ({ observe: () => { observed++; }, disconnect: () => { disconnected++; } }) };
     const runtime = { getCapabilities: () => ({ themeKey: 'theme-name:A', character: { available: true, target: { key: 'character:c' } }, user: { available: true, target: { key: 'user:global' } } }), notifyAssetChanged: async () => {}, deleteAsset: (id) => store.deleteAsset(id), clearBinding: async () => {}, beginEdit: async () => {} };
     const win = { document: doc, confirm: () => true }; const mods = loadModules(win);
-    const processor = { processFile: async (file) => asset(file.name) };
-    const page = mods.createAvatarPage({ document: doc, store, processor, runtime, imageLoader, getRoot: () => pageRoot, closeManager() {}, toast() {}, confirm: () => true });
+    const processor = options.processor || { processFile: async (file) => asset(file.name) };
+    const page = mods.createAvatarPage({ document: doc, store, processor, runtime, imageLoader, getRoot: () => pageRoot, closeManager() {}, toast() {}, confirm: () => true, canMutate: options.canMutate });
     return { page, doc, pageRoot, store, stats: () => ({ disconnected, observed }) };
 }
 test('11 Avatar Page mount and unmount own their loader and style', async () => { const f=pageFixture(); await f.page.mount(); assert.equal(f.page.getState().mounted,true); f.page.unmount(); assert.equal(f.page.getState().mounted,false); assert.ok(f.stats().disconnected >= 1); });
@@ -813,8 +815,43 @@ test('81 avatar settings exposes a confirmed complete User recovery action', () 
 
 test('82 development module loading replaces stale-build scripts and uses a build cache token', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-    assert.match(source, /TM_BUILD = 'avatar-content-restore-r1'/);
+    assert.match(source, /TM_BUILD = 'avatar-backend-mvp-r1'/);
     assert.match(source, /existing\.dataset\.themeMgrBuild === TM_BUILD/);
     assert.match(source, /existing\.parentNode\.removeChild\(existing\)/);
     assert.match(source, /encodeURIComponent\(MODULE_LOAD_TOKEN\)/);
+});
+
+test('83 runtime rejects every avatar mutation while the coordinator gate is read-only', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset()] }, canMutate: () => false });
+    await assert.rejects(f.runtime.beginEdit({ kind: 'user', avatarId: 'a' }), error => error.code === 'AVATAR_STORAGE_READ_ONLY');
+    await assert.rejects(f.runtime.beginNativeEdit('user'), error => error.code === 'AVATAR_STORAGE_READ_ONLY');
+    await assert.rejects(f.runtime.clearBinding('user'), error => error.code === 'AVATAR_STORAGE_READ_ONLY');
+    await assert.rejects(f.runtime.deleteAsset('a'), error => error.code === 'AVATAR_STORAGE_READ_ONLY');
+    assert.ok(await f.store.getAsset('a'));
+});
+
+test('84 runtime cannot start before the coordinator marks storage ready', async () => {
+    const f = runtimeFixture({ canStart: () => false });
+    await assert.rejects(f.runtime.start(), error => error.code === 'AVATAR_STORAGE_NOT_READY');
+    assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+});
+
+test('85 Avatar Page does not open import while storage is not writable', async () => {
+    let processed = 0;
+    const f = pageFixture([], [], {
+        canMutate: () => false,
+        processor: { processFile: async () => { processed += 1; return asset(); } },
+    });
+    await f.page.mount();
+    await assert.rejects(f.page.importFiles([{ name: 'blocked.jpg', type: 'image/jpeg' }]), error => error.code === 'AVATAR_STORAGE_READ_ONLY');
+    assert.equal(f.page.pickFiles(), false);
+    assert.equal(processed, 0);
+    assert.match(f.pageRoot.notice.innerHTML, /只读|尚未安全就绪/);
+});
+
+test('86 UI startup waits for coordinator readiness before starting Avatar runtime', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    assert.match(source, /avatarCoordinator\.initialize\(\)\.then\(function \(\) \{\s*if \(!avatarCoordinator\.isRuntimeReady\(\)\) return;\s*return avatarRuntime\.start\(\);/);
+    assert.match(source, /avatarStore = avatarCoordinator\.store/);
+    assert.doesNotMatch(source, /avatarStore = modules\.createAvatarStore\(\{\}\);/);
 });
