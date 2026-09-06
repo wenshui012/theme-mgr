@@ -8005,7 +8005,7 @@
 })(window);
 /* END MODULE 16/24: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:7a3f245697008e5557c980da102015132bf22a3bc15905c2e1d9eb37beab89d3 */
+/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:a3ce35790d2fb299ef8c25096a4554ffba51bff5c36e744d4b8dc5c028be7eb3 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -8388,6 +8388,11 @@
             syncExactAttribute(image, 'srcset', null);
             var source = sourceForView(asset, view);
             syncExactAttribute(image, 'src', source);
+            // Some theme CSS uses `content: url(...)` on avatar images. That
+            // replaces the replaced element's rendered content and wins over
+            // the new src, leaving a stale avatar visible even though the DOM
+            // and binding store point at the selected asset.
+            setImportantStyle(image, 'content', 'normal');
             if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
                 throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
             }
@@ -8406,6 +8411,7 @@
                 syncExactAttribute(image, 'src', record.src || nativeAsset.imageData);
                 syncExactAttribute(image, 'srcset', record.srcset);
                 setExactAttribute(image, 'style', record.style);
+                setImportantStyle(image, 'content', 'normal');
                 record.targetKey = target && target.key || '';
                 activeImages.add(image);
                 return;

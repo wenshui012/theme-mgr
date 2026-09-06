@@ -704,12 +704,21 @@ test('74 bound-avatar metadata lookup does not load full-size or thumbnail paylo
     assert.equal(Object.hasOwn(metadata, 'thumbData'), false);
 });
 
-test('75 runtime observes host avatar source rewrites without broad attribute watching', () => {
+test('75 runtime neutralizes theme CSS content overrides when applying an avatar', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a')], bindings: [
+        { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: {} },
+    ] } });
+    f.user.image.computed.content = 'url(old-avatar.png)';
+    await f.runtime.start();
+    assert.match(f.user.image.getAttribute('style'), /content:normal!important/);
+});
+
+test('76 runtime observes host avatar source rewrites without broad attribute watching', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-runtime.js'), 'utf8');
     assert.match(source, /attributeFilter:\s*\['is_user', 'is_system', 'src', 'srcset'\]/);
 });
 
-test('76 theme editor keeps User avatar bindings collapsed and places sheet actions above the bound pool', () => {
+test('77 theme editor keeps User avatar bindings collapsed and places sheet actions above the bound pool', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     assert.match(source, /id=\"tm-user-avatar-bind-overview\"/);
     assert.match(source, /function openUserAvatarBindingsSheet\(/);
@@ -717,7 +726,7 @@ test('76 theme editor keeps User avatar bindings collapsed and places sheet acti
     assert.doesNotMatch(source, /<div class=\"tm-field\"><label>User 头像绑定<\/label><div class=\"tm-user-avatar-bind\"/);
 });
 
-test('77 complete User recovery clears every User override while preserving assets and Character state', async () => {
+test('78 complete User recovery clears every User override while preserving assets and Character state', async () => {
     const candidateKey = modules.avatarRuntime.themeUserCandidateTargetKey('candidate');
     const f = runtimeFixture({ seed: {
         assets: [asset('global'), asset('legacy'), asset('active'), asset('candidate'), asset('character')],

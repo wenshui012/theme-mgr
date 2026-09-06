@@ -380,6 +380,11 @@
             syncExactAttribute(image, 'srcset', null);
             var source = sourceForView(asset, view);
             syncExactAttribute(image, 'src', source);
+            // Some theme CSS uses `content: url(...)` on avatar images. That
+            // replaces the replaced element's rendered content and wins over
+            // the new src, leaving a stale avatar visible even though the DOM
+            // and binding store point at the selected asset.
+            setImportantStyle(image, 'content', 'normal');
             if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
                 throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
             }
@@ -398,6 +403,7 @@
                 syncExactAttribute(image, 'src', record.src || nativeAsset.imageData);
                 syncExactAttribute(image, 'srcset', record.srcset);
                 setExactAttribute(image, 'style', record.style);
+                setImportantStyle(image, 'content', 'normal');
                 record.targetKey = target && target.key || '';
                 activeImages.add(image);
                 return;
