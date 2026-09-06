@@ -1302,9 +1302,16 @@
                     });
                 });
             }).then(function (summary) {
-                return reconcile().then(function (result) {
-                    summary.reconciled = !result || result.ok !== false;
-                    return summary;
+                var context = contextSafe();
+                var reloadChat = context && typeof context.reloadCurrentChat === 'function'
+                    ? Promise.resolve().then(function () { return context.reloadCurrentChat(); }).then(function () { return true; }, function () { return false; })
+                    : Promise.resolve(false);
+                return reloadChat.then(function (hostChatReloaded) {
+                    summary.hostChatReloaded = hostChatReloaded;
+                    return reconcile().then(function (result) {
+                        summary.reconciled = !result || result.ok !== false;
+                        return summary;
+                    });
                 });
             });
         }

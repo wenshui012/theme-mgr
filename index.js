@@ -1,6 +1,8 @@
 // ST美化管理扩展 v4.0.5 - 模块装配与总入口
 (function () {
     var TM_VERSION = '4.0.5';
+    var TM_BUILD = 'avatar-recovery-r2';
+    var MODULE_LOAD_TOKEN = TM_VERSION + '-' + TM_BUILD;
 
     function getExtensionBaseUrl() {
         var script = document.currentScript;
@@ -18,12 +20,19 @@
     function loadModule(baseUrl, rel) {
         return new Promise(function (resolve, reject) {
             var existing = document.querySelector('script[data-theme-mgr-module="' + rel + '"]');
-            if (existing) { resolve(); return; }
+            if (existing && existing.dataset.themeMgrBuild === TM_BUILD) {
+                if (existing.dataset.themeMgrLoaded === 'true') { resolve(); return; }
+                existing.addEventListener('load', resolve, { once: true });
+                existing.addEventListener('error', function () { reject(new Error('无法加载：' + rel)); }, { once: true });
+                return;
+            }
+            if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
             var script = document.createElement('script');
-            script.src = baseUrl + rel + '?v=' + encodeURIComponent(TM_VERSION);
+            script.src = baseUrl + rel + '?v=' + encodeURIComponent(MODULE_LOAD_TOKEN);
             script.async = false;
             script.dataset.themeMgrModule = rel;
-            script.onload = resolve;
+            script.dataset.themeMgrBuild = TM_BUILD;
+            script.onload = function () { script.dataset.themeMgrLoaded = 'true'; resolve(); };
             script.onerror = function () { reject(new Error('无法加载：' + rel)); };
             document.head.appendChild(script);
         });

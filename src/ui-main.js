@@ -263,6 +263,11 @@
             });
             imageToolsApi = modules.imageTools;
             imageLoaderApi = modules.imageLoader;
+            var previousAvatarRuntime = global.ThemeMgrAvatarEditor;
+            if (previousAvatarRuntime && previousAvatarRuntime !== avatarRuntime && typeof previousAvatarRuntime.stop === 'function') {
+                try { previousAvatarRuntime.stop(); }
+                catch (error) { console.warn('[头像管理] 旧 runtime 清理失败，将继续重建:', error); }
+            }
             avatarStore = modules.createAvatarStore({});
             avatarImageProcessor = modules.createAvatarImageProcessor({ imageTools: imageToolsApi });
             avatarRuntime = modules.createAvatarRuntime({
@@ -6301,7 +6306,10 @@
             avatarRuntime.clearAllUserOverrides().then(function (result) {
                 if (avatarPageController) avatarPageController.refresh();
                 renderAvatarBottomStatus();
-                toast('已清除 ' + result.bindingsCleared + ' 项 User 头像覆盖。若旧头像仍在，请刷新酒馆页面');
+                toast('已清除 ' + result.bindingsCleared + ' 项 User 头像覆盖，正在重新载入页面');
+                global.setTimeout(function () {
+                    if (global.location && typeof global.location.reload === 'function') global.location.reload();
+                }, 800);
             }).catch(function (error) {
                 clearAllUserAvatarOverridesButton.disabled = false;
                 toast(error.message || 'User 头像恢复失败', true);

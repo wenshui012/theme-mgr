@@ -80,7 +80,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const modules = window.ThemeMgrModules;
                 const store = modules.createAvatarStore({ dbName });
                 const processor = modules.createAvatarImageProcessor({});
-                const context = { characters: [{ avatar: 'char.png', name: 'Character' }], characterId: 0, groupId: null, name1: 'User', eventSource: { on() {}, removeListener() {} }, eventTypes: {} };
+                let hostChatReloads = 0;
+                const context = { characters: [{ avatar: 'char.png', name: 'Character' }], characterId: 0, groupId: null, name1: 'User', eventSource: { on() {}, removeListener() {} }, eventTypes: {}, reloadCurrentChat: async () => { hostChatReloads += 1; } };
                 const runtime = modules.createAvatarRuntime({ store, getContext: () => context, getThemeName: () => document.querySelector('#themes').value });
                 await runtime.start();
                 const themePreviewSource = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
@@ -435,7 +436,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const assetsBeforeRecovery = (await store.listAssets()).length;
                 const recoveryResult = await runtime.clearAllUserOverrides();
                 const bindingsAfterRecovery = await store.listBindings();
-                const completeUserRecovery = recoveryResult.bindingsCleared >= 3 &&
+                const completeUserRecovery = recoveryResult.bindingsCleared >= 3 && recoveryResult.hostChatReloaded === true && hostChatReloads === 1 &&
                     !bindingsAfterRecovery.some((binding) => binding.targetKey === 'user:global' || binding.targetKey.startsWith('user:global:theme-avatar:')) &&
                     !(await store.getNativeView('user:global')) &&
                     (await store.listAssets()).length === assetsBeforeRecovery &&

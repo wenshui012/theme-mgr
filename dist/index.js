@@ -8005,7 +8005,7 @@
 })(window);
 /* END MODULE 16/24: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:9defdfbc92fdac7e409ce34caf58717b171cd4ce71d17bd657455e7b0bf2fd4d */
+/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:7a3f245697008e5557c980da102015132bf22a3bc15905c2e1d9eb37beab89d3 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -9310,9 +9310,16 @@
                     });
                 });
             }).then(function (summary) {
-                return reconcile().then(function (result) {
-                    summary.reconciled = !result || result.ok !== false;
-                    return summary;
+                var context = contextSafe();
+                var reloadChat = context && typeof context.reloadCurrentChat === 'function'
+                    ? Promise.resolve().then(function () { return context.reloadCurrentChat(); }).then(function () { return true; }, function () { return false; })
+                    : Promise.resolve(false);
+                return reloadChat.then(function (hostChatReloaded) {
+                    summary.hostChatReloaded = hostChatReloaded;
+                    return reconcile().then(function (result) {
+                        summary.reconciled = !result || result.ok !== false;
+                        return summary;
+                    });
                 });
             });
         }
@@ -11204,7 +11211,7 @@
 })(window);
 /* END MODULE 23/24: src/ui-events.js */
 
-/* BEGIN MODULE 24/24: src/ui-main.js | sha256:2430502fdc3134466369142fbbc16155ed3d17b3844ee951ec5194f7549dbcd1 */
+/* BEGIN MODULE 24/24: src/ui-main.js | sha256:163b8f10f17da11ce54325e42a174b67b6a5a88a776efe476c93fa2d0fb8b4ad */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -11470,6 +11477,11 @@
             });
             imageToolsApi = modules.imageTools;
             imageLoaderApi = modules.imageLoader;
+            var previousAvatarRuntime = global.ThemeMgrAvatarEditor;
+            if (previousAvatarRuntime && previousAvatarRuntime !== avatarRuntime && typeof previousAvatarRuntime.stop === 'function') {
+                try { previousAvatarRuntime.stop(); }
+                catch (error) { console.warn('[头像管理] 旧 runtime 清理失败，将继续重建:', error); }
+            }
             avatarStore = modules.createAvatarStore({});
             avatarImageProcessor = modules.createAvatarImageProcessor({ imageTools: imageToolsApi });
             avatarRuntime = modules.createAvatarRuntime({
@@ -17508,7 +17520,10 @@
             avatarRuntime.clearAllUserOverrides().then(function (result) {
                 if (avatarPageController) avatarPageController.refresh();
                 renderAvatarBottomStatus();
-                toast('已清除 ' + result.bindingsCleared + ' 项 User 头像覆盖。若旧头像仍在，请刷新酒馆页面');
+                toast('已清除 ' + result.bindingsCleared + ' 项 User 头像覆盖，正在重新载入页面');
+                global.setTimeout(function () {
+                    if (global.location && typeof global.location.reload === 'function') global.location.reload();
+                }, 800);
             }).catch(function (error) {
                 clearAllUserAvatarOverridesButton.disabled = false;
                 toast(error.message || 'User 头像恢复失败', true);

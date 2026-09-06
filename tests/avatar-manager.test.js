@@ -733,11 +733,15 @@ test('77 complete User recovery clears every User override while preserving asse
             { targetKey: 'character:char.png', sourceKey: 'char.png', view: { scale: 1.1 } },
         ],
     } });
+    let hostChatReloads = 0;
+    f.context.reloadCurrentChat = async () => { hostChatReloads += 1; };
     await f.runtime.start();
     const characterSource = f.chars[0].image.getAttribute('src');
     const result = await f.runtime.clearAllUserOverrides();
     const remaining = await f.store.listBindings();
     assert.equal(result.bindingsCleared, 4);
+    assert.equal(result.hostChatReloaded, true);
+    assert.equal(hostChatReloads, 1);
     assert.equal(remaining.filter((binding) => binding.targetKey === 'user:global' || binding.targetKey.startsWith('user:global:theme-avatar:')).length, 0);
     assert.equal((remaining.find((binding) => binding.targetKey === 'character:char.png') || {}).avatarId, 'character');
     assert.equal(await f.store.getNativeView('user:global'), null);
@@ -752,4 +756,14 @@ test('78 avatar settings exposes a confirmed complete User recovery action', () 
     assert.match(source, /id=\"tm-clear-all-user-avatar-overrides\"/);
     assert.match(source, /avatarRuntime\.clearAllUserOverrides\(\)/);
     assert.match(source, /头像库和角色头像不会被删除/);
+    assert.match(source, /previousAvatarRuntime\.stop\(\)/);
+    assert.match(source, /global\.location\.reload\(\)/);
+});
+
+test('79 development module loading replaces stale-build scripts and uses a build cache token', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+    assert.match(source, /TM_BUILD = 'avatar-recovery-r2'/);
+    assert.match(source, /existing\.dataset\.themeMgrBuild === TM_BUILD/);
+    assert.match(source, /existing\.parentNode\.removeChild\(existing\)/);
+    assert.match(source, /encodeURIComponent\(MODULE_LOAD_TOKEN\)/);
 });
