@@ -3,7 +3,7 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '..');
-const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'ui-sheets.js', 'avatar-runtime.js', 'avatar-page.js'];
+const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'ui-sheets.js', 'avatar-runtime.js', 'avatar-page.js', 'styles.js'];
 const viewports = [
     { label: 'desktop', width: 1280, height: 800 },
     { label: 'mobile-360', width: 360, height: 720, isMobile: true, hasTouch: true },
@@ -378,6 +378,9 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const characterBeforeThemeBindings = characterImages.map((image) => ({ src:image.src, crop:image.style.getPropertyValue('object-view-box') }));
                 document.querySelector('#themes').value='A'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
                 const appliedA = userImages.every((image) => image.src === themeAAsset.imageData);
+                userImages[0].src = '/avatar.gif';
+                await Promise.resolve();
+                const sourceRewriteReapplied = userImages.every((image) => image.src === themeAAsset.imageData);
                 const freshUserMessage = document.createElement('div');
                 freshUserMessage.className='mes'; freshUserMessage.setAttribute('is_user','true'); freshUserMessage.setAttribute('is_system','false');
                 freshUserMessage.innerHTML='<div class="avatar"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div>';
@@ -391,6 +394,10 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const adaptiveToolbar = document.querySelector('#tm-avatar-editor-toolbar')?.shadowRoot;
                 const bindChoiceAfterAdjust = runtime.getState().bindingMode === 'adaptive' && runtime.getState().unboundSaveMode === 'temporary' &&
                     Boolean(adaptiveToolbar && adaptiveToolbar.querySelector('[data-action="bind-theme"]'));
+                const adaptivePreviewReplacesBound = userImages.every((image) => image.src === persisted.imageData);
+                userImages.forEach((image) => { image.src = themeAAsset.imageData; });
+                await Promise.resolve();
+                const adaptivePreviewSurvivesHostRefresh = userImages.every((image) => image.src === persisted.imageData);
                 await runtime.cancelEdit();
                 document.querySelector('#themes').value='B'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
                 const appliedB = userImages.every((image) => image.src === themeBAsset.imageData);
@@ -448,6 +455,19 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     await delay(10);
                 }
                 const menuDelete = !(await store.getAsset(avatarId)) && pageController.getState().count === 0;
+                modules.injectStyles();
+                const bindingUi = document.createElement('div');
+                bindingUi.className = 'tm-light';
+                bindingUi.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;overflow:hidden;background:#fff';
+                bindingUi.innerHTML = '<button class="tm-theme-bind-card"><span class="tm-theme-bind-icon"></span><span class="tm-theme-bind-copy"><strong>User 头像绑定</strong><small>4 个头像 · 当前：portrait</small></span><i class="tm-theme-bind-chevron"></i></button><div class="tm-sheet"><div class="tm-sheet-content"><div class="tm-user-avatar-bind-actions tm-user-avatar-bind-sheet-actions"><button class="tm-btn">调整当前头像</button><button class="tm-btn">全部解除</button></div><div class="tm-user-avatar-bind-pool">' + Array.from({length:4},(_,index)=>'<div class="tm-user-avatar-bind-item"><button class="tm-user-avatar-bind-choice"><span class="tm-user-avatar-bind-thumb"></span><span class="tm-user-avatar-bind-copy"><strong>portrait '+index+'</strong><small>点按切换</small></span></button></div>').join('') + '</div></div></div>';
+                document.body.appendChild(bindingUi);
+                const bindingOverview = bindingUi.querySelector('.tm-theme-bind-card');
+                const bindingActions = bindingUi.querySelector('.tm-user-avatar-bind-sheet-actions');
+                const bindingPool = bindingUi.querySelector('.tm-user-avatar-bind-pool');
+                const bindingUiResponsive = bindingUi.scrollWidth <= innerWidth && bindingOverview.getBoundingClientRect().right <= innerWidth && bindingPool.scrollWidth <= bindingPool.clientWidth;
+                const bindingActionsAbovePool = bindingActions.getBoundingClientRect().bottom <= bindingPool.getBoundingClientRect().top;
+                bindingUi.remove();
+                document.querySelector('#tm-style')?.remove();
                 const noOverflow = document.documentElement.scrollWidth <= window.innerWidth;
                 const cleanup = !document.querySelector('#tm-avatar-editor-toolbar') && !document.querySelector('#tm-avatar-editor-style');
                 pageController.unmount();
@@ -462,7 +482,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, gridStable, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
-                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, bindAfterAdjustControl, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, seamlessNewMessage, bindChoiceAfterAdjust, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, menuDelete, nativeInputHandlingMs, nativeResponsiveInputs,
+                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, bindAfterAdjustControl, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, bindChoiceAfterAdjust, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, menuDelete, bindingUiResponsive, bindingActionsAbovePool, nativeInputHandlingMs, nativeResponsiveInputs,
                     nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
                     hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
@@ -470,7 +490,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','bindAfterAdjustControl','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','seamlessNewMessage','bindChoiceAfterAdjust','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','menuDelete','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','bindAfterAdjustControl','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','bindChoiceAfterAdjust','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','menuDelete','bindingUiResponsive','bindingActionsAbovePool','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

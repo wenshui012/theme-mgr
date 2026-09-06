@@ -644,6 +644,7 @@ test('70 adaptive User editing stays temporary when the theme already has a bind
     await f.runtime.start();
     await f.runtime.beginEdit({ kind: 'user', avatarId: 'temp', bindingMode: 'adaptive', themeName: 'A' });
     assert.equal(f.runtime.getState().unboundSaveMode, 'temporary');
+    assert.match(f.user.image.getAttribute('src'), /main-temp/);
     const result = await f.runtime.saveEdit();
     assert.equal(result.temporary, true);
     assert.equal((await f.store.getBinding('theme-name:A', 'user:global')).avatarId, 'a');
@@ -701,4 +702,17 @@ test('74 bound-avatar metadata lookup does not load full-size or thumbnail paylo
     assert.equal(metadata.id, 'a');
     assert.equal(Object.hasOwn(metadata, 'imageData'), false);
     assert.equal(Object.hasOwn(metadata, 'thumbData'), false);
+});
+
+test('75 runtime observes host avatar source rewrites without broad attribute watching', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-runtime.js'), 'utf8');
+    assert.match(source, /attributeFilter:\s*\['is_user', 'is_system', 'src', 'srcset'\]/);
+});
+
+test('76 theme editor keeps User avatar bindings collapsed and places sheet actions above the bound pool', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    assert.match(source, /id=\"tm-user-avatar-bind-overview\"/);
+    assert.match(source, /function openUserAvatarBindingsSheet\(/);
+    assert.match(source, /tm-user-avatar-bind-sheet-actions[\s\S]*tm-user-avatar-bind-sheet-body/);
+    assert.doesNotMatch(source, /<div class=\"tm-field\"><label>User 头像绑定<\/label><div class=\"tm-user-avatar-bind\"/);
 });

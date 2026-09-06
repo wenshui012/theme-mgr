@@ -46,6 +46,12 @@
         if (value == null) element.removeAttribute(name);
         else element.setAttribute(name, value);
     }
+    function syncExactAttribute(element, name, value) {
+        var current = getAttribute(element, name);
+        if ((current == null ? null : current) === (value == null ? null : String(value))) return false;
+        setExactAttribute(element, name, value);
+        return true;
+    }
     function themeKey(themeName) {
         themeName = clean(themeName);
         return themeName ? 'theme-name:' + themeName : '';
@@ -371,9 +377,9 @@
             var image = entry.image;
             var record = captureBaseline(image);
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
-            setExactAttribute(image, 'srcset', null);
+            syncExactAttribute(image, 'srcset', null);
             var source = sourceForView(asset, view);
-            if (getAttribute(image, 'src') !== source) setExactAttribute(image, 'src', source);
+            syncExactAttribute(image, 'src', source);
             if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
                 throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
             }
@@ -389,8 +395,8 @@
             var nativeAsset = nativeAssetForEntry(entry, target);
             var transformsSource = Boolean(normalized.x || normalized.y || normalized.scale !== 1 || normalized.rotate || normalized.flipX || normalized.flipY);
             if (!transformsSource) {
-                setExactAttribute(image, 'src', record.src || nativeAsset.imageData);
-                setExactAttribute(image, 'srcset', record.srcset);
+                syncExactAttribute(image, 'src', record.src || nativeAsset.imageData);
+                syncExactAttribute(image, 'srcset', record.srcset);
                 setExactAttribute(image, 'style', record.style);
                 record.targetKey = target && target.key || '';
                 activeImages.add(image);
@@ -615,7 +621,12 @@
                 applyCachedPlans();
                 scheduleReconcile(0);
             });
-            chatObserver.observe(chat, { childList: true, subtree: true, attributes: true, attributeFilter: ['is_user', 'is_system'] });
+            chatObserver.observe(chat, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['is_user', 'is_system', 'src', 'srcset'],
+            });
         }
         function addEvent(source, name, handler) {
             if (!source || !name || typeof source.on !== 'function') return;
