@@ -8005,7 +8005,7 @@
 })(window);
 /* END MODULE 16/24: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:14ae33a022386ca7f0d38a939719dff7d9d63af98a450c28576574b34c19c039 */
+/* BEGIN MODULE 17/24: src/avatar-runtime.js | sha256:9defdfbc92fdac7e409ce34caf58717b171cd4ce71d17bd657455e7b0bf2fd4d */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -9286,6 +9286,36 @@
                 return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(key, binding.targetKey); }));
             }).then(reconcile);
         }
+        function clearAllUserOverrides() {
+            if (editor) return cancelEdit('all-user-overrides-cleared').then(clearAllUserOverrides);
+            temporaryUserOverride = null;
+            promotedBindings.delete(USER_TARGET_KEY);
+            sequence += 1;
+            bindingPlans = bindingPlans.filter(function (plan) {
+                return !plan.target || plan.target.key !== USER_TARGET_KEY;
+            });
+            Array.from(activeImages).forEach(function (image) {
+                var record = baselines.get(image);
+                if (record && record.targetKey === USER_TARGET_KEY) restoreImage(image);
+            });
+            return Promise.resolve(store.ready).then(function () { return store.listBindings(); }).then(function (bindings) {
+                var targetsToDelete = (bindings || []).filter(function (binding) {
+                    return binding.targetKey === USER_TARGET_KEY || binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0;
+                });
+                return Promise.all(targetsToDelete.map(function (binding) {
+                    return store.deleteBinding(binding.themeKey, binding.targetKey);
+                })).then(function () {
+                    return store.deleteNativeView(USER_TARGET_KEY).then(function (nativeViewCleared) {
+                        return { bindingsCleared: targetsToDelete.length, nativeViewCleared: nativeViewCleared === true };
+                    });
+                });
+            }).then(function (summary) {
+                return reconcile().then(function (result) {
+                    summary.reconciled = !result || result.ok !== false;
+                    return summary;
+                });
+            });
+        }
         function clearNativeView(kind) {
             var cap = capability(kind === 'user' ? 'user' : 'character');
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
@@ -9341,6 +9371,7 @@
             setThemeUserBinding: setThemeUserBinding,
             removeThemeUserBinding: removeThemeUserBinding,
             clearThemeUserBinding: clearThemeUserBinding,
+            clearAllUserOverrides: clearAllUserOverrides,
             deleteAsset: deleteAsset,
             notifyAssetChanged: notifyAssetChanged,
             getState: getState,
@@ -11173,7 +11204,7 @@
 })(window);
 /* END MODULE 23/24: src/ui-events.js */
 
-/* BEGIN MODULE 24/24: src/ui-main.js | sha256:5f7befe58dddac171c362b6905c5fdd80e9007b0587d5eac760a33524a994c95 */
+/* BEGIN MODULE 24/24: src/ui-main.js | sha256:2430502fdc3134466369142fbbc16155ed3d17b3844ee951ec5194f7549dbcd1 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -17382,6 +17413,12 @@
             '<button class="tm-btn tm-btn-danger" id="tm-clear">清空标注</button>' +
             '</div>',
             '<div class="tm-hint" style="margin-top:8px">※ 标注只包含分类、标签、截图等附加信息；美化包会打包 ST 当前所有主题 JSON，并附带分类等轻量标注</div>',
+            lastAppPage === 'avatars' ? [
+                '<div class="tm-divider"></div>',
+                '<div class="tm-sec-title">User 头像恢复</div>',
+                '<div class="tm-hint" style="margin-bottom:8px">用于修复旧版本遗留的固定头像。会清除全局 User 头像、所有美化专属 User 绑定与候选、User 原头像调整；不会删除头像库，也不会影响角色头像。</div>',
+                '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>',
+            ].join('') : '',
         ].join(''));
 
         var followAppearanceInput = sheet.querySelector('#tm-follow-appearance');
@@ -17459,6 +17496,23 @@
         });
         sheet.querySelector('#tm-show-freq').addEventListener('change', function () {
             var dd = load(); dd.showFreq = this.checked; save(dd); renderGrid();
+        });
+        var clearAllUserAvatarOverridesButton = sheet.querySelector('#tm-clear-all-user-avatar-overrides');
+        if (clearAllUserAvatarOverridesButton) clearAllUserAvatarOverridesButton.addEventListener('click', function () {
+            if (!avatarRuntime || typeof avatarRuntime.clearAllUserOverrides !== 'function') {
+                toast('User 头像恢复模块尚未就绪', true);
+                return;
+            }
+            if (!confirm('确定彻底恢复 User 原头像吗？\n\n这会清除全局 User 头像、所有美化专属 User 绑定与候选，以及 User 原头像调整。头像库和角色头像不会被删除。')) return;
+            clearAllUserAvatarOverridesButton.disabled = true;
+            avatarRuntime.clearAllUserOverrides().then(function (result) {
+                if (avatarPageController) avatarPageController.refresh();
+                renderAvatarBottomStatus();
+                toast('已清除 ' + result.bindingsCleared + ' 项 User 头像覆盖。若旧头像仍在，请刷新酒馆页面');
+            }).catch(function (error) {
+                clearAllUserAvatarOverridesButton.disabled = false;
+                toast(error.message || 'User 头像恢复失败', true);
+            });
         });
         var fabFileInp = sheet.querySelector('#tm-fab-file');
         var fabResetBtn = sheet.querySelector('#tm-fab-reset');

@@ -716,3 +716,40 @@ test('76 theme editor keeps User avatar bindings collapsed and places sheet acti
     assert.match(source, /tm-user-avatar-bind-sheet-actions[\s\S]*tm-user-avatar-bind-sheet-body/);
     assert.doesNotMatch(source, /<div class=\"tm-field\"><label>User 头像绑定<\/label><div class=\"tm-user-avatar-bind\"/);
 });
+
+test('77 complete User recovery clears every User override while preserving assets and Character state', async () => {
+    const candidateKey = modules.avatarRuntime.themeUserCandidateTargetKey('candidate');
+    const f = runtimeFixture({ seed: {
+        assets: [asset('global'), asset('legacy'), asset('active'), asset('candidate'), asset('character')],
+        bindings: [
+            { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
+            { version: 1, themeKey: 'theme-name:Legacy', targetKey: 'user:global', avatarId: 'legacy', view: {} },
+            { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'active', view: { scale: 1.2 } },
+            { version: 4, themeKey: 'theme-name:A', targetKey: candidateKey, avatarId: 'candidate', view: { scale: 1.3 } },
+            { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:char.png', avatarId: 'character', view: {} },
+        ],
+        nativeViews: [
+            { targetKey: 'user:global', sourceKey: 'raw-user.png', view: { scale: 1.4 } },
+            { targetKey: 'character:char.png', sourceKey: 'char.png', view: { scale: 1.1 } },
+        ],
+    } });
+    await f.runtime.start();
+    const characterSource = f.chars[0].image.getAttribute('src');
+    const result = await f.runtime.clearAllUserOverrides();
+    const remaining = await f.store.listBindings();
+    assert.equal(result.bindingsCleared, 4);
+    assert.equal(remaining.filter((binding) => binding.targetKey === 'user:global' || binding.targetKey.startsWith('user:global:theme-avatar:')).length, 0);
+    assert.equal((remaining.find((binding) => binding.targetKey === 'character:char.png') || {}).avatarId, 'character');
+    assert.equal(await f.store.getNativeView('user:global'), null);
+    assert.equal((await f.store.getNativeView('character:char.png')).sourceKey, 'char.png');
+    assert.equal((await f.store.listAssets()).length, 5);
+    assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+    assert.equal(f.chars[0].image.getAttribute('src'), characterSource);
+});
+
+test('78 avatar settings exposes a confirmed complete User recovery action', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    assert.match(source, /id=\"tm-clear-all-user-avatar-overrides\"/);
+    assert.match(source, /avatarRuntime\.clearAllUserOverrides\(\)/);
+    assert.match(source, /头像库和角色头像不会被删除/);
+});

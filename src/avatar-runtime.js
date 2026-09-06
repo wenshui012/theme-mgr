@@ -1278,6 +1278,36 @@
                 return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(key, binding.targetKey); }));
             }).then(reconcile);
         }
+        function clearAllUserOverrides() {
+            if (editor) return cancelEdit('all-user-overrides-cleared').then(clearAllUserOverrides);
+            temporaryUserOverride = null;
+            promotedBindings.delete(USER_TARGET_KEY);
+            sequence += 1;
+            bindingPlans = bindingPlans.filter(function (plan) {
+                return !plan.target || plan.target.key !== USER_TARGET_KEY;
+            });
+            Array.from(activeImages).forEach(function (image) {
+                var record = baselines.get(image);
+                if (record && record.targetKey === USER_TARGET_KEY) restoreImage(image);
+            });
+            return Promise.resolve(store.ready).then(function () { return store.listBindings(); }).then(function (bindings) {
+                var targetsToDelete = (bindings || []).filter(function (binding) {
+                    return binding.targetKey === USER_TARGET_KEY || binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0;
+                });
+                return Promise.all(targetsToDelete.map(function (binding) {
+                    return store.deleteBinding(binding.themeKey, binding.targetKey);
+                })).then(function () {
+                    return store.deleteNativeView(USER_TARGET_KEY).then(function (nativeViewCleared) {
+                        return { bindingsCleared: targetsToDelete.length, nativeViewCleared: nativeViewCleared === true };
+                    });
+                });
+            }).then(function (summary) {
+                return reconcile().then(function (result) {
+                    summary.reconciled = !result || result.ok !== false;
+                    return summary;
+                });
+            });
+        }
         function clearNativeView(kind) {
             var cap = capability(kind === 'user' ? 'user' : 'character');
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
@@ -1333,6 +1363,7 @@
             setThemeUserBinding: setThemeUserBinding,
             removeThemeUserBinding: removeThemeUserBinding,
             clearThemeUserBinding: clearThemeUserBinding,
+            clearAllUserOverrides: clearAllUserOverrides,
             deleteAsset: deleteAsset,
             notifyAssetChanged: notifyAssetChanged,
             getState: getState,

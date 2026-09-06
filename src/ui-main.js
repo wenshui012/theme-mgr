@@ -6206,6 +6206,12 @@
             '<button class="tm-btn tm-btn-danger" id="tm-clear">清空标注</button>' +
             '</div>',
             '<div class="tm-hint" style="margin-top:8px">※ 标注只包含分类、标签、截图等附加信息；美化包会打包 ST 当前所有主题 JSON，并附带分类等轻量标注</div>',
+            lastAppPage === 'avatars' ? [
+                '<div class="tm-divider"></div>',
+                '<div class="tm-sec-title">User 头像恢复</div>',
+                '<div class="tm-hint" style="margin-bottom:8px">用于修复旧版本遗留的固定头像。会清除全局 User 头像、所有美化专属 User 绑定与候选、User 原头像调整；不会删除头像库，也不会影响角色头像。</div>',
+                '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>',
+            ].join('') : '',
         ].join(''));
 
         var followAppearanceInput = sheet.querySelector('#tm-follow-appearance');
@@ -6283,6 +6289,23 @@
         });
         sheet.querySelector('#tm-show-freq').addEventListener('change', function () {
             var dd = load(); dd.showFreq = this.checked; save(dd); renderGrid();
+        });
+        var clearAllUserAvatarOverridesButton = sheet.querySelector('#tm-clear-all-user-avatar-overrides');
+        if (clearAllUserAvatarOverridesButton) clearAllUserAvatarOverridesButton.addEventListener('click', function () {
+            if (!avatarRuntime || typeof avatarRuntime.clearAllUserOverrides !== 'function') {
+                toast('User 头像恢复模块尚未就绪', true);
+                return;
+            }
+            if (!confirm('确定彻底恢复 User 原头像吗？\n\n这会清除全局 User 头像、所有美化专属 User 绑定与候选，以及 User 原头像调整。头像库和角色头像不会被删除。')) return;
+            clearAllUserAvatarOverridesButton.disabled = true;
+            avatarRuntime.clearAllUserOverrides().then(function (result) {
+                if (avatarPageController) avatarPageController.refresh();
+                renderAvatarBottomStatus();
+                toast('已清除 ' + result.bindingsCleared + ' 项 User 头像覆盖。若旧头像仍在，请刷新酒馆页面');
+            }).catch(function (error) {
+                clearAllUserAvatarOverridesButton.disabled = false;
+                toast(error.message || 'User 头像恢复失败', true);
+            });
         });
         var fabFileInp = sheet.querySelector('#tm-fab-file');
         var fabResetBtn = sheet.querySelector('#tm-fab-reset');
