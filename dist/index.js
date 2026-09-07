@@ -7476,7 +7476,7 @@
 })(window);
 /* END MODULE 14/25: src/image-loader.js */
 
-/* BEGIN MODULE 15/25: src/avatar-storage.js | sha256:45a9029f9be0594384d236bb23900f286ac53a6c0f890a0855d2450d71be07b0 */
+/* BEGIN MODULE 15/25: src/avatar-storage.js | sha256:d2fb75401d18bbe5b574294198b8239e8b8085356fd9cbbfc15f1a4d1d9eb897 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var DB_NAME = 'theme_mgr_avatar_db';
@@ -7582,6 +7582,21 @@
             view: normalizeView(binding.view),
             updatedAt: cleanText(binding.updatedAt) || new Date().toISOString(),
         };
+    }
+
+    function normalizeBindingMutations(operations) {
+        if (!Array.isArray(operations) || !operations.length) throw makeError('AVATAR_BINDING_BATCH_INVALID', '头像绑定批处理不能为空');
+        return operations.map(function (operation) {
+            operation = operation && typeof operation === 'object' ? operation : {};
+            if (operation.type === 'put') return { type: 'put', binding: normalizeBinding(operation.binding) };
+            if (operation.type === 'delete') {
+                var themeKey = cleanText(operation.themeKey);
+                var targetKey = cleanText(operation.targetKey);
+                if (!themeKey || !targetKey) throw makeError('AVATAR_BINDING_BATCH_INVALID', '头像绑定删除操作无效');
+                return { type: 'delete', themeKey: themeKey, targetKey: targetKey, id: bindingId(themeKey, targetKey) };
+            }
+            throw makeError('AVATAR_BINDING_BATCH_INVALID', '头像绑定批处理包含未知操作');
+        });
     }
 
     function normalizeNativeView(record) {
@@ -7712,6 +7727,21 @@
                 return Promise.resolve(clone(binding));
             },
             deleteBinding: function (themeKey, targetKey) { return Promise.resolve(bindings.delete(bindingId(themeKey, targetKey))); },
+            mutateBindings: function (rawOperations) {
+                var operations = normalizeBindingMutations(rawOperations);
+                var missing = operations.find(function (operation) { return operation.type === 'put' && !assets.has(operation.binding.avatarId); });
+                if (missing) return Promise.reject(makeError('AVATAR_NOT_FOUND', '绑定引用的头像不存在'));
+                var nextBindings = new Map(bindings);
+                var results = operations.map(function (operation) {
+                    if (operation.type === 'put') {
+                        nextBindings.set(operation.binding.id, operation.binding);
+                        return clone(operation.binding);
+                    }
+                    return nextBindings.delete(operation.id);
+                });
+                bindings = nextBindings;
+                return Promise.resolve(results);
+            },
             getNativeView: function (targetKey) { return Promise.resolve(clone(nativeViews.get(nativeViewId(targetKey)) || null)); },
             putNativeView: function (record) {
                 record = normalizeNativeView(record);
@@ -7896,6 +7926,48 @@
                     setResult(true);
                 });
             },
+            mutateBindings: function (rawOperations) {
+                var operations = normalizeBindingMutations(rawOperations);
+                return transaction([STORES.assets, STORES.bindings, STORES.meta], 'readwrite', function (tx, setResult) {
+                    var assetStore = tx.objectStore(STORES.assets);
+                    var bindingStore = tx.objectStore(STORES.bindings);
+                    var avatarIds = Array.from(new Set(operations.filter(function (operation) {
+                        return operation.type === 'put';
+                    }).map(function (operation) { return operation.binding.avatarId; })));
+                    var remaining = avatarIds.length;
+                    var missing = false;
+                    function apply() {
+                        if (missing || remaining > 0) return;
+                        var results = operations.map(function (operation) {
+                            if (operation.type === 'put') {
+                                bindingStore.put(operation.binding);
+                                return operation.binding;
+                            }
+                            bindingStore.delete(operation.id);
+                            return true;
+                        });
+                        tx.objectStore(STORES.meta).put({ id: 'bindings-version', version: BINDINGS_VERSION });
+                        setResult(results);
+                    }
+                    if (!remaining) { apply(); return; }
+                    avatarIds.forEach(function (avatarId) {
+                        var request = assetStore.get(avatarId);
+                        request.onsuccess = function () {
+                            if (!request.result) {
+                                missing = true;
+                                try { tx.abort(); } catch (_) {}
+                                return;
+                            }
+                            remaining -= 1;
+                            apply();
+                        };
+                        request.onerror = function () { try { tx.abort(); } catch (_) {} };
+                    });
+                }).catch(function (error) {
+                    if (error.code === 'AVATAR_IDB_ABORTED') throw makeError('AVATAR_NOT_FOUND', '绑定引用的头像不存在', error);
+                    throw error;
+                });
+            },
             getNativeView: function (targetKey) {
                 return databasePromise.then(function (db) {
                     var tx = db.transaction([STORES.meta], 'readonly');
@@ -8029,6 +8101,7 @@
             getBinding: function (themeKey, targetKey) { return Promise.resolve(adapter.getBinding(themeKey, targetKey)).then(clone); },
             putBinding: function (binding) { return Promise.resolve(adapter.putBinding(normalizeBinding(binding))).then(clone); },
             deleteBinding: function (themeKey, targetKey) { return Promise.resolve(adapter.deleteBinding(themeKey, targetKey)); },
+            mutateBindings: function (operations) { return Promise.resolve(adapter.mutateBindings(normalizeBindingMutations(operations))).then(clone); },
             getNativeView: function (targetKey) { return Promise.resolve(adapter.getNativeView(targetKey)).then(clone); },
             putNativeView: function (record) { return Promise.resolve(adapter.putNativeView(normalizeNativeView(record))).then(clone); },
             deleteNativeView: function (targetKey) { return Promise.resolve(adapter.deleteNativeView(targetKey)); },
@@ -8055,6 +8128,7 @@
         STORES: STORES,
         normalizeAsset: normalizeAsset,
         normalizeBinding: normalizeBinding,
+        normalizeBindingMutations: normalizeBindingMutations,
         normalizeNativeView: normalizeNativeView,
         normalizeSourceIntent: normalizeSourceIntent,
         normalizeSnapshot: normalizeSnapshot,
@@ -8071,7 +8145,7 @@
 })(window);
 /* END MODULE 15/25: src/avatar-storage.js */
 
-/* BEGIN MODULE 16/25: src/avatar-sync.js | sha256:066d76680a49ae7c12efeeb25707cb459bf4a877d19ae9cbc0f3552217264eeb */
+/* BEGIN MODULE 16/25: src/avatar-sync.js | sha256:d46e07a4c912cb921b401427dc9197e45950a05d884ac84ecab5244cebe8c034 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var SERVER_BASE = '/api/plugins/theme-manager';
@@ -8104,6 +8178,7 @@
         }).join(',') + '}';
     }
     function emptySnapshot() { return { assets: [], bindings: [], nativeViews: [], sourceIntents: [] }; }
+    function emptyManifest() { return { schemaVersion: MANIFEST_VERSION, assets: [], bindings: [], nativeViews: [], sourceIntents: [] }; }
     function normalizeMime(value) {
         value = clean(value).toLowerCase().split(';')[0];
         return value === 'image/jpg' || value === 'image/pjpeg' ? 'image/jpeg' : value;
@@ -8727,8 +8802,87 @@
         function ensureWritable() {
             if (!state.writable) throw makeError('AVATAR_STORAGE_READ_ONLY', state.offline ? '头像后端离线，当前仅可读取最后已验证缓存' : '头像存储当前为只读', clone(state));
         }
+        function isBindingMutation(method) {
+            return method === 'putBinding' || method === 'deleteBinding' || method === 'mutateBindings';
+        }
+        function stageBindingMutation(method, args) {
+            var manifest = clone(remoteManifest || emptyManifest());
+            var assets = new Set(manifest.assets.map(function (asset) { return asset.id; }));
+            var bindings = new Map(manifest.bindings.map(function (binding) { return [binding.id, binding]; }));
+            var applyArgs;
+            var result;
+            function requireAsset(binding) {
+                if (!assets.has(binding.avatarId)) throw storageApi.makeError('AVATAR_NOT_FOUND', '绑定引用的头像不存在');
+            }
+            if (method === 'putBinding') {
+                var binding = storageApi.normalizeBinding(args[0]);
+                requireAsset(binding);
+                bindings.set(binding.id, binding);
+                applyArgs = [binding];
+                result = clone(binding);
+            } else if (method === 'deleteBinding') {
+                var themeKey = clean(args[0]);
+                var targetKey = clean(args[1]);
+                result = bindings.delete(storageApi.bindingId(themeKey, targetKey));
+                applyArgs = [themeKey, targetKey];
+            } else {
+                var operations = storageApi.normalizeBindingMutations(args[0]);
+                operations.forEach(function (operation) {
+                    if (operation.type === 'put') requireAsset(operation.binding);
+                });
+                result = operations.map(function (operation) {
+                    if (operation.type === 'put') {
+                        bindings.set(operation.binding.id, operation.binding);
+                        return clone(operation.binding);
+                    }
+                    return bindings.delete(operation.id);
+                });
+                applyArgs = [operations.map(function (operation) {
+                    return operation.type === 'put'
+                        ? { type: 'put', binding: clone(operation.binding) }
+                        : { type: 'delete', themeKey: operation.themeKey, targetKey: operation.targetKey };
+                })];
+            }
+            manifest.bindings = Array.from(bindings.values()).map(clone);
+            return { manifest: normalizeManifest(manifest, storageApi).manifest, applyArgs: applyArgs, result: result };
+        }
+        function remoteBindingMutation(method, args) {
+            var staged = stageBindingMutation(method, args);
+            var manifest = staged.manifest;
+            return remote.commit({ expectedRevision: revision, datasetId: datasetId, manifest: manifest }).then(function (committed) {
+                var normalized = normalizeManifest(committed.manifest, storageApi);
+                if (committed.datasetId !== datasetId || committed.revision !== revision + 1 || !/^sha256:[a-f0-9]{64}$/.test(committed.fingerprint) ||
+                    stableStringify(normalized.manifest) !== stableStringify(manifest)) {
+                    throw makeError('AVATAR_COMMIT_VERIFY_FAILED', '头像远端写入响应校验失败');
+                }
+                return Promise.resolve(cacheStore[method].apply(cacheStore, staged.applyArgs)).then(function () {
+                    return controlStore.put(controlFromState(committed, normalized.manifest));
+                }).then(function () {
+                    return activeStore[method].apply(activeStore, staged.applyArgs);
+                }).then(function () {
+                    activeSnapshot.bindings = clone(normalized.manifest.bindings);
+                    remoteManifest = normalized.manifest;
+                    remoteRefs = normalized.refs;
+                    revision = committed.revision;
+                    fingerprint = committed.fingerprint;
+                    publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'present', reason: '', error: null });
+                    return clone(staged.result);
+                }).catch(function (cacheError) {
+                    publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'present', reason: 'cache-update-failed' });
+                    throw makeError('AVATAR_CACHE_UPDATE_FAILED', '远端头像已提交，但本地只读缓存更新失败；已停止后续写入', { cause: cacheError.code || cacheError.message });
+                });
+            }).catch(function (error) {
+                if (error && error.code === 'AVATAR_REVISION_CONFLICT') {
+                    publish({ phase: 'conflict', authoritative: null, writable: false, offline: false, remote: 'present', reason: 'revision-conflict', error: errorSummary(error) });
+                } else if (!error || error.code !== 'AVATAR_CACHE_UPDATE_FAILED') {
+                    publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'error', reason: 'commit-uncertain', error: errorSummary(error) });
+                }
+                throw error;
+            });
+        }
         function remoteMutation(method, args) {
             ensureWritable();
+            if (isBindingMutation(method)) return remoteBindingMutation(method, args);
             var uploadedRefs = null;
             var preparedArgs = args.slice();
             var prepare = Promise.resolve();
@@ -8797,7 +8951,7 @@
             'getSourceIntent', 'listNativeViews', 'listSourceIntents', 'readSnapshot'].forEach(function (method) {
             store[method] = function () { return callRead(method, Array.prototype.slice.call(arguments)); };
         });
-        ['putAsset', 'putBinding', 'deleteBinding', 'putNativeView', 'deleteNativeView', 'putSourceIntent',
+        ['putAsset', 'putBinding', 'deleteBinding', 'mutateBindings', 'putNativeView', 'deleteNativeView', 'putSourceIntent',
             'deleteSourceIntent', 'deleteAsset', 'clear'].forEach(function (method) {
             store[method] = function () { return callWrite(method, Array.prototype.slice.call(arguments)); };
         });
@@ -8950,7 +9104,7 @@
 })(window);
 /* END MODULE 17/25: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 18/25: src/avatar-runtime.js | sha256:5977d0346632af8940f1e045d32b6feb445ce529a20c406e57328cf3c7911134 */
+/* BEGIN MODULE 18/25: src/avatar-runtime.js | sha256:06c7aaf26aaf99f6cd03a923d53fa914c10933ee9525fcd95181f76ed3e40127 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -10246,15 +10400,20 @@
             var candidate = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: themeUserCandidateTargetKey(avatarId), avatarId: avatarId, view: normalizedView };
             var active = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: avatarId, view: normalizedView };
             return store.getBinding(key, USER_TARGET_KEY).then(function (previous) {
-                if (!isDedicatedThemeBinding(previous) || previous.avatarId === avatarId) return null;
-                return store.putBinding({
-                    version: THEME_BINDING_VERSION,
-                    themeKey: key,
-                    targetKey: themeUserCandidateTargetKey(previous.avatarId),
-                    avatarId: previous.avatarId,
-                    view: previous.view,
-                });
-            }).then(function () { return store.putBinding(candidate); }).then(function () { return store.putBinding(active); });
+                var operations = [];
+                if (isDedicatedThemeBinding(previous) && previous.avatarId !== avatarId) {
+                    operations.push({ type: 'put', binding: {
+                        version: THEME_BINDING_VERSION,
+                        themeKey: key,
+                        targetKey: themeUserCandidateTargetKey(previous.avatarId),
+                        avatarId: previous.avatarId,
+                        view: previous.view,
+                    } });
+                }
+                operations.push({ type: 'put', binding: candidate });
+                operations.push({ type: 'put', binding: active });
+                return store.mutateBindings(operations).then(function (results) { return results[results.length - 1]; });
+            });
         }
         function setThemeUserBinding(themeName, avatarId) {
             var mutationError = requireMutable();

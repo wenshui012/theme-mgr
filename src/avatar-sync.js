@@ -30,6 +30,7 @@
         }).join(',') + '}';
     }
     function emptySnapshot() { return { assets: [], bindings: [], nativeViews: [], sourceIntents: [] }; }
+    function emptyManifest() { return { schemaVersion: MANIFEST_VERSION, assets: [], bindings: [], nativeViews: [], sourceIntents: [] }; }
     function normalizeMime(value) {
         value = clean(value).toLowerCase().split(';')[0];
         return value === 'image/jpg' || value === 'image/pjpeg' ? 'image/jpeg' : value;
@@ -653,8 +654,87 @@
         function ensureWritable() {
             if (!state.writable) throw makeError('AVATAR_STORAGE_READ_ONLY', state.offline ? '头像后端离线，当前仅可读取最后已验证缓存' : '头像存储当前为只读', clone(state));
         }
+        function isBindingMutation(method) {
+            return method === 'putBinding' || method === 'deleteBinding' || method === 'mutateBindings';
+        }
+        function stageBindingMutation(method, args) {
+            var manifest = clone(remoteManifest || emptyManifest());
+            var assets = new Set(manifest.assets.map(function (asset) { return asset.id; }));
+            var bindings = new Map(manifest.bindings.map(function (binding) { return [binding.id, binding]; }));
+            var applyArgs;
+            var result;
+            function requireAsset(binding) {
+                if (!assets.has(binding.avatarId)) throw storageApi.makeError('AVATAR_NOT_FOUND', '绑定引用的头像不存在');
+            }
+            if (method === 'putBinding') {
+                var binding = storageApi.normalizeBinding(args[0]);
+                requireAsset(binding);
+                bindings.set(binding.id, binding);
+                applyArgs = [binding];
+                result = clone(binding);
+            } else if (method === 'deleteBinding') {
+                var themeKey = clean(args[0]);
+                var targetKey = clean(args[1]);
+                result = bindings.delete(storageApi.bindingId(themeKey, targetKey));
+                applyArgs = [themeKey, targetKey];
+            } else {
+                var operations = storageApi.normalizeBindingMutations(args[0]);
+                operations.forEach(function (operation) {
+                    if (operation.type === 'put') requireAsset(operation.binding);
+                });
+                result = operations.map(function (operation) {
+                    if (operation.type === 'put') {
+                        bindings.set(operation.binding.id, operation.binding);
+                        return clone(operation.binding);
+                    }
+                    return bindings.delete(operation.id);
+                });
+                applyArgs = [operations.map(function (operation) {
+                    return operation.type === 'put'
+                        ? { type: 'put', binding: clone(operation.binding) }
+                        : { type: 'delete', themeKey: operation.themeKey, targetKey: operation.targetKey };
+                })];
+            }
+            manifest.bindings = Array.from(bindings.values()).map(clone);
+            return { manifest: normalizeManifest(manifest, storageApi).manifest, applyArgs: applyArgs, result: result };
+        }
+        function remoteBindingMutation(method, args) {
+            var staged = stageBindingMutation(method, args);
+            var manifest = staged.manifest;
+            return remote.commit({ expectedRevision: revision, datasetId: datasetId, manifest: manifest }).then(function (committed) {
+                var normalized = normalizeManifest(committed.manifest, storageApi);
+                if (committed.datasetId !== datasetId || committed.revision !== revision + 1 || !/^sha256:[a-f0-9]{64}$/.test(committed.fingerprint) ||
+                    stableStringify(normalized.manifest) !== stableStringify(manifest)) {
+                    throw makeError('AVATAR_COMMIT_VERIFY_FAILED', '头像远端写入响应校验失败');
+                }
+                return Promise.resolve(cacheStore[method].apply(cacheStore, staged.applyArgs)).then(function () {
+                    return controlStore.put(controlFromState(committed, normalized.manifest));
+                }).then(function () {
+                    return activeStore[method].apply(activeStore, staged.applyArgs);
+                }).then(function () {
+                    activeSnapshot.bindings = clone(normalized.manifest.bindings);
+                    remoteManifest = normalized.manifest;
+                    remoteRefs = normalized.refs;
+                    revision = committed.revision;
+                    fingerprint = committed.fingerprint;
+                    publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'present', reason: '', error: null });
+                    return clone(staged.result);
+                }).catch(function (cacheError) {
+                    publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'present', reason: 'cache-update-failed' });
+                    throw makeError('AVATAR_CACHE_UPDATE_FAILED', '远端头像已提交，但本地只读缓存更新失败；已停止后续写入', { cause: cacheError.code || cacheError.message });
+                });
+            }).catch(function (error) {
+                if (error && error.code === 'AVATAR_REVISION_CONFLICT') {
+                    publish({ phase: 'conflict', authoritative: null, writable: false, offline: false, remote: 'present', reason: 'revision-conflict', error: errorSummary(error) });
+                } else if (!error || error.code !== 'AVATAR_CACHE_UPDATE_FAILED') {
+                    publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'error', reason: 'commit-uncertain', error: errorSummary(error) });
+                }
+                throw error;
+            });
+        }
         function remoteMutation(method, args) {
             ensureWritable();
+            if (isBindingMutation(method)) return remoteBindingMutation(method, args);
             var uploadedRefs = null;
             var preparedArgs = args.slice();
             var prepare = Promise.resolve();
@@ -723,7 +803,7 @@
             'getSourceIntent', 'listNativeViews', 'listSourceIntents', 'readSnapshot'].forEach(function (method) {
             store[method] = function () { return callRead(method, Array.prototype.slice.call(arguments)); };
         });
-        ['putAsset', 'putBinding', 'deleteBinding', 'putNativeView', 'deleteNativeView', 'putSourceIntent',
+        ['putAsset', 'putBinding', 'deleteBinding', 'mutateBindings', 'putNativeView', 'deleteNativeView', 'putSourceIntent',
             'deleteSourceIntent', 'deleteAsset', 'clear'].forEach(function (method) {
             store[method] = function () { return callWrite(method, Array.prototype.slice.call(arguments)); };
         });

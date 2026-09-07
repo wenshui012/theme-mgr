@@ -1293,15 +1293,20 @@
             var candidate = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: themeUserCandidateTargetKey(avatarId), avatarId: avatarId, view: normalizedView };
             var active = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: avatarId, view: normalizedView };
             return store.getBinding(key, USER_TARGET_KEY).then(function (previous) {
-                if (!isDedicatedThemeBinding(previous) || previous.avatarId === avatarId) return null;
-                return store.putBinding({
-                    version: THEME_BINDING_VERSION,
-                    themeKey: key,
-                    targetKey: themeUserCandidateTargetKey(previous.avatarId),
-                    avatarId: previous.avatarId,
-                    view: previous.view,
-                });
-            }).then(function () { return store.putBinding(candidate); }).then(function () { return store.putBinding(active); });
+                var operations = [];
+                if (isDedicatedThemeBinding(previous) && previous.avatarId !== avatarId) {
+                    operations.push({ type: 'put', binding: {
+                        version: THEME_BINDING_VERSION,
+                        themeKey: key,
+                        targetKey: themeUserCandidateTargetKey(previous.avatarId),
+                        avatarId: previous.avatarId,
+                        view: previous.view,
+                    } });
+                }
+                operations.push({ type: 'put', binding: candidate });
+                operations.push({ type: 'put', binding: active });
+                return store.mutateBindings(operations).then(function (results) { return results[results.length - 1]; });
+            });
         }
         function setThemeUserBinding(themeName, avatarId) {
             var mutationError = requireMutable();

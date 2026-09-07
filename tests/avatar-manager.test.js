@@ -106,6 +106,15 @@ test('10 avatar deletion transaction removes every referencing binding', async (
     assert.equal((await store.listBindings()).length, 0);
 });
 
+test('binding batches validate every operation before changing local state', async () => {
+    const { store } = memoryStore({ assets: [asset('a')] });
+    await assert.rejects(store.mutateBindings([
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global:theme-avatar:a', avatarId: 'a', view: {} } },
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'missing', view: {} } },
+    ]), error => error.code === 'AVATAR_NOT_FOUND');
+    assert.equal((await store.listBindings()).length, 0);
+});
+
 class Events {
     constructor() { this.listeners = new Map(); }
     addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(fn); }
@@ -685,6 +694,43 @@ test('72 a theme can switch among only its bound User avatar candidates and pres
     bindingSet = await f.runtime.getThemeUserBindingSet('A');
     assert.equal(bindingSet.active.avatarId, 'b');
     assert.equal(bindingSet.candidates.length, 1);
+});
+
+test('theme binding creation uses one local binding batch and preserves active candidate semantics', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a')] } });
+    const originalBatch = f.store.mutateBindings;
+    const originalPut = f.store.putBinding;
+    const batches = [];
+    let individualPuts = 0;
+    f.store.mutateBindings = function (operations) { batches.push(operations); return originalBatch.call(this, operations); };
+    f.store.putBinding = function () { individualPuts += 1; return originalPut.apply(this, arguments); };
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'a', bindingMode: 'theme', themeName: 'A' });
+    await f.runtime.saveEdit();
+    const bindingSet = await f.runtime.getThemeUserBindingSet('A');
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].length, 2);
+    assert.equal(individualPuts, 0);
+    assert.equal(bindingSet.active.avatarId, 'a');
+    assert.deepEqual(Array.from(bindingSet.candidates, binding => binding.avatarId), ['a']);
+});
+
+test('theme binding replacement preserves the previous active in one local binding batch', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a'), asset('b')], bindings: [
+        { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: { scale: 1.25 } },
+    ] } });
+    const originalBatch = f.store.mutateBindings;
+    const batches = [];
+    f.store.mutateBindings = function (operations) { batches.push(operations); return originalBatch.call(this, operations); };
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'b', bindingMode: 'theme', themeName: 'A' });
+    f.runtime.setScale(1.5);
+    await f.runtime.saveEdit();
+    const bindingSet = await f.runtime.getThemeUserBindingSet('A');
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].length, 3);
+    assert.equal(bindingSet.active.avatarId, 'b');
+    assert.equal(bindingSet.active.view.scale, 1.5);
+    assert.deepEqual(new Set(bindingSet.candidates.map(binding => binding.avatarId)), new Set(['a', 'b']));
+    assert.equal(bindingSet.candidates.find(binding => binding.avatarId === 'a').view.scale, 1.25);
 });
 
 test('73 newly inserted message avatars receive cached bindings synchronously from the observer callback', async () => {

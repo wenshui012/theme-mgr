@@ -84,12 +84,14 @@ function validCommitResponse(input) {
 function createRemote(initial, options = {}) {
     let current = initial || { status: 'empty' };
     let readCount = 0;
+    let commitError = options.commitError;
     const calls = [];
     const blobs = new Map();
     return {
         calls,
         blobs,
         setState(value) { current = value; },
+        setCommitError(error) { commitError = error; },
         probeCapability() {
             calls.push('capability');
             if (options.capabilityError) return Promise.reject(options.capabilityError);
@@ -116,7 +118,7 @@ function createRemote(initial, options = {}) {
         },
         commit(input) {
             calls.push('commit:' + input.expectedRevision);
-            if (options.commitError) return Promise.reject(options.commitError);
+            if (commitError) return Promise.reject(commitError);
             const currentRevision = current.status === 'present' ? current.revision : 0;
             const currentDatasetId = current.status === 'present' ? current.datasetId : input.datasetId;
             if (input.expectedRevision !== currentRevision || input.datasetId !== currentDatasetId) {
@@ -325,6 +327,122 @@ test('local present plus explicit remote empty uploads blobs then CAS commits an
     assert.equal(afterDelete.manifest.bindings.length, 0);
     assert.equal(afterDelete.manifest.sourceIntents[0].targetKey, 'user:global');
     assert.deepEqual(await local.readSnapshot(), before, 'remote deletion must not mutate the takeover backup');
+});
+
+test('remote binding batches use one CAS revision for creation and one for active replacement', async () => {
+    const local = memoryStore({ assets: [asset('a'), asset('b')] });
+    const remote = createRemote({ status: 'empty' });
+    const sync = coordinator({ local, remote });
+    await sync.initialize();
+    assert.equal((await remote.readState()).revision, 1);
+
+    let commitCount = remote.calls.filter(call => call.startsWith('commit:')).length;
+    await sync.store.mutateBindings([
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global:theme-avatar:a', avatarId: 'a', view: { scale: 1.25 } } },
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: { scale: 1.25 } } },
+    ]);
+    assert.equal(remote.calls.filter(call => call.startsWith('commit:')).length, commitCount + 1);
+    assert.equal((await remote.readState()).revision, 2);
+
+    commitCount += 1;
+    await sync.store.mutateBindings([
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global:theme-avatar:a', avatarId: 'a', view: { scale: 1.25 } } },
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global:theme-avatar:b', avatarId: 'b', view: { scale: 1.5 } } },
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'b', view: { scale: 1.5 } } },
+    ]);
+    assert.equal(remote.calls.filter(call => call.startsWith('commit:')).length, commitCount + 1);
+    const state = await remote.readState();
+    assert.equal(state.revision, 3);
+    assert.equal(state.manifest.bindings.find(binding => binding.targetKey === 'user:global').avatarId, 'b');
+    assert.deepEqual(new Set(state.manifest.bindings.filter(binding => binding.targetKey.indexOf('user:global:theme-avatar:') === 0).map(binding => binding.avatarId)), new Set(['a', 'b']));
+});
+
+test('remote binding-only mutations avoid full snapshot staging and update cache incrementally', async () => {
+    const local = memoryStore({ assets: [asset('a'), asset('b')] });
+    const cache = memoryStore();
+    const cacheCalls = { replaceSnapshot: 0, putBinding: 0, deleteBinding: 0, mutateBindings: 0 };
+    Object.keys(cacheCalls).forEach(method => {
+        const original = cache[method].bind(cache);
+        cache[method] = function () {
+            cacheCalls[method] += 1;
+            return original.apply(cache, arguments);
+        };
+    });
+    let memoryAdapterCreates = 0;
+    const storageApi = Object.assign({}, modules.avatarStorage, {
+        createMemoryAdapter(seed) {
+            memoryAdapterCreates += 1;
+            return modules.avatarStorage.createMemoryAdapter(seed);
+        },
+    });
+    const remote = createRemote({ status: 'empty' });
+    const sync = modules.createAvatarStorageCoordinator({
+        localStore: local,
+        cacheStore: cache,
+        controlStore: modules.avatarSync.createMemoryControlStore(),
+        remote,
+        inspectDataUrl: inspect,
+        avatarStorage: storageApi,
+    });
+    await sync.initialize();
+    const initialAdapterCreates = memoryAdapterCreates;
+    cacheCalls.replaceSnapshot = 0;
+
+    await sync.store.mutateBindings([
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global:theme-avatar:a', avatarId: 'a', view: {} } },
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: {} } },
+    ]);
+    assert.equal(memoryAdapterCreates, initialAdapterCreates, 'binding staging must not rebuild an asset-backed memory store');
+    assert.equal(cacheCalls.replaceSnapshot, 0, 'binding-only cache updates must not replace all image stores');
+    assert.equal(cacheCalls.mutateBindings, 1);
+
+    await sync.store.putBinding({ themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'b', view: { scale: 1.5 } });
+    assert.equal(memoryAdapterCreates, initialAdapterCreates);
+    assert.equal(cacheCalls.replaceSnapshot, 0);
+    assert.equal(cacheCalls.putBinding, 1);
+    assert.equal((await cache.getBinding('theme-name:A', 'user:global')).avatarId, 'b');
+    assert.equal((await sync.store.getBinding('theme-name:A', 'user:global')).avatarId, 'b');
+    assert.equal((await remote.readState()).revision, 3);
+
+    await sync.store.putAsset(asset('c'));
+    const afterAssetWrite = await remote.readState();
+    assert.equal(afterAssetWrite.revision, 4);
+    assert.equal(afterAssetWrite.manifest.bindings.find(binding => binding.targetKey === 'user:global').avatarId, 'b',
+        'a later full asset mutation must stage from the incrementally updated binding snapshot');
+});
+
+test('remote binding batch CAS conflict leaves the authoritative manifest and cache unchanged', async () => {
+    const local = memoryStore({ assets: [asset('a'), asset('b')] });
+    const cache = memoryStore();
+    const remote = createRemote({ status: 'empty' });
+    const sync = coordinator({ local, cache, remote });
+    await sync.initialize();
+    const beforeRemote = await remote.readState();
+    const beforeCache = await cache.readSnapshot();
+    remote.setCommitError(modules.avatarSync.makeError('AVATAR_REVISION_CONFLICT', 'conflict'));
+    await assert.rejects(sync.store.mutateBindings([
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global:theme-avatar:a', avatarId: 'a', view: {} } },
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: {} } },
+    ]), error => error.code === 'AVATAR_REVISION_CONFLICT');
+    assert.deepEqual(await remote.readState(), beforeRemote);
+    assert.deepEqual(await cache.readSnapshot(), beforeCache);
+    assert.equal(sync.getState().phase, 'conflict');
+});
+
+test('local-authoritative binding batches apply all operations through one store call', async () => {
+    const local = memoryStore({ assets: [asset('a'), asset('b')] });
+    const remote = createRemote({ status: 'empty' }, { capability: { status: 'unsupported', reason: 'capability-absent' } });
+    const sync = coordinator({ local, remote });
+    const state = await sync.initialize();
+    assert.equal(state.authoritative, 'local');
+    await sync.store.mutateBindings([
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global:theme-avatar:a', avatarId: 'a', view: {} } },
+        { type: 'put', binding: { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'b', view: {} } },
+    ]);
+    const bindings = await local.listBindings();
+    assert.equal(bindings.length, 2);
+    assert.equal(bindings.find(binding => binding.targetKey === 'user:global').avatarId, 'b');
+    assert.equal(remote.calls.some(call => call.startsWith('commit:')), false);
 });
 
 test('both sides empty perform no initialization write and first mutation creates revision 1 with CAS', async () => {

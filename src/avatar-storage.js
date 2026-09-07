@@ -105,6 +105,21 @@
         };
     }
 
+    function normalizeBindingMutations(operations) {
+        if (!Array.isArray(operations) || !operations.length) throw makeError('AVATAR_BINDING_BATCH_INVALID', '头像绑定批处理不能为空');
+        return operations.map(function (operation) {
+            operation = operation && typeof operation === 'object' ? operation : {};
+            if (operation.type === 'put') return { type: 'put', binding: normalizeBinding(operation.binding) };
+            if (operation.type === 'delete') {
+                var themeKey = cleanText(operation.themeKey);
+                var targetKey = cleanText(operation.targetKey);
+                if (!themeKey || !targetKey) throw makeError('AVATAR_BINDING_BATCH_INVALID', '头像绑定删除操作无效');
+                return { type: 'delete', themeKey: themeKey, targetKey: targetKey, id: bindingId(themeKey, targetKey) };
+            }
+            throw makeError('AVATAR_BINDING_BATCH_INVALID', '头像绑定批处理包含未知操作');
+        });
+    }
+
     function normalizeNativeView(record) {
         record = record && typeof record === 'object' ? record : {};
         var targetKey = cleanText(record.targetKey);
@@ -233,6 +248,21 @@
                 return Promise.resolve(clone(binding));
             },
             deleteBinding: function (themeKey, targetKey) { return Promise.resolve(bindings.delete(bindingId(themeKey, targetKey))); },
+            mutateBindings: function (rawOperations) {
+                var operations = normalizeBindingMutations(rawOperations);
+                var missing = operations.find(function (operation) { return operation.type === 'put' && !assets.has(operation.binding.avatarId); });
+                if (missing) return Promise.reject(makeError('AVATAR_NOT_FOUND', '绑定引用的头像不存在'));
+                var nextBindings = new Map(bindings);
+                var results = operations.map(function (operation) {
+                    if (operation.type === 'put') {
+                        nextBindings.set(operation.binding.id, operation.binding);
+                        return clone(operation.binding);
+                    }
+                    return nextBindings.delete(operation.id);
+                });
+                bindings = nextBindings;
+                return Promise.resolve(results);
+            },
             getNativeView: function (targetKey) { return Promise.resolve(clone(nativeViews.get(nativeViewId(targetKey)) || null)); },
             putNativeView: function (record) {
                 record = normalizeNativeView(record);
@@ -417,6 +447,48 @@
                     setResult(true);
                 });
             },
+            mutateBindings: function (rawOperations) {
+                var operations = normalizeBindingMutations(rawOperations);
+                return transaction([STORES.assets, STORES.bindings, STORES.meta], 'readwrite', function (tx, setResult) {
+                    var assetStore = tx.objectStore(STORES.assets);
+                    var bindingStore = tx.objectStore(STORES.bindings);
+                    var avatarIds = Array.from(new Set(operations.filter(function (operation) {
+                        return operation.type === 'put';
+                    }).map(function (operation) { return operation.binding.avatarId; })));
+                    var remaining = avatarIds.length;
+                    var missing = false;
+                    function apply() {
+                        if (missing || remaining > 0) return;
+                        var results = operations.map(function (operation) {
+                            if (operation.type === 'put') {
+                                bindingStore.put(operation.binding);
+                                return operation.binding;
+                            }
+                            bindingStore.delete(operation.id);
+                            return true;
+                        });
+                        tx.objectStore(STORES.meta).put({ id: 'bindings-version', version: BINDINGS_VERSION });
+                        setResult(results);
+                    }
+                    if (!remaining) { apply(); return; }
+                    avatarIds.forEach(function (avatarId) {
+                        var request = assetStore.get(avatarId);
+                        request.onsuccess = function () {
+                            if (!request.result) {
+                                missing = true;
+                                try { tx.abort(); } catch (_) {}
+                                return;
+                            }
+                            remaining -= 1;
+                            apply();
+                        };
+                        request.onerror = function () { try { tx.abort(); } catch (_) {} };
+                    });
+                }).catch(function (error) {
+                    if (error.code === 'AVATAR_IDB_ABORTED') throw makeError('AVATAR_NOT_FOUND', '绑定引用的头像不存在', error);
+                    throw error;
+                });
+            },
             getNativeView: function (targetKey) {
                 return databasePromise.then(function (db) {
                     var tx = db.transaction([STORES.meta], 'readonly');
@@ -550,6 +622,7 @@
             getBinding: function (themeKey, targetKey) { return Promise.resolve(adapter.getBinding(themeKey, targetKey)).then(clone); },
             putBinding: function (binding) { return Promise.resolve(adapter.putBinding(normalizeBinding(binding))).then(clone); },
             deleteBinding: function (themeKey, targetKey) { return Promise.resolve(adapter.deleteBinding(themeKey, targetKey)); },
+            mutateBindings: function (operations) { return Promise.resolve(adapter.mutateBindings(normalizeBindingMutations(operations))).then(clone); },
             getNativeView: function (targetKey) { return Promise.resolve(adapter.getNativeView(targetKey)).then(clone); },
             putNativeView: function (record) { return Promise.resolve(adapter.putNativeView(normalizeNativeView(record))).then(clone); },
             deleteNativeView: function (targetKey) { return Promise.resolve(adapter.deleteNativeView(targetKey)); },
@@ -576,6 +649,7 @@
         STORES: STORES,
         normalizeAsset: normalizeAsset,
         normalizeBinding: normalizeBinding,
+        normalizeBindingMutations: normalizeBindingMutations,
         normalizeNativeView: normalizeNativeView,
         normalizeSourceIntent: normalizeSourceIntent,
         normalizeSnapshot: normalizeSnapshot,
