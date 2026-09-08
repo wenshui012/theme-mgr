@@ -2492,7 +2492,7 @@
 })(window);
 /* END MODULE 05/25: src/theme-transfer.js */
 
-/* BEGIN MODULE 06/25: src/theme-metadata.js | sha256:b9323db5251d6791f47f996e4da19fcb79dfa51056745a56eb408c815d29e4ea */
+/* BEGIN MODULE 06/25: src/theme-metadata.js | sha256:e0fffafa1033ac9c58c37d79dc0d91da587bb7841598af3859a9c1e1898fbba1 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -2623,6 +2623,18 @@
             annotatedNames: annotatedNames,
             annotatedCount: annotatedNames.length,
         };
+    }
+
+    function removeOrphanMetadata(themeNames, themeMeta) {
+        if (!isObject(themeMeta)) return { removed: [], diagnostics: inspect(themeNames, themeMeta) };
+        var diagnostics = inspect(themeNames, themeMeta);
+        var removed = [];
+        diagnostics.orphanMetadata.forEach(function (name) {
+            if (!Object.prototype.hasOwnProperty.call(themeMeta, name)) return;
+            delete themeMeta[name];
+            removed.push(name);
+        });
+        return { removed: removed, diagnostics: diagnostics };
     }
 
     function cloneValue(value) {
@@ -2771,6 +2783,7 @@
         ensureMeta: ensureMeta,
         hasMeaningfulAnnotation: hasMeaningfulAnnotation,
         inspect: inspect,
+        removeOrphanMetadata: removeOrphanMetadata,
         mergeImported: mergeImported,
         RESERVED_CATEGORY_NAMES: RESERVED_CATEGORY_NAMES.slice(),
         isReservedCategoryName: isReservedCategoryName,
@@ -11501,7 +11514,7 @@
 })(window);
 /* END MODULE 20/25: src/app-shell.js */
 
-/* BEGIN MODULE 21/25: src/styles.js | sha256:f3d3ff638f99ce8834415ef99a6c02c24d300dd8360aaf9b0a8aea5444d59990 */
+/* BEGIN MODULE 21/25: src/styles.js | sha256:0092e6d4e5e34962f47b9e96899f39577eab2d00ab32d461eae050ef9f755ce9 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -11715,10 +11728,56 @@
             '.tm-ctx-theme-name{font-size:.85em;opacity:.5;padding:2px 0 10px;border-bottom:1px solid rgba(127,127,127,.1);margin-bottom:4px;}',
             '.tm-sec-title{font-size:.75em;font-weight:700;opacity:.55;text-transform:uppercase;letter-spacing:.07em;padding:10px 0 7px;}',
             '.tm-divider{height:1px;background:rgba(127,127,127,.12);margin:6px 0 12px;}',
+            '.tm-disclosure{border:1px solid rgba(127,127,127,.14);border-radius:var(--tm-control-radius,10px);background:rgba(127,127,127,.035);margin:9px 0;overflow:hidden;}',
+            '.tm-disclosure>summary{min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;list-style:none;cursor:pointer;font-size:.86em;font-weight:650;user-select:none;-webkit-user-select:none;}',
+            '.tm-disclosure>summary::-webkit-details-marker{display:none;}',
+            '.tm-disclosure>summary>span{display:flex;align-items:center;gap:8px;min-width:0;}',
+            '.tm-disclosure>summary>span>i{width:17px;text-align:center;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.78;}',
+            '.tm-disclosure-chevron{font-size:.72em;opacity:.38;transition:transform .18s ease;}',
+            '.tm-disclosure[open] .tm-disclosure-chevron{transform:rotate(90deg);}',
+            '.tm-disclosure-body{padding:3px 12px 12px;border-top:1px solid rgba(127,127,127,.1);}',
+            '.tm-disclosure-body>.tm-field:first-child{margin-top:10px;}',
+            '.tm-picker-trigger{width:100%;box-sizing:border-box;display:grid;grid-template-columns:38px minmax(0,1fr) 16px;gap:10px;align-items:center;padding:9px 11px;border-radius:var(--tm-control-radius,8px);border:1px solid rgba(127,127,127,.2);background:rgba(127,127,127,.08);color:inherit;text-align:left;font-family:inherit;cursor:pointer;}',
+            '.tm-picker-trigger:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.12);}',
+            '.tm-picker-trigger-icon{width:38px;height:38px;border-radius:9px;display:grid;place-items:center;background:rgba(127,127,127,.11);color:var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-picker-trigger-copy{display:flex;min-width:0;flex-direction:column;gap:3px;}',
+            '.tm-picker-trigger-copy strong{font-size:.86em;font-weight:650;}',
+            '.tm-picker-trigger-copy small{font-size:.73em;opacity:.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            '.tm-picker-trigger-chevron{font-size:.8em;opacity:.34;}',
+            '.tm-picker-hint{margin:-4px 0 10px;}',
+            '.tm-picker-list{display:flex;max-height:48vh;max-height:48dvh;min-height:0;overflow-y:auto;flex-direction:column;gap:5px;overscroll-behavior:contain;}',
+            '.tm-picker-row{width:100%;min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;border:1px solid rgba(127,127,127,.12);border-radius:var(--tm-control-radius,8px);background:rgba(127,127,127,.055);color:inherit;font:inherit;text-align:left;cursor:pointer;}',
+            '.tm-picker-row>span{display:flex;align-items:center;gap:8px;min-width:0;}',
+            '.tm-picker-row>span>i{width:18px;text-align:center;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.68;}',
+            '.tm-picker-row strong{font-size:.82em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            '.tm-picker-row>i{font-size:.72em;opacity:.38;}',
+            '.tm-picker-row:hover,.tm-picker-row.is-selected{border-color:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 58%,transparent);background:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 10%,transparent);}',
+            '.tm-picker-row.is-selected>i{color:var(--SmartThemeQuoteColor,#7c6daf);opacity:1;}',
+            '.tm-picker-empty{padding:20px 12px;text-align:center;font-size:.8em;opacity:.42;border:1px dashed rgba(127,127,127,.18);border-radius:9px;}',
+            '.tm-picker-search,.tm-picker-add input{width:100%;box-sizing:border-box;background:rgba(127,127,127,.08);border:1px solid rgba(127,127,127,.2);border-radius:var(--tm-control-radius,8px);color:inherit;padding:9px 11px;font-size:.85em;font-family:inherit;}',
+            '.tm-picker-search:focus,.tm-picker-add input:focus{outline:none;border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-tag-picker{display:flex;max-height:58vh;max-height:58dvh;min-height:0;flex-direction:column;gap:8px;}',
+            '.tm-tag-picker-list{flex:1;}',
+            '.tm-picker-add{display:flex;gap:8px;flex-shrink:0;}',
+            '.tm-picker-add input{flex:1;min-width:0;}',
+            '.tm-picker-danger-zone{margin-top:9px;padding-top:9px;border-top:1px solid rgba(127,127,127,.1);}',
+            '.tm-picker-clear{width:100%;opacity:.72;}',
             '.tm-hint{font-size:.76em;opacity:.5;line-height:1.4;}',
             '.tm-btn-row{display:flex;gap:8px;flex-wrap:wrap;}',
             '.tm-data-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px;}',
             '.tm-data-grid .tm-btn{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;padding:8px 5px;font-size:.78em;line-height:1.2;white-space:nowrap;}',
+            '.tm-data-group{margin-top:12px;}',
+            '.tm-data-group-label{font-size:.72em;font-weight:650;opacity:.52;margin-bottom:6px;}',
+            '.tm-data-grid-primary{grid-template-columns:repeat(2,minmax(0,1fr));}',
+            '.tm-data-grid-primary .tm-btn:last-child{grid-column:1/-1;}',
+            '.tm-data-grid-secondary .tm-btn{opacity:.82;}',
+            '.tm-data-hint{margin-top:10px;}',
+            '.tm-data-danger{display:flex;flex-direction:column;gap:7px;margin-top:14px;padding-top:12px;border-top:1px solid rgba(229,115,115,.2);}',
+            '.tm-data-danger .tm-btn{width:100%;min-height:46px;display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:8px;text-align:left;}',
+            '.tm-data-danger .tm-btn>i{text-align:center;}',
+            '.tm-data-danger .tm-btn>span{display:flex;min-width:0;flex-direction:column;gap:2px;}',
+            '.tm-data-danger .tm-btn strong{font-size:.86em;}',
+            '.tm-data-danger .tm-btn small{font-size:.7em;font-weight:400;opacity:.72;white-space:normal;line-height:1.3;}',
             '.tm-btn{padding:8px 16px;border-radius:var(--tm-control-radius,8px);border:none;box-shadow:var(--tm-control-shadow,none);cursor:pointer;font-size:.87em;font-weight:600;transition:.18s;font-family:inherit;}',
             '.tm-btn:disabled{opacity:.45;cursor:default;filter:none;pointer-events:none;}',
             '.tm-btn-safe{background:var(--SmartThemeQuoteColor,#7c6daf);color:var(--tm-accent-text,#fff);}',
@@ -11803,6 +11862,8 @@
             '.tm-bindings-all-empty>strong{font-size:.86em;}',
             '.tm-bindings-all-empty>span{font-size:.73em;opacity:.48;text-align:center;}',
             '.tm-bindings-all-foot{padding-top:12px;border-top:1px solid rgba(127,127,127,.1);}',
+            '.tm-bindings-all-divider{display:flex;align-items:center;gap:8px;margin:14px 0 9px;color:inherit;font-size:.74em;font-weight:650;opacity:.55;}',
+            '.tm-bindings-all-divider::before,.tm-bindings-all-divider::after{content:"";height:1px;flex:1;background:rgba(127,127,127,.16);}',
             '.tm-bg-picker-tools{display:grid;grid-template-columns:minmax(0,1fr) 34px 34px;gap:7px;align-items:center;margin-bottom:10px;}',
             '.tm-bg-search-wrap{display:flex;align-items:center;gap:7px;background:rgba(127,127,127,.08);border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:0 9px;min-width:0;}',
             '.tm-bg-search-wrap i{opacity:.45;font-size:.85em;}',
@@ -11832,6 +11893,16 @@
             '.tm-crop-controls label{display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;align-items:center;font-size:.78em;opacity:.78;}',
             '.tm-crop-controls input{width:100%;accent-color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-edit-foot{display:flex;gap:9px;justify-content:flex-end;padding-top:14px;border-top:1px solid rgba(127,127,127,.1);margin-top:10px;}',
+            '.tm-edit-operation-list{display:flex;flex-direction:column;gap:7px;margin-top:9px;}',
+            '.tm-edit-operation{width:100%;min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;border:1px solid rgba(127,127,127,.14);border-radius:var(--tm-control-radius,8px);background:rgba(127,127,127,.06);color:inherit;font:inherit;text-align:left;cursor:pointer;}',
+            '.tm-edit-operation>span{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:0 7px;min-width:0;}',
+            '.tm-edit-operation>span>i{grid-row:1/3;width:20px;text-align:center;color:var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-edit-operation strong{font-size:.82em;font-weight:650;}',
+            '.tm-edit-operation small{font-size:.69em;opacity:.48;margin-top:2px;}',
+            '.tm-edit-operation>i{font-size:.72em;opacity:.35;}',
+            '.tm-edit-operation:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.1);}',
+            '.tm-edit-operation-danger,.tm-edit-operation-danger>span>i{color:#e57373;}',
+            '.tm-edit-operation-danger:hover{border-color:rgba(229,115,115,.55);background:rgba(229,115,115,.09);}',
             '.tm-tags-wrap{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px;}',
             '.tm-tag-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px 3px 10px;border-radius:12px;background:var(--SmartThemeQuoteColor,#7c6daf);color:var(--tm-accent-text,#fff);font-size:.78em;font-weight:500;}',
             '.tm-tag-chip-x{background:none;border:none;color:#fff;cursor:pointer;font-size:.85em;line-height:1;padding:0 2px;opacity:.7;}',
@@ -11844,7 +11915,7 @@
             '.tm-cat-item.drag-over-top{border-top:2px solid var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-cat-item.drag-over-bottom{border-bottom:2px solid var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-cat-item.dragging{opacity:.3;}',
-            '@media (max-width:430px){.tm-head{gap:5px;padding-left:8px;padding-right:8px}.tm-head-title-switcher{height:34px;gap:5px;padding-right:5px}.tm-head-name{font-size:.9em}.tm-head-actions{gap:0}.tm-icon-btn{width:32px}.tm-app-page-avatars,.tm-app-page-backgrounds{padding:14px}}',
+            '@media (max-width:430px){.tm-head{gap:5px;padding-left:8px;padding-right:8px}.tm-head-title-switcher{height:34px;gap:5px;padding-right:5px}.tm-head-name{font-size:.9em}.tm-head-actions{gap:0}.tm-icon-btn{width:32px}.tm-app-page-avatars,.tm-app-page-backgrounds{padding:14px}.tm-sheet-content{padding-left:14px;padding-right:14px;padding-bottom:max(24px,env(safe-area-inset-bottom,24px))}.tm-img-actions .tm-btn{flex:1 1 120px}.tm-data-grid-secondary{grid-template-columns:repeat(2,minmax(0,1fr))}.tm-data-grid-secondary .tm-btn:last-child{grid-column:1/-1}.tm-edit-foot{position:sticky;bottom:0;z-index:2;padding-bottom:max(8px,env(safe-area-inset-bottom,8px));background:var(--tm-bg2,var(--SmartThemeBackgroundColor,#1a1a1e))}}',
             '@media (max-width:480px){.tm-day-night-assign{grid-template-columns:minmax(0,1fr) 30px minmax(0,1fr);gap:5px}.tm-day-night-choice{padding:8px 7px}.tm-day-night-choice-label{font-size:.74em}.tm-day-night-choice select{font-size:.76em;padding:6px 5px}.tm-day-night-swap{width:30px;height:30px}.tm-day-night-swap-icon{width:16px;height:16px}.tm-edit-sheet-title{align-items:flex-start}.tm-day-night-delete-actions .tm-btn{flex:1;min-width:96px;padding-left:8px;padding-right:8px}}',
             '.tm-drag-handle{opacity:.35;cursor:grab;padding:0 6px;font-size:.9em;touch-action:none;}',
             '.tm-cat-name{flex:1;font-size:.88em;}',
@@ -12613,7 +12684,7 @@
 })(window);
 /* END MODULE 24/25: src/ui-events.js */
 
-/* BEGIN MODULE 25/25: src/ui-main.js | sha256:03d3379bf7ed806fab1afca223a1a2635aaca7018244acf492a7a221be42211d */
+/* BEGIN MODULE 25/25: src/ui-main.js | sha256:e2b6786db0ea086ca5bb276b4feb27499f99f9ac0367fb14eea7d2fa8a399af9 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16481,6 +16552,163 @@
         bindCatbarMouseScroll(catbar);
     }
 
+    function collectThemeTags(data) {
+        var tags = [];
+        var seen = new Set();
+        getLogicalItems(data || load()).forEach(function (item) {
+            var meta = getItemMeta(data || load(), item);
+            (Array.isArray(meta.tags) ? meta.tags : []).forEach(function (tag) {
+                tag = String(tag || '').trim();
+                if (!tag || seen.has(tag)) return;
+                seen.add(tag);
+                tags.push(tag);
+            });
+        });
+        return tags.sort(function (a, b) { return a.localeCompare(b, 'zh-CN'); });
+    }
+
+    function buildDisclosureHtml(id, title, icon, content) {
+        return '<details class="tm-disclosure" id="' + id + '"><summary><span><i class="fa-solid ' + icon + '"></i>' + title + '</span><i class="fa-solid fa-chevron-right tm-disclosure-chevron"></i></summary><div class="tm-disclosure-body">' + content + '</div></details>';
+    }
+
+    function openCategoryPicker(options) {
+        options = options || {};
+        var data = load();
+        var categories = (data.categories || []).slice();
+        var selected = String(options.selected || '');
+        var rows = categories.map(function (category) {
+            var active = category === selected;
+            return '<button type="button" class="tm-picker-row' + (active ? ' is-selected' : '') + '" data-picker-category="' + esc(category) + '">' +
+                '<span><i class="fa-solid fa-folder"></i><strong>' + esc(category) + '</strong></span>' +
+                (active ? '<i class="fa-solid fa-check"></i>' : '<i class="fa-solid fa-chevron-right"></i>') + '</button>';
+        }).join('');
+        if (!rows) rows = '<div class="tm-picker-empty">还没有分类，请先到设置中的分类管理添加</div>';
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-folder"></i>' + esc(options.title || '选择分类') + '</div>',
+            options.hint ? '<div class="tm-hint tm-picker-hint">' + esc(options.hint) + '</div>' : '',
+            '<div class="tm-picker-list">' + rows + '</div>',
+            options.allowClear ? '<div class="tm-picker-danger-zone"><button type="button" class="tm-btn tm-btn-outline tm-picker-clear" id="tm-category-picker-clear"><i class="fa-solid fa-eraser"></i> 设为无分类</button></div>' : '',
+            '<div class="tm-edit-foot"><button type="button" class="tm-btn tm-btn-outline" id="tm-category-picker-cancel">取消</button></div>',
+        ].join(''));
+        sheet.querySelectorAll('[data-picker-category]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                closeSheet(sheet);
+                if (typeof options.onSelect === 'function') options.onSelect(button.dataset.pickerCategory || '');
+            });
+        });
+        var clearButton = sheet.querySelector('#tm-category-picker-clear');
+        if (clearButton) clearButton.addEventListener('click', function () {
+            closeSheet(sheet);
+            if (typeof options.onSelect === 'function') options.onSelect('');
+        });
+        sheet.querySelector('#tm-category-picker-cancel').addEventListener('click', function () { closeSheet(sheet); });
+        return sheet;
+    }
+
+    function openCategoryRenameSheet(category, onRenamed) {
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-i-cursor"></i>重命名分类</div>',
+            '<div class="tm-field"><label>分类名称</label><input type="text" id="tm-category-rename-input" maxlength="40" value="' + esc(category) + '" /></div>',
+            '<div class="tm-edit-foot"><button type="button" class="tm-btn tm-btn-outline" id="tm-category-rename-cancel">取消</button><button type="button" class="tm-btn tm-btn-safe" id="tm-category-rename-save">保存</button></div>',
+        ].join(''));
+        var input = sheet.querySelector('#tm-category-rename-input');
+        function submit() {
+            var name = input.value.trim();
+            if (!name || name === category) { closeSheet(sheet); return; }
+            var data = load();
+            var result = metadataApi.renameCategory(data, category, name);
+            if (!result.ok) {
+                var message = result.reason === 'collision'
+                    ? '目标分类已存在，重命名已取消'
+                    : (result.reason === 'reserved' ? '该名称为内部保留名称，请使用其他分类名' : '分类状态无法安全确认，重命名已取消');
+                toast(message, true);
+                return;
+            }
+            save(data);
+            closeSheet(sheet);
+            if (typeof onRenamed === 'function') onRenamed(name);
+        }
+        sheet.querySelector('#tm-category-rename-save').addEventListener('click', submit);
+        sheet.querySelector('#tm-category-rename-cancel').addEventListener('click', function () { closeSheet(sheet); });
+        input.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') { event.preventDefault(); submit(); }
+        });
+        return sheet;
+    }
+
+    function openTagPicker(options) {
+        options = options || {};
+        var knownTags = collectThemeTags(load());
+        var selectedTags = Array.isArray(options.selectedTags) ? options.selectedTags.slice() : [];
+        var selected = new Set(selectedTags.map(function (tag) { return String(tag || '').trim(); }).filter(Boolean));
+        selected.forEach(function (tag) { if (knownTags.indexOf(tag) === -1) knownTags.push(tag); });
+        knownTags.sort(function (a, b) { return a.localeCompare(b, 'zh-CN'); });
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-tags"></i>' + esc(options.title || '管理标签') + '</div>',
+            options.hint ? '<div class="tm-hint tm-picker-hint">' + esc(options.hint) + '</div>' : '',
+            '<div class="tm-tag-picker">',
+            '<input type="text" class="tm-picker-search" id="tm-tag-picker-search" placeholder="搜索已有标签…" autocomplete="off" />',
+            '<div class="tm-picker-list tm-tag-picker-list" id="tm-tag-picker-list"></div>',
+            '<div class="tm-picker-add"><input type="text" id="tm-tag-picker-new" placeholder="输入新标签…" autocomplete="off" /><button type="button" class="tm-btn tm-btn-safe" id="tm-tag-picker-add">添加</button></div>',
+            options.allowClear ? '<div class="tm-picker-danger-zone"><button type="button" class="tm-btn tm-btn-outline tm-picker-clear" id="tm-tag-picker-clear"><i class="fa-solid fa-eraser"></i> 清除全部标签</button></div>' : '',
+            '</div>',
+            '<div class="tm-edit-foot"><button type="button" class="tm-btn tm-btn-outline" id="tm-tag-picker-cancel">取消</button><button type="button" class="tm-btn tm-btn-safe" id="tm-tag-picker-apply">应用</button></div>',
+        ].join(''));
+        var list = sheet.querySelector('#tm-tag-picker-list');
+        var search = sheet.querySelector('#tm-tag-picker-search');
+        var input = sheet.querySelector('#tm-tag-picker-new');
+
+        function renderTags() {
+            var query = search.value.trim().toLocaleLowerCase();
+            var filtered = knownTags.filter(function (tag) { return !query || tag.toLocaleLowerCase().indexOf(query) !== -1; });
+            list.innerHTML = filtered.length ? filtered.map(function (tag) {
+                var active = selected.has(tag);
+                return '<button type="button" class="tm-picker-row tm-tag-picker-row' + (active ? ' is-selected' : '') + '" data-picker-tag="' + esc(tag) + '">' +
+                    '<span><i class="fa-solid fa-tag"></i><strong>' + esc(tag) + '</strong></span>' +
+                    '<i class="fa-solid ' + (active ? 'fa-check' : 'fa-plus') + '"></i></button>';
+            }).join('') : '<div class="tm-picker-empty">' + (query ? '没有匹配的标签' : '还没有标签，可以在下方添加') + '</div>';
+        }
+        function addTag() {
+            var tag = input.value.trim();
+            if (!tag) { toast('请输入标签', true); return; }
+            selected.add(tag);
+            if (knownTags.indexOf(tag) === -1) {
+                knownTags.push(tag);
+                knownTags.sort(function (a, b) { return a.localeCompare(b, 'zh-CN'); });
+            }
+            input.value = '';
+            search.value = '';
+            renderTags();
+        }
+        list.addEventListener('click', function (event) {
+            var button = event.target && event.target.closest ? event.target.closest('[data-picker-tag]') : null;
+            if (!button || !list.contains(button)) return;
+            var tag = button.dataset.pickerTag;
+            if (selected.has(tag)) selected.delete(tag); else selected.add(tag);
+            renderTags();
+        });
+        search.addEventListener('input', renderTags);
+        sheet.querySelector('#tm-tag-picker-add').addEventListener('click', addTag);
+        input.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') { event.preventDefault(); addTag(); }
+        });
+        sheet.querySelector('#tm-tag-picker-apply').addEventListener('click', function () {
+            var values = Array.from(selected);
+            if (options.requireSelection && values.length === 0) { toast('请先选择或添加标签', true); return; }
+            closeSheet(sheet);
+            if (typeof options.onApply === 'function') options.onApply(values);
+        });
+        var clearButton = sheet.querySelector('#tm-tag-picker-clear');
+        if (clearButton) clearButton.addEventListener('click', function () {
+            closeSheet(sheet);
+            if (typeof options.onClear === 'function') options.onClear();
+            else if (typeof options.onApply === 'function') options.onApply([]);
+        });
+        sheet.querySelector('#tm-tag-picker-cancel').addEventListener('click', function () { closeSheet(sheet); });
+        renderTags();
+        return sheet;
+    }
+
     // ── 网格 ─────────────────────────────────────────────────
     function buildGridCardHtml(item, d, curTheme, view) {
         view = view || buildLibraryView(d);
@@ -16508,7 +16736,7 @@
                 '<img src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-theme-key="' + esc(item.key) + '" data-image-state="idle" alt="' + esc(item.name) + '" decoding="async" />' +
                 '</div>'
             : '<div class="tm-card-noimg"><i class="fa-solid fa-palette"></i><span>' + esc(item.name.slice(0, 6)) + '</span></div>';
-        var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-key="' + esc(item.key) + '" title="操作"><i class="fa-solid fa-ellipsis"></i></button>';
+        var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-key="' + esc(item.key) + '" title="编辑美化" aria-label="编辑「' + esc(item.name) + '」"><i class="fa-solid fa-ellipsis"></i></button>';
         var tagText = (meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || '');
 
         return '<div class="tm-card' + (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + '" data-key="' + esc(item.key) + '">' +
@@ -16929,7 +17157,7 @@
             if (menu && area.contains(menu)) {
                 event.preventDefault();
                 event.stopPropagation();
-                if (!batchMode) openContextMenu(menu.dataset.key);
+                if (!batchMode) openEditSheet(menu.dataset.key);
                 return;
             }
             var card = event.target.closest('.tm-card');
@@ -17078,40 +17306,43 @@
                 if (batchSelected.size === 0) { toast('请先选择主题', true); return; }
                 var dd = load(); var cats = dd.categories || [];
                 if (cats.length === 0) { toast('还没有分类，请先在设置中添加', true); return; }
-                var msg = '选择分类（输入序号）：\n' + cats.map(function (n, i) { return (i + 1) + '. ' + n; }).join('\n');
-                var choice = prompt(msg); if (choice === null) return;
-                var ci = parseInt(choice) - 1;
-                if (ci < 0 || ci >= cats.length) { toast('无效选择', true); return; }
-                var selectedItems = getBatchSelectedKeys().map(function (key) { return getLogicalItem(key, dd); }).filter(Boolean);
-                var selectedKeys = new Set();
-                selectedItems.forEach(function (item) { selectedKeys.add(item.key); });
-                var selectedGroups = Object.create(null);
-                selectedItems.forEach(function (item) {
-                    var group = getSeriesForItem(dd, item);
-                    if (group) selectedGroups[group.id] = group;
+                openCategoryPicker({
+                    title: '选择分类',
+                    hint: '为已选 ' + batchSelected.size + ' 个美化设置分类',
+                    onSelect: function (category) {
+                        var currentData = load();
+                        var selectedItems = getBatchSelectedKeys().map(function (key) { return getLogicalItem(key, currentData); }).filter(Boolean);
+                        var selectedKeys = new Set();
+                        selectedItems.forEach(function (item) { selectedKeys.add(item.key); });
+                        var selectedGroups = Object.create(null);
+                        selectedItems.forEach(function (item) {
+                            var group = getSeriesForItem(currentData, item);
+                            if (group) selectedGroups[group.id] = group;
+                        });
+                        var incompleteGroup = '';
+                        getLogicalItems(currentData).some(function (item) {
+                            var owner = getSeriesForItem(currentData, item);
+                            if (!owner || !selectedGroups[owner.id] || selectedKeys.has(item.key)) return false;
+                            incompleteGroup = owner.id;
+                            return true;
+                        });
+                        if (incompleteGroup) {
+                            toast('系列需要整组调整分类：请选中该系列全部成员，或点击系列标题修改展示分类', true);
+                            return;
+                        }
+                        selectedItems.forEach(function (item) {
+                            if (!getSeriesForItem(currentData, item)) getItemMetaForWrite(currentData, item).category = category;
+                        });
+                        Object.keys(selectedGroups).forEach(function (seriesId) {
+                            seriesApi.setSeriesCategory(currentData, seriesId, category);
+                        });
+                        save(currentData);
+                        toast('✅ 已将所选美化' + (Object.keys(selectedGroups).length ? '及系列' : '') + '移到「' + category + '」');
+                        batchSelected.clear();
+                        renderCatbar();
+                        renderGrid();
+                    },
                 });
-                var incompleteGroup = '';
-                getLogicalItems(dd).some(function (item) {
-                    var owner = getSeriesForItem(dd, item);
-                    if (!owner || !selectedGroups[owner.id] || selectedKeys.has(item.key)) return false;
-                    incompleteGroup = owner.id;
-                    return true;
-                });
-                if (incompleteGroup) {
-                    toast('系列需要整组调整分类：请选中该系列全部成员，或点击系列标题修改展示分类', true);
-                    return;
-                }
-                selectedItems.forEach(function (item) {
-                    if (!getSeriesForItem(dd, item)) getItemMetaForWrite(dd, item).category = cats[ci];
-                });
-                Object.keys(selectedGroups).forEach(function (seriesId) {
-                    seriesApi.setSeriesCategory(dd, seriesId, cats[ci]);
-                });
-                save(dd);
-                toast('✅ 已将所选美化' + (Object.keys(selectedGroups).length ? '及系列' : '') + '移到「' + cats[ci] + '」');
-                batchSelected.clear();
-                renderCatbar();
-                renderGrid();
             });
 
             var bstarBtn = batchRoot.querySelector('#tm-batch-star');
@@ -17131,16 +17362,38 @@
             var btagBtn = batchRoot.querySelector('#tm-batch-tag');
             if (btagBtn) btagBtn.addEventListener('click', function () {
                 if (batchSelected.size === 0) { toast('请先选择主题', true); return; }
-                var tag = prompt('为所选主题添加标签：'); if (!tag || !tag.trim()) return; tag = tag.trim();
-                var dd = load();
-                batchSelected.forEach(function (key) {
-                    var item = getLogicalItem(key, dd);
-                    if (!item) return;
-                    var m = getItemMetaForWrite(dd, item);
-                    if (!Array.isArray(m.tags)) m.tags = [];
-                    if (m.tags.indexOf(tag) === -1) m.tags.push(tag);
+                openTagPicker({
+                    title: '添加标签',
+                    hint: '为已选 ' + batchSelected.size + ' 个美化添加标签；已有标签会保留',
+                    selectedTags: [],
+                    requireSelection: true,
+                    allowClear: true,
+                    onApply: function (tags) {
+                        var dd = load();
+                        batchSelected.forEach(function (key) {
+                            var item = getLogicalItem(key, dd);
+                            if (!item) return;
+                            var meta = getItemMetaForWrite(dd, item);
+                            if (!Array.isArray(meta.tags)) meta.tags = [];
+                            tags.forEach(function (tag) { if (meta.tags.indexOf(tag) === -1) meta.tags.push(tag); });
+                        });
+                        save(dd);
+                        toast('🏷️ 已为所选美化添加 ' + tags.length + ' 个标签');
+                        batchSelected.clear();
+                        renderGrid();
+                    },
+                    onClear: function () {
+                        var dd = load();
+                        batchSelected.forEach(function (key) {
+                            var item = getLogicalItem(key, dd);
+                            if (item) getItemMetaForWrite(dd, item).tags = [];
+                        });
+                        save(dd);
+                        toast('已清除所选美化的标签');
+                        batchSelected.clear();
+                        renderGrid();
+                    },
                 });
-                save(dd); toast('🏷️ 已添加标签：' + tag); batchSelected.clear(); renderGrid();
             });
 
             var dayNightBtn = batchRoot.querySelector('#tm-batch-day-night');
@@ -17702,139 +17955,6 @@
         el.setAttribute('aria-label', el.title);
     }
 
-    // ── 操作菜单 ─────────────────────────────────────────────
-    function openContextMenu(itemRef) {
-        var d = load();
-        var item = getLogicalItem(itemRef, d);
-        if (!item) return;
-        var meta = getItemMeta(d, item);
-        var themeName = getItemDisplayTheme(d, item);
-        var curTheme = getCurrentThemeName();
-        var isActive = isItemActive(item, curTheme);
-        var imgThemes = stThemeList.filter(function (n) { return imageToolsApi.hasPreviewImage(d.themeMeta[n]); });
-        var variantMeta = d.themeMeta[themeName] || {};
-        var itemLabel = item.name;
-
-        var sheet = createSheet([
-            '<div class="tm-ctx-theme-name"><i class="fa-solid fa-palette" style="margin-right:6px;opacity:.5;"></i>' + esc(itemLabel) + '</div>',
-            isActive
-                ? '<div class="tm-ctx-item" style="opacity:.5"><i class="fa-solid fa-circle-check"></i>当前正在使用</div>'
-                : '<div class="tm-ctx-item" id="tm-ctx-apply"><i class="fa-solid fa-circle-check"></i>应用美化</div>',
-            imageToolsApi.hasPreviewImage(variantMeta) ? '<div class="tm-ctx-item" id="tm-ctx-view"><i class="fa-solid fa-expand"></i>查看截图</div>' : '',
-            variantMeta.backgroundName ? '<div class="tm-ctx-item" style="opacity:.75"><i class="fa-solid fa-image"></i>背景：' + esc(variantMeta.backgroundName) + '</div>' : '',
-            '<div class="tm-ctx-item" id="tm-ctx-star"><i class="fa-solid fa-star"></i>' + (meta.starred ? '取消收藏' : '加入收藏') + '</div>',
-            '<div class="tm-ctx-item" id="tm-ctx-edit"><i class="fa-solid fa-pen"></i>编辑信息</div>',
-            '<div class="tm-ctx-item" id="tm-ctx-bind"><i class="fa-solid fa-link"></i>角色 / 聊天绑定</div>',
-            '<div class="tm-ctx-item" id="tm-ctx-rename"><i class="fa-solid fa-i-cursor"></i>' + (item.kind === 'pair' ? '修改组合名称' : '重命名美化') + '</div>',
-            item.kind === 'pair'
-                ? '<div class="tm-ctx-item danger" id="tm-ctx-delete"><i class="fa-solid fa-circle-half-stroke"></i>解除或删除日夜组合</div>'
-                : '<div class="tm-ctx-item danger" id="tm-ctx-delete"><i class="fa-solid fa-trash"></i>删除美化</div>',
-        ].join(''));
-
-        var applyEl = sheet.querySelector('#tm-ctx-apply');
-        if (applyEl) applyEl.addEventListener('click', function () {
-            closeSheet(sheet);
-            if (item.kind === 'pair') clearTemporaryPairOverride();
-            themeName = getItemDisplayTheme(load(), item);
-            applyManualTheme(themeName, function (ok, reason) {
-                if (ok) {
-                    var dd = load();
-                    var refreshed = getLogicalItem(item.key, dd);
-                    var m = refreshed ? getItemMetaForWrite(dd, refreshed) : null;
-                    if (!m) return;
-                    m.useCount = (m.useCount || 0) + 1;
-                    m.lastUsed = Date.now();
-                    save(dd);
-                    toast('✅ 已应用：' + itemLabel);
-                    refreshSingleItemCard(item.key, { recent: true, freq: true });
-                    renderBottomStatus(); updateBtn();
-                }
-                else if (reason !== 'superseded') {
-                    if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
-                    else if (reason === 'load-failed') toast('主题加载失败，已保留当前主题', true);
-                    else if (reason === 'state-verify-failed') toast('主题状态未能确认切换成功，未切换绑定背景', true);
-                    else if (reason === 'verify-failed') toast('主题状态或视觉验证失败，未切换绑定背景', true);
-                    else toast('切换失败', true);
-                }
-            });
-        });
-
-        var viewEl = sheet.querySelector('#tm-ctx-view');
-        if (viewEl) viewEl.addEventListener('click', function () {
-            closeSheet(sheet);
-            openLightbox(imgThemes, themeName);
-        });
-
-        sheet.querySelector('#tm-ctx-star').addEventListener('click', function () {
-            closeSheet(sheet);
-            var dd = load();
-            var refreshed = getLogicalItem(item.key, dd);
-            var m = refreshed ? getItemMetaForWrite(dd, refreshed) : null;
-            if (!m) return;
-            m.starred = !m.starred;
-            save(dd); toast(m.starred ? '⭐ 已收藏' : '已取消收藏');
-            refreshSingleItemCard(item.key, { starred: true });
-        });
-
-        sheet.querySelector('#tm-ctx-edit').addEventListener('click', function () {
-            closeSheet(sheet);
-            openEditSheet(item.key);
-        });
-
-        sheet.querySelector('#tm-ctx-bind').addEventListener('click', function () {
-            closeSheet(sheet);
-            openBindingSheet(item.key);
-        });
-
-        sheet.querySelector('#tm-ctx-rename').addEventListener('click', function () {
-            var newName = prompt(item.kind === 'pair' ? '新的组合名称：' : '新的美化名称：', itemLabel);
-            if (newName === null) return;
-            newName = newName.trim();
-            if (!newName || newName === itemLabel) return;
-            closeSheet(sheet);
-            if (item.kind === 'pair') {
-                var pairData = load();
-                var duplicate = getLogicalItems(pairData).some(function (other) {
-                    return other.key !== item.key && other.name === newName;
-                });
-                if (duplicate) { toast('已有同名美化', true); return; }
-                if (pairsApi.renamePair(pairData, item.pairId, newName)) {
-                    save(pairData);
-                    renderGrid();
-                    renderBottomStatus();
-                    toast('已修改日夜美化名称');
-                }
-                return;
-            }
-            renameThemeEverywhere(themeName, newName, function (ok, reason) {
-                if (ok) toast('已重命名美化');
-                else if (reason === 'duplicate') toast('已有同名美化', true);
-                else if (reason === 'filename-conflict') toast('名称经酒馆文件名清理后与已有主题冲突', true);
-                else if (reason === 'invalid-filename') toast('该名称无法生成有效的主题文件名', true);
-                else if (reason === 'incomplete') toast('主题尚未完整加载，不能安全改名', true);
-                else if (reason === 'verify-failed') toast('新主题最终验证失败，改名已回滚并保留旧主题', true);
-                else if (reason === 'delete-failed') toast('旧主题删除或最终验证失败，改名已回滚', true);
-                else if (reason === 'rollback-failed') toast('改名失败且自动回滚未完成，请立即检查主题文件', true);
-                else if (reason === 'inventory-failed') toast('无法刷新主题列表，未执行改名', true);
-                else toast('重命名失败，旧主题已保留', true);
-            });
-        });
-
-        sheet.querySelector('#tm-ctx-delete').addEventListener('click', function () {
-            if (item.kind === 'pair') {
-                closeSheet(sheet);
-                openDayNightDeleteSheet(item.pairId);
-                return;
-            }
-            if (!confirm('删除美化「' + themeName + '」？\n这会从 SillyTavern 主题列表中真实删除，不只是从插件移除。')) return;
-            closeSheet(sheet);
-            deleteThemeEverywhere(themeName, function (ok) {
-                if (ok) toast('已删除美化');
-                else toast('删除失败', true);
-            });
-        });
-    }
-
     // ── 角色 / 聊天绑定 ──────────────────────────────────────
     function openBindingSheet(itemRef, onChange) {
         if (!bindingController || !bindingsApi) {
@@ -17953,12 +18073,47 @@
 
         var sheet = createSheet([
             '<div class="tm-sheet-title"><i class="fa-solid fa-link"></i>绑定信息：' + esc(item.name) + '</div>',
-            '<div class="tm-hint tm-bindings-all-hint">这里可以查看并解除这个美化的全部绑定；新增或改绑当前角色、聊天，请使用卡片右上角的三个点菜单。</div>',
+            '<div class="tm-hint tm-bindings-all-hint">管理当前角色、当前聊天以及这个美化已有的全部绑定；聊天绑定优先于角色绑定。</div>',
+            '<div id="tm-bindings-current-body"></div>',
+            '<div class="tm-bindings-all-divider"><span>全部绑定</span></div>',
             '<div id="tm-bindings-all-body"></div>',
             '<div class="tm-edit-foot tm-bindings-all-foot"><button class="tm-btn tm-btn-danger" id="tm-bindings-clear-all">解除全部</button><button class="tm-btn tm-btn-outline" id="tm-bindings-all-close">关闭</button></div>',
         ].join(''));
+        var currentBody = sheet.querySelector('#tm-bindings-current-body');
         var body = sheet.querySelector('#tm-bindings-all-body');
         var clearAllButton = sheet.querySelector('#tm-bindings-clear-all');
+
+        function bindingLabel(record) {
+            if (!record) return '';
+            var recordTarget = bindingsApi.getTarget(record);
+            if (!recordTarget) return '';
+            if (recordTarget.kind === 'day-night') {
+                var boundPair = pairsApi.getPair(load(), recordTarget.pairId);
+                return boundPair ? boundPair.name : '已失效的日夜组合';
+            }
+            return recordTarget.themeName || '';
+        }
+
+        function currentBindingCard(scope, title, icon, available, label, record, target, resolution) {
+            var boundTarget = record ? bindingsApi.getTarget(record) : null;
+            var boundLabel = bindingLabel(record);
+            var isThisTheme = bindingsApi.targetsEqual(boundTarget, target);
+            var status = boundLabel ? ('已绑定：' + esc(boundLabel)) : '尚未绑定';
+            var actionLabel = boundLabel
+                ? (isThisTheme ? '已绑定此美化' : '改绑为此美化')
+                : '绑定此美化';
+            var priorityOn = resolution && resolution.scope === scope;
+            return '<div class="tm-binding-card' + (priorityOn ? ' is-active' : '') + '">' +
+                '<div class="tm-binding-head"><i class="fa-solid ' + icon + '"></i><div><strong>' + title + '</strong>' +
+                '<small>' + (available ? esc(label) : (scope === 'chat' ? '当前没有可绑定的聊天窗口' : '群聊或主页不提供单角色绑定')) + '</small></div>' +
+                (priorityOn ? '<span>当前生效</span>' : '') + '</div>' +
+                '<div class="tm-binding-status">' + status + '</div>' +
+                '<div class="tm-binding-actions">' +
+                '<button class="tm-btn tm-btn-safe" data-current-binding-action="bind" data-binding-scope="' + scope + '"' +
+                (!available || isThisTheme ? ' disabled' : '') + '>' + actionLabel + '</button>' +
+                (boundLabel ? '<button class="tm-btn tm-btn-outline" data-current-binding-action="clear" data-binding-scope="' + scope + '">解除绑定</button>' : '') +
+                '</div></div>';
+        }
 
         function sectionHtml(scope, title, icon, references) {
             if (!references.length) return '';
@@ -17988,6 +18143,27 @@
                 return;
             }
             var target = getItemTarget(currentItem);
+            var current = bindingController.getCurrentState();
+            var info = current.context;
+            currentBody.innerHTML = currentBindingCard(
+                'character',
+                '当前角色卡',
+                'fa-user',
+                !info.isGroup && !!info.characterKey,
+                info.characterLabel || info.characterKey,
+                current.character,
+                target,
+                current.resolution
+            ) + currentBindingCard(
+                'chat',
+                '当前聊天窗口',
+                'fa-message',
+                !!(info.chatKey && info.chatId),
+                info.chatLabel || info.chatId,
+                current.chat,
+                target,
+                current.resolution
+            );
             var refs = bindingsApi.listTargetReferences(currentData, target);
             var total = refs.characters.length + refs.chats.length;
             body.innerHTML = total
@@ -18021,6 +18197,35 @@
                 });
             });
         }
+
+        currentBody.addEventListener('click', function (event) {
+            var button = event.target && event.target.closest
+                ? event.target.closest('[data-current-binding-action]')
+                : null;
+            if (!button || !currentBody.contains(button)) return;
+            var currentData = load();
+            var currentItem = getLogicalItem(itemRef, currentData);
+            if (!currentItem) { render(); return; }
+            var target = getItemTarget(currentItem);
+            var scope = button.dataset.bindingScope;
+            var action = button.dataset.currentBindingAction;
+            var result = action === 'bind'
+                ? bindingController.bindCurrent(scope, target)
+                : bindingController.unbindCurrent(scope);
+            if (!result || !result.ok) {
+                var reason = result && result.reason;
+                if (reason === 'no-character') toast('当前不是可绑定的单角色聊天', true);
+                else if (reason === 'no-chat') toast('当前聊天尚未完整加载，请稍后再试', true);
+                else toast('绑定操作失败，请重试', true);
+                return;
+            }
+            renderGrid();
+            renderBottomStatus();
+            if (typeof onChange === 'function') onChange();
+            render();
+            if (action === 'bind') toast(scope === 'chat' ? '已绑定到当前聊天' : '已绑定到当前角色卡');
+            else toast(scope === 'chat' ? '已解除当前聊天绑定' : '已解除当前角色绑定');
+        });
 
         clearAllButton.addEventListener('click', function () {
             var currentData = load();
@@ -18062,6 +18267,8 @@
         var meta = getItemMeta(d, item);
         var originalEditName = item.name;
         var originalEditCategory = meta.category || '';
+        var editorItemRef = item.key;
+        var currentOrdinaryThemeName = item.kind === 'theme' ? item.themeName : '';
         var selectedVariant = pair
             ? (pair.nightTheme === getCurrentThemeName() ? 'night' : (pair.dayTheme === getCurrentThemeName() ? 'day' : getPreferredPairVariant(pair.id)))
             : 'day';
@@ -18094,6 +18301,7 @@
         var editThumbData = activeDraft.thumbData;
         var editCrop = activeDraft.crop;
         var editPreviewData = editImgData || editThumbData;
+        var editCategory = meta.category || '';
         var editTags = (meta.tags || []).slice();
         var editBackgroundName = activeDraft.backgroundName;
         var itemTarget = getItemTarget(item);
@@ -18133,28 +18341,37 @@
                     '<button type="button" class="tm-user-avatar-bind-remove" data-user-avatar-action="remove" data-avatar-id="' + esc(item.binding.avatarId) + '" aria-label="解除这个头像的绑定"><i class="fa-solid fa-link-slash"></i></button></div>';
             }).join('') + '</div>';
         }
-        var catOpts = '<option value="">无分类</option>' +
-            d.categories.map(function (c) { return '<option value="' + esc(c) + '"' + (meta.category === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('');
+        var bindingFieldsHtml =
+            '<div class="tm-field"><label>绑定背景</label><button type="button" class="tm-bg-bind-card" id="tm-bg-bind">' + buildBackgroundBindHtml(editBackgroundName) + '</button></div>' +
+            '<div class="tm-field"><label>角色 / 聊天绑定</label><button type="button" class="tm-theme-bind-card" id="tm-theme-bind-overview">' + buildBindingsOverviewHtml() + '</button></div>' +
+            '<div class="tm-field"><label>User 头像绑定</label><button type="button" class="tm-theme-bind-card" id="tm-user-avatar-bind-overview"><span class="tm-theme-bind-icon"><i class="fa-solid fa-user"></i></span><span class="tm-theme-bind-copy"><strong>User 头像绑定</strong><small>正在读取头像绑定…</small></span><i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i></button></div>';
+        var annotationFieldsHtml =
+            '<div class="tm-field"><label>作者</label><input type="text" id="tm-dauthor" placeholder="主题作者名" value="' + esc(meta.author || '') + '" /></div>' +
+            '<div class="tm-field"><label>备注</label><textarea id="tm-ddesc" rows="2" placeholder="主题特点、适用场景等">' + esc(meta.description || '') + '</textarea></div>';
+        var operationFieldsHtml =
+            '<div class="tm-edit-operation-list">' +
+            '<button type="button" class="tm-edit-operation" id="tm-edit-star"><span><i class="fa-solid fa-star"></i><strong>' + (meta.starred ? '取消收藏' : '收藏美化') + '</strong></span><i class="fa-solid fa-chevron-right"></i></button>' +
+            (pair
+                ? '<button type="button" class="tm-edit-operation tm-edit-operation-danger" id="tm-edit-manage-pair"><span><i class="fa-solid fa-circle-half-stroke"></i><strong>管理日夜组合</strong><small>解除组合或删除整组</small></span><i class="fa-solid fa-chevron-right"></i></button>'
+                : '<button type="button" class="tm-edit-operation tm-edit-operation-danger" id="tm-edit-delete"><span><i class="fa-solid fa-trash"></i><strong>删除美化</strong></span><i class="fa-solid fa-chevron-right"></i></button>') +
+            '</div>';
 
         var sheet = createSheet([
-            '<div class="tm-sheet-title tm-edit-sheet-title"><span><i class="fa-solid fa-pen"></i>编辑：<b id="tm-edit-title-name">' + esc(item.name) + '</b></span>' +
+            '<div class="tm-sheet-title tm-edit-sheet-title"><span><i class="fa-solid fa-pen"></i>编辑美化</span>' +
             (pair ? '<div class="tm-day-night-toggle" role="group" aria-label="切换日夜版本">' +
                 '<button type="button" data-variant="day" class="' + (selectedVariant === 'day' ? 'on' : '') + '" title="编辑并应用日间版"><i class="fa-solid fa-sun"></i></button>' +
                 '<button type="button" data-variant="night" class="' + (selectedVariant === 'night' ? 'on' : '') + '" title="编辑并应用夜间版"><i class="fa-solid fa-moon"></i></button>' +
                 '</div>' : '') + '</div>',
-            pair ? '<div class="tm-field"><label>美化名称</label><input type="text" id="tm-pair-edit-name" maxlength="80" value="' + esc(pair.name) + '" /></div>' : '',
-            '<div class="tm-field"><label>分类</label><div class="tm-frow"><select id="tm-dcat">' + catOpts + '</select><button class="tm-btn tm-btn-outline" id="tm-dnewcat" style="white-space:nowrap;font-size:.8em;padding:7px 10px">+ 新建</button></div></div>',
-            '<div class="tm-field"><label>绑定背景</label><button type="button" class="tm-bg-bind-card" id="tm-bg-bind">' + buildBackgroundBindHtml(editBackgroundName) + '</button></div>',
-            '<div class="tm-field"><label>绑定范围</label><button type="button" class="tm-theme-bind-card" id="tm-theme-bind-overview">' + buildBindingsOverviewHtml() + '</button></div>',
-            '<div class="tm-field"><label>User 头像绑定</label><button type="button" class="tm-theme-bind-card" id="tm-user-avatar-bind-overview"><span class="tm-theme-bind-icon"><i class="fa-solid fa-user"></i></span><span class="tm-theme-bind-copy"><strong>User 头像绑定</strong><small>正在读取头像绑定…</small></span><i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i></button></div>',
-            '<div class="tm-field"><label>作者</label><input type="text" id="tm-dauthor" placeholder="主题作者名" value="' + esc(meta.author || '') + '" /></div>',
-            '<div class="tm-field"><label>备注</label><textarea id="tm-ddesc" rows="2" placeholder="主题特点、适用场景等">' + esc(meta.description || '') + '</textarea></div>',
-            '<div class="tm-field"><label>标签</label><div class="tm-tags-wrap" id="tm-tags-wrap"></div>' +
-            '<div class="tm-tag-add-row"><input type="text" id="tm-tag-inp" placeholder="输入标签后回车" /><button class="tm-btn tm-btn-outline" id="tm-tag-add" style="font-size:.8em;padding:6px 10px">添加</button></div></div>',
+            '<div class="tm-field"><label>美化名称</label><input type="text" id="tm-edit-name" maxlength="80" value="' + esc(pair ? pair.name : item.name) + '" /></div>',
+            '<div class="tm-field"><label>分类</label><button type="button" class="tm-picker-trigger" id="tm-edit-category-trigger"></button></div>',
+            '<div class="tm-field"><label>标签</label><button type="button" class="tm-picker-trigger" id="tm-edit-tags-trigger"></button></div>',
             '<div class="tm-field"><label>预览截图</label>' +
             '<div class="tm-imgarea" id="tm-dimgarea">' + (editPreviewData ? '<img src="' + esc(editPreviewData) + '" />' : '<div class="tm-imgph"><i class="fa-regular fa-image"></i><span>点击或拖拽上传截图</span></div>') + '</div>' +
             '<input type="file" id="tm-dfile" accept="image/*" style="display:none" />' +
             '<div class="tm-img-actions"></div></div>',
+            buildDisclosureHtml('tm-edit-binding-section', '绑定信息', 'fa-link', bindingFieldsHtml),
+            buildDisclosureHtml('tm-edit-annotation-section', '其他标注', 'fa-note-sticky', annotationFieldsHtml),
+            buildDisclosureHtml('tm-edit-operation-section', '其他操作', 'fa-ellipsis', operationFieldsHtml),
             '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-dcopy-diagnostic" style="display:none">复制诊断</button><button class="tm-btn tm-btn-outline" id="tm-dcancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-dsave">保存</button></div>',
         ].join(''));
 
@@ -18197,6 +18414,7 @@
                 console.warn('[头像管理] 美化专属 User 绑定读取失败:', error);
             });
         }
+
         function beginThemeUserAvatarEdit(bindingThemeName, avatarId) {
             if (!bindingThemeName || !avatarId) return;
             if (closePopup() === false) return;
@@ -18307,20 +18525,46 @@
         });
         renderUserAvatarBindingOverview();
 
-        // 标签
-        function renderTagChips() {
-            var wrap = sheet.querySelector('#tm-tags-wrap');
-            wrap.innerHTML = editTags.map(function (tag) {
-                return '<span class="tm-tag-chip">' + esc(tag) + '<button class="tm-tag-chip-x" data-tag="' + esc(tag) + '">×</button></span>';
-            }).join('');
-            wrap.querySelectorAll('.tm-tag-chip-x').forEach(function (btn) {
-                btn.addEventListener('click', function () { var idx = editTags.indexOf(btn.dataset.tag); if (idx !== -1) { editTags.splice(idx, 1); renderTagChips(); } });
-            });
+        function pickerTriggerHtml(icon, title, summary) {
+            return '<span class="tm-picker-trigger-icon"><i class="fa-solid ' + icon + '"></i></span>' +
+                '<span class="tm-picker-trigger-copy"><strong>' + esc(title) + '</strong><small>' + esc(summary) + '</small></span>' +
+                '<i class="fa-solid fa-chevron-right tm-picker-trigger-chevron"></i>';
         }
-        renderTagChips();
-        function addTag() { var inp = sheet.querySelector('#tm-tag-inp'); var tag = inp.value.trim(); if (!tag) return; if (editTags.indexOf(tag) === -1) { editTags.push(tag); renderTagChips(); } inp.value = ''; inp.focus(); }
-        sheet.querySelector('#tm-tag-add').addEventListener('click', addTag);
-        sheet.querySelector('#tm-tag-inp').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addTag(); } });
+        function renderCategoryTrigger() {
+            sheet.querySelector('#tm-edit-category-trigger').innerHTML = pickerTriggerHtml('fa-folder', '选择分类', editCategory || '无分类');
+        }
+        function renderTagsTrigger() {
+            var summary = editTags.length ? editTags.join(' · ') : '尚未设置标签';
+            sheet.querySelector('#tm-edit-tags-trigger').innerHTML = pickerTriggerHtml('fa-tags', '管理标签', summary);
+        }
+        renderCategoryTrigger();
+        renderTagsTrigger();
+        sheet.querySelector('#tm-edit-category-trigger').addEventListener('click', function () {
+            openCategoryPicker({
+                title: '选择分类',
+                hint: '为当前美化设置分类',
+                selected: editCategory,
+                allowClear: true,
+                onSelect: function (category) {
+                    if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
+                    editCategory = category || '';
+                    renderCategoryTrigger();
+                },
+            });
+        });
+        sheet.querySelector('#tm-edit-tags-trigger').addEventListener('click', function () {
+            openTagPicker({
+                title: '管理标签',
+                hint: '选择已有标签，或输入新标签后应用',
+                selectedTags: editTags,
+                allowClear: true,
+                onApply: function (tags) {
+                    if (!editorSession || !editorSession.isActive() || editorSession.isSaving()) return;
+                    editTags = tags.slice();
+                    renderTagsTrigger();
+                },
+            });
+        });
 
         // 图片
         var fileInp = sheet.querySelector('#tm-dfile');
@@ -18329,7 +18573,8 @@
         function renderImageActions() {
             var hasImage = Boolean(editImgData || editThumbData);
             imgActions.innerHTML = '<button class="tm-btn tm-btn-outline" id="tm-dpick" style="font-size:.8em"><i class="fa-solid fa-image"></i> 选择图片</button>' +
-                (hasImage ? '<button class="tm-btn tm-btn-outline" id="tm-dadjust" style="font-size:.8em"><i class="fa-solid fa-up-down-left-right"></i> 调整显示区域</button>' +
+                (hasImage ? '<button class="tm-btn tm-btn-outline" id="tm-dview" style="font-size:.8em"><i class="fa-solid fa-expand"></i> 查看大图</button>' +
+                    '<button class="tm-btn tm-btn-outline" id="tm-dadjust" style="font-size:.8em"><i class="fa-solid fa-up-down-left-right"></i> 调整显示区域</button>' +
                     '<button class="tm-btn tm-btn-danger" id="tm-dclr" style="font-size:.8em">删除图片</button>' : '');
         }
         function setImg(data, thumb, crop) {
@@ -18351,8 +18596,8 @@
         function captureEditSnapshot() {
             captureVariantDraft();
             return {
-                pairName: pair ? sheet.querySelector('#tm-pair-edit-name').value.trim() : '',
-                category: sheet.querySelector('#tm-dcat').value,
+                name: sheet.querySelector('#tm-edit-name').value.trim(),
+                category: editCategory,
                 author: sheet.querySelector('#tm-dauthor').value.trim(),
                 description: sheet.querySelector('#tm-ddesc').value.trim(),
                 tags: editTags.slice(),
@@ -18394,11 +18639,6 @@
                     });
                 });
             });
-            var pairNameInput = sheet.querySelector('#tm-pair-edit-name');
-            if (pairNameInput) pairNameInput.addEventListener('input', function () {
-                var title = sheet.querySelector('#tm-edit-title-name');
-                if (title) title.textContent = pairNameInput.value.trim() || pair.name;
-            });
         }
         function handleFile(f) {
             if (!f || !imageToolsApi.inferImageMime(f)) return;
@@ -18429,6 +18669,10 @@
             var button = e.target && e.target.closest ? e.target.closest('button') : null;
             if (!button || !imgActions.contains(button)) return;
             if (button.id === 'tm-dpick') fileInp.click();
+            else if (button.id === 'tm-dview') {
+                var source = editImgData || editThumbData;
+                if (source) uiSheetsApi.openImageLightbox([{ key: 'draft', label: sheet.querySelector('#tm-edit-name').value.trim() || originalEditName, source: source }], 'draft');
+            }
             else if (button.id === 'tm-dadjust') adjustCurrentImage();
             else if (button.id === 'tm-dclr') setImg(null, null, null);
         });
@@ -18442,20 +18686,48 @@
         imgArea.addEventListener('dragleave', function () { imgArea.classList.remove('drag'); });
         imgArea.addEventListener('drop', function (e) { e.preventDefault(); imgArea.classList.remove('drag'); if (e.dataTransfer && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
 
-        sheet.querySelector('#tm-dnewcat').addEventListener('click', function () {
-            var name = prompt('新分类名称：'); if (!name || !name.trim()) return; name = name.trim();
-            var dd = load(); if (dd.categories.indexOf(name) === -1) { dd.categories.push(name); save(dd); renderCatbar(); }
-            var sel2 = sheet.querySelector('#tm-dcat');
-            var ex = false; for (var i = 0; i < sel2.options.length; i++) { if (sel2.options[i].value === name) { ex = true; break; } }
-            if (!ex) { var opt = document.createElement('option'); opt.value = name; opt.textContent = name; sel2.appendChild(opt); }
-            sel2.value = name; toast('分类「' + name + '」已添加');
-        });
-
         var editorSession = editorDraftApi.createSession(captureEditSnapshot());
         var persistFailureUi = modules.persistFailureUi || ns.persistFailureUi;
         var diagnosticButton = sheet.querySelector('#tm-dcopy-diagnostic');
         var lastSaveDiagnosticText = '';
         var diagnosticRequestId = 0;
+
+        function refreshStarOperation() {
+            var button = sheet.querySelector('#tm-edit-star');
+            if (!button) return;
+            var currentItem = getLogicalItem(editorItemRef, load());
+            var currentMeta = currentItem ? getItemMeta(load(), currentItem) : null;
+            var label = button.querySelector('strong');
+            if (label) label.textContent = currentMeta && currentMeta.starred ? '取消收藏' : '收藏美化';
+        }
+        sheet.querySelector('#tm-edit-star').addEventListener('click', function () {
+            var dd = load();
+            var currentItem = getLogicalItem(editorItemRef, dd);
+            var currentMeta = currentItem ? getItemMetaForWrite(dd, currentItem) : null;
+            if (!currentMeta) { toast('美化已发生变化，请关闭后重试', true); return; }
+            currentMeta.starred = !currentMeta.starred;
+            save(dd);
+            refreshStarOperation();
+            refreshSingleItemCard(currentItem.key, { starred: true });
+            toast(currentMeta.starred ? '⭐ 已收藏' : '已取消收藏');
+        });
+        var managePairButton = sheet.querySelector('#tm-edit-manage-pair');
+        if (managePairButton) managePairButton.addEventListener('click', function () {
+            if (!closeSheet(sheet)) return;
+            openDayNightDeleteSheet(pair.id);
+        });
+        var deleteButton = sheet.querySelector('#tm-edit-delete');
+        if (deleteButton) deleteButton.addEventListener('click', function () {
+            var deletingName = currentOrdinaryThemeName;
+            if (!deletingName) return;
+            if (!confirm('删除美化「' + deletingName + '」？\n这会从 SillyTavern 主题列表中真实删除，不只是从插件移除。')) return;
+            editorSession.invalidate();
+            closeSheet(sheet, { force: true });
+            deleteThemeEverywhere(deletingName, function (ok) {
+                if (ok) toast('已删除美化');
+                else toast('删除失败', true);
+            });
+        });
 
         diagnosticButton.addEventListener('click', function () {
             copyTextToClipboard(lastSaveDiagnosticText).then(function (copied) {
@@ -18506,13 +18778,12 @@
         });
         sheet.querySelector('#tm-dcancel').addEventListener('click', function () { closeSheet(sheet); });
         sheet.querySelector('#tm-dsave').addEventListener('click', function () {
-            var saveBtn = sheet.querySelector('#tm-dsave');
             var snapshot = captureEditSnapshot();
-            var pairName = snapshot.pairName;
-            if (pair && !pairName) { toast('美化名称不能为空', true); return; }
+            var requestedName = snapshot.name;
+            if (!requestedName) { toast('美化名称不能为空', true); return; }
             if (pair) {
                 var duplicate = getLogicalItems(load()).some(function (other) {
-                    return other.key !== item.key && other.name === pairName;
+                    return other.key !== item.key && other.name === requestedName;
                 });
                 if (duplicate) { toast('已有同名美化，请换一个名称', true); return; }
             }
@@ -18555,14 +18826,48 @@
                     }
                     uploaded[variant] = result;
                     remaining -= 1;
-                    if (remaining === 0) finishSave();
+                    if (remaining === 0) prepareSaveTarget();
                 });
             });
+
+            function failRename(reason) {
+                editorSession.failSave(saveTicket.token);
+                setEditorSaving(false);
+                if (reason === 'duplicate') toast('已有同名美化', true);
+                else if (reason === 'filename-conflict') toast('名称经酒馆文件名清理后与已有主题冲突', true);
+                else if (reason === 'invalid-filename') toast('该名称无法生成有效的主题文件名', true);
+                else if (reason === 'manager-identity-conflict') toast('目标名称存在遗留美化管理数据，未执行改名', true);
+                else if (reason === 'incomplete') toast('主题尚未完整加载，不能安全改名', true);
+                else if (reason === 'verify-failed') toast('新主题最终验证失败，改名已回滚并保留旧主题', true);
+                else if (reason === 'delete-failed') toast('旧主题删除或最终验证失败，改名已回滚', true);
+                else if (reason === 'rollback-failed') toast('改名失败且自动回滚未完成，请立即检查主题文件', true);
+                else if (reason === 'inventory-failed') toast('无法刷新主题列表，未执行改名', true);
+                else toast('重命名失败，旧主题已保留', true);
+            }
+
+            function prepareSaveTarget() {
+                if (!editorSession.isCurrent(saveTicket.token)) return;
+                if (pair || requestedName === currentOrdinaryThemeName) {
+                    finishSave();
+                    return;
+                }
+                renameThemeEverywhere(currentOrdinaryThemeName, requestedName, function (ok, reason) {
+                    if (!editorSession.isCurrent(saveTicket.token)) return;
+                    if (!ok) { failRename(reason); return; }
+                    currentOrdinaryThemeName = requestedName;
+                    editorItemRef = 'theme:' + requestedName;
+                    variantDrafts.day.themeName = requestedName;
+                    if (uploaded.day) uploaded.day.themeName = requestedName;
+                    var renamedItem = getLogicalItem(editorItemRef, load());
+                    if (renamedItem) itemTarget = getItemTarget(renamedItem);
+                    finishSave();
+                });
+            }
 
             function finishSave() {
                 if (!editorSession.isCurrent(saveTicket.token)) return;
                 var dd = cloneJson(load());
-                var refreshedItem = getLogicalItem(item.key, dd);
+                var refreshedItem = getLogicalItem(editorItemRef, dd);
                 if (!refreshedItem) {
                     editorSession.failSave(saveTicket.token);
                     setEditorSaving(false);
@@ -18575,7 +18880,7 @@
                 shared.description = saveTicket.snapshot.description;
                 shared.tags = saveTicket.snapshot.tags.slice();
                 if (refreshedItem.kind === 'pair') {
-                    pairsApi.renamePair(dd, refreshedItem.pairId, pairName);
+                    pairsApi.renamePair(dd, refreshedItem.pairId, requestedName);
                     ['day', 'night'].forEach(function (variant) {
                         var result = uploaded[variant];
                         var variantMeta = ensureMeta(dd, result.themeName);
@@ -18602,20 +18907,20 @@
                     if (!editorSession.completeSave(saveTicket.token, saveTicket.snapshot)) return;
                     closeSheet(sheet, { force: true });
                     var editEffects = {
-                        name: refreshedItem.name !== originalEditName || (refreshedItem.kind === 'pair' && pairName !== originalEditName),
+                        name: requestedName !== originalEditName,
                         category: shared.category !== originalEditCategory,
                         searchable: true,
-                        layout: refreshedItem.kind === 'pair' && pairName !== originalEditName,
+                        layout: refreshedItem.kind === 'pair' && requestedName !== originalEditName,
                     };
                     var currentTheme = getCurrentThemeName();
                     if (refreshedItem.themeNames.indexOf(currentTheme) !== -1) {
                         applyBoundBackground(currentTheme, function () {
                             toast('✨ 已保存');
-                            renderCatbar(); refreshSingleItemCard(item.key, editEffects); renderBottomStatus();
+                            renderCatbar(); refreshSingleItemCard(refreshedItem.key, editEffects); renderBottomStatus();
                         });
                     } else {
                         toast('✨ 已保存');
-                        renderCatbar(); refreshSingleItemCard(item.key, editEffects);
+                        renderCatbar(); refreshSingleItemCard(refreshedItem.key, editEffects);
                     }
                 }).catch(function (err) {
                     handlePersistFailure(saveTicket.token, err);
@@ -18796,12 +19101,48 @@
         var orphanMetaCount = metadataDiagnostics.orphanMetadata.length;
         var imgCount = 0;
         Object.keys(d.themeMeta).forEach(function (key) { if (d.themeMeta[key].imageData) imgCount++; });
+        var interfaceSettingsHtml =
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline tm-follow-detail tm-grid-text-detail"><label class="tm-setting-copy"><span>简洁网格文字</span><small>头像框或预览形状任一开启时，名称和标签取消底纹并居中</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>隐藏标题与按钮；点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>';
+        var fabSettingsHtml =
+            '<div class="tm-row-inline"><label>显示悬浮球</label><input type="checkbox" class="tm-chk" id="tm-show-ball" ' + (d.showBall !== false ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-field"><label>自定义悬浮球图片 <span class="tm-hint">支持 gif 动图、透明底 png</span></label>' +
+            '<div class="tm-fab-custom-row"><div class="tm-fab-preview" id="tm-fab-preview">' +
+            (d.fabImage ? '<img src="' + esc(d.fabImage) + '" />' : '<div class="tm-fab-default-preview"><i class="fa-solid fa-palette"></i></div>') +
+            '</div><div class="tm-fab-custom-actions">' +
+            '<button class="tm-btn tm-btn-outline" id="tm-fab-pick"><i class="fa-solid fa-image"></i> 选择图片</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-fab-reset" style="' + (d.fabImage ? '' : 'opacity:.35;pointer-events:none;') + '"><i class="fa-solid fa-rotate-left"></i> 恢复默认</button>' +
+            '</div><input type="file" id="tm-fab-file" accept="image/*" style="display:none" /></div></div>' +
+            '<div class="tm-field"><label>悬浮球大小：<span id="tm-fab-size-val">' + (d.fabSize || 38) + 'px</span></label>' +
+            '<input type="range" class="tm-range" id="tm-fab-size" min="28" max="64" value="' + (d.fabSize || 38) + '" /></div>';
+        var dataSettingsHtml =
+            '<div class="tm-storage-info">ST 共有 ' + stThemeList.length + ' 个主题 / 已标注 ' + metaCount + ' 个' +
+            (orphanMetaCount ? ' / 孤儿标注 ' + orphanMetaCount + ' 个' : '') + ' / ' + imgCount + ' 张截图 / ' +
+            (getServerMode() ? '后端存储' : '浏览器存储') + '</div>' +
+            '<div class="tm-data-group"><div class="tm-data-group-label">美化数据</div><div class="tm-data-grid tm-data-grid-primary">' +
+            '<button class="tm-btn tm-btn-outline" id="tm-imp-theme"><i class="fa-solid fa-file-import"></i> 导入美化</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-imp-theme-batch"><i class="fa-solid fa-upload"></i> 批量导入</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-exp-theme-bundle"><i class="fa-solid fa-file-export"></i> 导出美化包</button>' +
+            '</div></div>' +
+            '<div class="tm-data-group"><div class="tm-data-group-label">分类与标注备份</div><div class="tm-data-grid tm-data-grid-secondary">' +
+            '<button class="tm-btn tm-btn-outline" id="tm-exp-theme-cat"><i class="fa-solid fa-folder-open"></i> 导出分类</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-exp"><i class="fa-solid fa-download"></i> 导出标注</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-imp"><i class="fa-solid fa-upload"></i> 导入标注</button>' +
+            '</div></div>' +
+            '<div class="tm-hint tm-data-hint">※ 标注只包含分类、标签、截图等附加信息；美化包会打包 ST 当前所有主题 JSON，并附带分类等轻量标注</div>' +
+            '<div class="tm-data-danger"><div class="tm-data-group-label">危险操作</div>' +
+            '<button class="tm-btn tm-btn-danger" id="tm-clear-orphan"><i class="fa-solid fa-broom"></i><span><strong>清除孤儿标注</strong><small>只删除可靠主题清单中已不存在美化的 metadata</small></span></button>' +
+            '<button class="tm-btn tm-btn-danger" id="tm-clear-all-annotations"><i class="fa-solid fa-trash-can"></i><span><strong>清空全部标注</strong><small>清空分类、标签、截图等全部附加信息</small></span></button>' +
+            '</div>';
 
         var sheet = createSheet([
             '<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>',
             '<div class="tm-sec-title">分类管理</div>',
             '<button class="tm-btn tm-btn-outline" id="tm-open-cats" style="width:100%;text-align:left;margin-bottom:10px"><i class="fa-solid fa-tags" style="margin-right:6px"></i>管理分类（' + d.categories.length + '个）</button>',
-            '<div class="tm-sec-title">显示</div>',
             '<div class="tm-field"><label>预览图片质量</label><select id="tm-preview-image-quality">' +
             '<option value="performance"' + (d.previewImageQuality !== 'quality' ? ' selected' : '') + '>性能优先（默认）</option>' +
             '<option value="quality"' + (d.previewImageQuality === 'quality' ? ' selected' : '') + '>清晰优先</option>' +
@@ -18810,42 +19151,9 @@
                 ? '主界面使用高清截图，卡片放大时更清晰，但图片较多时可能增加内存和加载压力。'
                 : '主界面使用缩略图，适合美化数量较多或设备性能一般。') +
             '</div></div>',
-            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>',
-            '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>',
-            '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>',
-            '<div class="tm-row-inline tm-follow-detail tm-grid-text-detail"><label class="tm-setting-copy"><span>简洁网格文字</span><small>头像框或预览形状任一开启时，名称和标签取消底纹并居中</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>',
-            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>隐藏标题与按钮；点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + ' /></div>',
-            '<div class="tm-row-inline"><label>显示悬浮球</label><input type="checkbox" class="tm-chk" id="tm-show-ball" ' + (d.showBall !== false ? 'checked' : '') + ' /></div>',
-            '<div class="tm-row-inline" style="margin-top:6px"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>',
-            '<div class="tm-sec-title">悬浮球自定义</div>',
-            '<div class="tm-field"><label>自定义图片 <span class="tm-hint">支持 gif 动图、透明底 png</span></label>' +
-            '<div class="tm-fab-custom-row">' +
-            '<div class="tm-fab-preview" id="tm-fab-preview">' +
-            (d.fabImage ? '<img src="' + esc(d.fabImage) + '" />' : '<div class="tm-fab-default-preview"><i class="fa-solid fa-palette"></i></div>') +
-            '</div>' +
-            '<div class="tm-fab-custom-actions">' +
-            '<button class="tm-btn tm-btn-outline" id="tm-fab-pick"><i class="fa-solid fa-image"></i> 选择图片</button>' +
-            '<button class="tm-btn tm-btn-outline" id="tm-fab-reset" style="' + (d.fabImage ? '' : 'opacity:.35;pointer-events:none;') + '"><i class="fa-solid fa-rotate-left"></i> 恢复默认</button>' +
-            '</div>' +
-            '<input type="file" id="tm-fab-file" accept="image/*" style="display:none" />' +
-            '</div></div>',
-            '<div class="tm-field"><label>悬浮球大小：<span id="tm-fab-size-val">' + (d.fabSize || 38) + 'px</span></label>' +
-            '<input type="range" class="tm-range" id="tm-fab-size" min="28" max="64" value="' + (d.fabSize || 38) + '" /></div>',
-            '<div class="tm-divider"></div>',
-            '<div class="tm-sec-title">数据</div>',
-            '<div class="tm-storage-info">ST 共有 ' + stThemeList.length + ' 个主题 / 已标注 ' + metaCount + ' 个' +
-            (orphanMetaCount ? ' / 孤儿标注 ' + orphanMetaCount + ' 个' : '') + ' / ' + imgCount + ' 张截图 / ' +
-            (getServerMode() ? '后端存储' : '浏览器存储') + '</div>',
-            '<div class="tm-data-grid">' +
-            '<button class="tm-btn tm-btn-outline" id="tm-imp-theme"><i class="fa-solid fa-file-import"></i> 导入美化</button>' +
-            '<button class="tm-btn tm-btn-outline" id="tm-imp-theme-batch"><i class="fa-solid fa-upload"></i> 批量导入美化</button>' +
-            '<button class="tm-btn tm-btn-outline" id="tm-exp-theme-bundle"><i class="fa-solid fa-file-export"></i> 导出美化包</button>' +
-            '<button class="tm-btn tm-btn-outline" id="tm-exp-theme-cat"><i class="fa-solid fa-folder-open"></i> 导出分类</button>' +
-            '<button class="tm-btn tm-btn-outline" id="tm-exp"><i class="fa-solid fa-download"></i> 导出标注</button>' +
-            '<button class="tm-btn tm-btn-outline" id="tm-imp"><i class="fa-solid fa-upload"></i> 导入标注</button>' +
-            '<button class="tm-btn tm-btn-danger" id="tm-clear">清空标注</button>' +
-            '</div>',
-            '<div class="tm-hint" style="margin-top:8px">※ 标注只包含分类、标签、截图等附加信息；美化包会打包 ST 当前所有主题 JSON，并附带分类等轻量标注</div>',
+            buildDisclosureHtml('tm-settings-interface', '界面显示', 'fa-display', interfaceSettingsHtml),
+            buildDisclosureHtml('tm-settings-fab', '悬浮球', 'fa-circle-dot', fabSettingsHtml),
+            buildDisclosureHtml('tm-settings-data', '数据管理', 'fa-database', dataSettingsHtml),
             lastAppPage === 'avatars' ? [
                 '<div class="tm-divider"></div>',
                 '<div class="tm-sec-title">User 头像恢复</div>',
@@ -19109,7 +19417,68 @@
                 });
         });
         sheet.querySelector('#tm-exp-theme-cat').addEventListener('click', function () { openCategoryExportSheet(); });
-        sheet.querySelector('#tm-clear').addEventListener('click', function () {
+        sheet.querySelector('#tm-clear-orphan').addEventListener('click', function () {
+            var clearButton = sheet.querySelector('#tm-clear-orphan');
+            clearButton.disabled = true;
+            fetchThemeList(function () {
+                if (!stThemeListReliable) {
+                    clearButton.disabled = false;
+                    toast('无法读取可靠主题清单，已中止清除孤儿标注', true);
+                    return;
+                }
+                var inventory = stThemeList.slice();
+                var diagnostics = metadataApi.inspect(inventory, load().themeMeta);
+                var orphanNames = (diagnostics.orphanMetadata || []).slice();
+                if (orphanNames.length === 0) {
+                    clearButton.disabled = false;
+                    toast('没有需要清除的孤儿标注');
+                    return;
+                }
+                var shown = orphanNames.slice(0, 8).map(function (name) { return '• ' + name; }).join('\n');
+                if (orphanNames.length > 8) shown += '\n…另有 ' + (orphanNames.length - 8) + ' 项';
+                if (!confirm('确定清除 ' + orphanNames.length + ' 项孤儿标注？\n\n' + shown + '\n\n只会删除这些美化的 metadata，不会删除主题文件、分类、绑定、日夜组合或系列。')) {
+                    clearButton.disabled = false;
+                    return;
+                }
+                if (!stThemeListReliable || inventory.length !== stThemeList.length || inventory.some(function (name, index) { return name !== stThemeList[index]; })) {
+                    clearButton.disabled = false;
+                    toast('主题清单可靠状态已变化，清理已中止', true);
+                    return;
+                }
+                var dd = cloneJson(load());
+                var freshDiagnostics = metadataApi.inspect(inventory, dd.themeMeta);
+                var freshOrphans = freshDiagnostics.orphanMetadata || [];
+                if (freshOrphans.length !== orphanNames.length || freshOrphans.some(function (name, index) { return name !== orphanNames[index]; })) {
+                    clearButton.disabled = false;
+                    toast('孤儿标注状态已变化，请重新打开设置确认', true);
+                    return;
+                }
+                var cleanup = metadataApi.removeOrphanMetadata(inventory, dd.themeMeta);
+                if (cleanup.removed.length !== freshOrphans.length) {
+                    clearButton.disabled = false;
+                    toast('孤儿标注状态无法安全确认，清理已中止', true);
+                    return;
+                }
+                var persist;
+                try { persist = save(dd); }
+                catch (error) {
+                    clearButton.disabled = false;
+                    toast('清除孤儿标注失败，请重试', true);
+                    return;
+                }
+                Promise.resolve(persist).then(function () {
+                    closeSheet(sheet);
+                    renderGrid();
+                    renderBottomStatus();
+                    toast('已清除 ' + cleanup.removed.length + ' 项孤儿标注');
+                }).catch(function (error) {
+                    clearButton.disabled = false;
+                    console.warn('[美化管理] 清除孤儿标注保存失败:', error);
+                    toast('清除孤儿标注保存失败，请重试', true);
+                });
+            });
+        });
+        sheet.querySelector('#tm-clear-all-annotations').addEventListener('click', function () {
             if (!confirm('确定清空所有标注数据（分类、标签、截图）？\n主题文件本身不受影响。')) return;
             var dd = load(); dd.themeMeta = Object.create(null); dd.categories = []; curCat = '__all__';
             if (pairsApi) {
@@ -19124,7 +19493,7 @@
             }
             save(dd); closeSheet(sheet);
             fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); });
-            toast('已清空');
+            toast('已清空全部标注');
         });
         sheet.querySelector('#tm-open-cats').addEventListener('click', function () { closeSheet(sheet); openCatsSheet(); });
     }
@@ -19329,17 +19698,13 @@
         sheet.querySelectorAll('.tm-cat-ren').forEach(function (btn) {
             btn.addEventListener('click', function () {
                 var dd = load(); var idx = parseInt(btn.dataset.idx); var old = dd.categories[idx];
-                var nw = prompt('重命名（原：' + old + '）：', old); if (!nw || !nw.trim() || nw.trim() === old) return;
-                nw = nw.trim();
-                var renameResult = metadataApi.renameCategory(dd, old, nw);
-                if (!renameResult.ok) {
-                    var renameMessage = renameResult.reason === 'collision'
-                        ? '目标分类已存在，重命名已取消'
-                        : (renameResult.reason === 'reserved' ? '该名称为内部保留名称，请使用其他分类名' : '分类状态无法安全确认，重命名已取消');
-                    toast(renameMessage, true);
-                    return;
-                }
-                save(dd); closeSheet(sheet); renderCatbar(); openCatsSheet(); toast('已重命名');
+                if (!old) return;
+                openCategoryRenameSheet(old, function () {
+                    closeSheet(sheet);
+                    renderCatbar();
+                    openCatsSheet();
+                    toast('已重命名');
+                });
             });
         });
         sheet.querySelectorAll('.tm-cat-del').forEach(function (btn) {

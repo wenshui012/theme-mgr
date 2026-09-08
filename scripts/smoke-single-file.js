@@ -73,7 +73,6 @@ async function openCardEdit(page, cardKey) {
     await dismissHostDialogs(page);
     const card = page.locator(`.tm-card[data-key=${JSON.stringify(cardKey)}]`);
     await clickElement(card.locator('.tm-card-menu'));
-    await clickElement(page.locator('#tm-ctx-edit'));
     await page.locator('#tm-dsave').waitFor({ state: 'visible' });
 }
 
@@ -149,7 +148,8 @@ async function removeSmokeTheme(page) {
     const card = page.locator(`.tm-card[data-key=${JSON.stringify(key)}]`);
     if (!await card.count()) return false;
     await card.locator('.tm-card-menu').click();
-    await page.locator('#tm-ctx-delete').click();
+    await page.locator('#tm-edit-operation-section > summary').click();
+    await page.locator('#tm-edit-delete').click();
     await card.waitFor({ state: 'detached', timeout: 30_000 });
     return true;
 }

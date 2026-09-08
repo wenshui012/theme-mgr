@@ -533,13 +533,15 @@ async function measureCase(browser, count, dataset) {
             const menu = document.querySelector('.tm-card[data-key="theme:Theme 000002"] .tm-card-menu');
             if (!menu) throw new Error('lightbox fixture card is missing');
             menu.click();
-            const view = document.getElementById('tm-ctx-view');
+            const view = document.getElementById('tm-dview');
             if (!view) throw new Error('lightbox action is missing');
             view.click();
             const image = document.querySelector('.tm-lb-img');
             const source = image ? image.getAttribute('src') : '';
             const close = document.querySelector('.tm-lb-close');
             if (close) close.click();
+            const cancel = document.getElementById('tm-dcancel');
+            if (cancel) cancel.click();
             return { source, opened: !!image };
         });
         if (!lightbox.opened || !lightbox.source.includes('/full-2.png')) {
@@ -832,8 +834,12 @@ async function measureCase(browser, count, dataset) {
 
     await page.evaluate(() => document.querySelector('.tm-card-menu').click());
     const favorite = await page.evaluate(async () => {
-        return window.__measureGridAction(() => document.getElementById('tm-ctx-star').click(), { expectGeneration: false });
+        return window.__measureGridAction(() => {
+            document.getElementById('tm-edit-operation-section').open = true;
+            document.getElementById('tm-edit-star').click();
+        }, { expectGeneration: false });
     });
+    await page.evaluate(() => document.getElementById('tm-dcancel').click());
 
     const targetName = themes[Math.max(1, themes.length - 1)].name;
     const inventoryCallsBeforeSwitch = await page.evaluate(() => window.__fetchCounts['/api/settings/get'] || 0);
@@ -891,7 +897,6 @@ async function measureCase(browser, count, dataset) {
     await page.evaluate((key) => {
         const menu = Array.from(document.querySelectorAll('.tm-card-menu')).find((item) => item.dataset.key === key);
         menu.click();
-        document.getElementById('tm-ctx-edit').click();
     }, targetKey);
     await page.waitForSelector('#tm-dsave');
     const edit = await page.evaluate(async () => {
@@ -1025,7 +1030,7 @@ async function measureCase(browser, count, dataset) {
             const menu = document.querySelector('.tm-card-menu');
             if (menu) {
                 menu.click();
-                const view = document.getElementById('tm-ctx-view');
+                const view = document.getElementById('tm-dview');
                 if (view) view.click();
             }
         }

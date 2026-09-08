@@ -130,6 +130,18 @@
         };
     }
 
+    function removeOrphanMetadata(themeNames, themeMeta) {
+        if (!isObject(themeMeta)) return { removed: [], diagnostics: inspect(themeNames, themeMeta) };
+        var diagnostics = inspect(themeNames, themeMeta);
+        var removed = [];
+        diagnostics.orphanMetadata.forEach(function (name) {
+            if (!Object.prototype.hasOwnProperty.call(themeMeta, name)) return;
+            delete themeMeta[name];
+            removed.push(name);
+        });
+        return { removed: removed, diagnostics: diagnostics };
+    }
+
     function cloneValue(value) {
         return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
     }
@@ -276,6 +288,7 @@
         ensureMeta: ensureMeta,
         hasMeaningfulAnnotation: hasMeaningfulAnnotation,
         inspect: inspect,
+        removeOrphanMetadata: removeOrphanMetadata,
         mergeImported: mergeImported,
         RESERVED_CATEGORY_NAMES: RESERVED_CATEGORY_NAMES.slice(),
         isReservedCategoryName: isReservedCategoryName,

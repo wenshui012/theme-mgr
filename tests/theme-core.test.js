@@ -3664,6 +3664,21 @@ test('orphan and empty metadata are warnings and only current meaningful annotat
     assert.deepEqual(Object.keys(themeMeta), ['Current', 'Empty', 'Deleted']);
 });
 
+test('orphan metadata cleanup removes only names absent from the confirmed inventory', () => {
+    const themeMeta = metadata.createDictionary({
+        Current: { category: '保留', tags: ['keep'] },
+        EmptyCurrent: {},
+        Deleted: { category: '旧分类', tags: ['orphan'], imageData: 'keep-out-of-inventory-only' },
+    });
+
+    const result = metadata.removeOrphanMetadata(['Current', 'EmptyCurrent'], themeMeta);
+
+    assert.deepEqual(result.removed, ['Deleted']);
+    assert.deepEqual(Object.keys(themeMeta), ['Current', 'EmptyCurrent']);
+    assert.deepEqual(themeMeta.Current, { category: '保留', tags: ['keep'] });
+    assert.deepEqual(themeMeta.EmptyCurrent, {});
+});
+
 test('read-only metadata lookup for 1000 themes creates no empty records', () => {
     const data = { themeMeta: {} };
     for (let index = 0; index < 1000; index += 1) {
