@@ -5,6 +5,7 @@ global.window = global;
 global.ThemeMgrModules = {};
 require('../src/theme-schema.js');
 require('../src/theme-api.js');
+require('../src/update-manager.js');
 require('../src/theme-runtime.js');
 require('../src/theme-transactions.js');
 require('../src/theme-transfer.js');

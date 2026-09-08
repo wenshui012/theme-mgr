@@ -14,6 +14,7 @@ const DIST_README_PATH = path.join(DIST_DIR, 'README.md');
 const EXPECTED_MODULES = [
     'src/theme-schema.js',
     'src/theme-api.js',
+    'src/update-manager.js',
     'src/theme-runtime.js',
     'src/theme-transactions.js',
     'src/theme-transfer.js',

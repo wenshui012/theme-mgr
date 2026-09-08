@@ -69,6 +69,7 @@
     var styleApi = null;
     var themeSchema = null;
     var themeApi = null;
+    var extensionUpdater = null;
     var themeRuntime = null;
     var themeTransactions = null;
     var themeTransfer = null;
@@ -133,7 +134,7 @@
     function setupSupportModules(cb) {
             initUiEvents();
             var ok = true;
-            if (!ok || !modules.themeSchema || !modules.createThemeApi || !modules.createThemeRuntime ||
+            if (!ok || !modules.themeSchema || !modules.createThemeApi || !modules.createExtensionUpdater || !modules.createThemeRuntime ||
                 !modules.createThemeTransactions || !modules.createThemeTransfer ||
                 !modules.themeMetadata || !modules.editorDraft ||
                 !modules.themePairs ||
@@ -156,6 +157,7 @@
                     if (!modules.injectStyles) missing.push('styles.js');
                     if (!modules.themeSchema) missing.push('theme-schema.js');
                     if (!modules.createThemeApi) missing.push('theme-api.js');
+                    if (!modules.createExtensionUpdater) missing.push('update-manager.js');
                     if (!modules.createThemeRuntime) missing.push('theme-runtime.js');
                     if (!modules.createThemeTransactions) missing.push('theme-transactions.js');
                     if (!modules.createThemeTransfer) missing.push('theme-transfer.js');
@@ -181,6 +183,15 @@
             }
             themeSchema = modules.themeSchema;
             themeApi = modules.createThemeApi({ schema: themeSchema });
+            extensionUpdater = modules.createExtensionUpdater({
+                extensionName: 'theme-mgr',
+                trustedRemotes: ['https://github.com/wenshui012/theme-mgr'],
+                getPostHeaders: getPostHeaders,
+                onStateChange: function () {
+                    syncExtensionUpdateIndicator();
+                    syncExtensionUpdatePanel();
+                },
+            });
             themeRuntime = modules.createThemeRuntime({ schema: themeSchema, api: themeApi });
             themeTransactions = modules.createThemeTransactions({
                 schema: themeSchema,
@@ -1059,6 +1070,131 @@
 
     function getPostHeaders() {
         return themeApi.getPostHeaders();
+    }
+
+    function getExtensionUpdateState() {
+        return extensionUpdater ? extensionUpdater.getState() : {
+            phase: 'unsupported', checked: true, supported: false, available: false,
+            branch: '', commit: '', reason: 'module-unavailable',
+        };
+    }
+
+    function getExtensionUpdateView(state) {
+        state = state || getExtensionUpdateState();
+        var view = {
+            status: '尚未检查更新',
+            detail: '',
+            action: '检查更新',
+            disabled: false,
+            mode: 'check',
+        };
+        if (state.phase === 'checking') {
+            view.status = '正在检查更新…';
+            view.action = '正在检查…';
+            view.disabled = true;
+        } else if (state.phase === 'ready' && state.available) {
+            view.status = '发现新版本';
+            view.action = '更新并刷新';
+            view.mode = 'update';
+        } else if (state.phase === 'ready') {
+            view.status = '当前已是最新版本';
+            view.action = '重新检查';
+        } else if (state.phase === 'updating') {
+            view.status = '正在更新插件…';
+            view.action = '正在更新…';
+            view.disabled = true;
+            view.mode = 'update';
+        } else if (state.phase === 'updated') {
+            view.status = '更新成功，正在刷新…';
+            view.action = '更新完成';
+            view.disabled = true;
+            view.mode = 'update';
+        } else if (state.phase === 'unsupported') {
+            view.status = state.reason === 'untrusted-remote' ? '安装来源与官方仓库不一致' : '当前安装不支持在线更新';
+            view.detail = state.reason === 'untrusted-remote'
+                ? '为避免从未知来源覆盖插件，请使用酒馆扩展管理器检查安装来源。'
+                : '在线更新需要通过 Git 安装；直接复制或 ZIP 安装请手动更新。';
+            view.action = '无法在线更新';
+            view.disabled = true;
+        } else if (state.phase === 'error') {
+            view.status = '检查或更新失败，当前文件未被覆盖';
+            view.detail = '请检查网络、Git 状态或酒馆服务日志后重试。';
+            view.action = '重新检查';
+        }
+        if (!view.detail && state.branch) {
+            view.detail = '当前分支：' + state.branch + (state.commit ? ' · ' + state.commit.slice(0, 7) : '');
+        }
+        return view;
+    }
+
+    function syncExtensionUpdateIndicator() {
+        var button = document.getElementById('tm-bottom-settings');
+        if (!button) return;
+        var dot = button.querySelector('.tm-update-dot');
+        if (!dot) return;
+        var state = getExtensionUpdateState();
+        dot.hidden = !(state.phase === 'ready' && state.available === true);
+        button.classList.toggle('has-update', !dot.hidden);
+        button.title = dot.hidden ? '设置' : '设置（有可用更新）';
+    }
+
+    function syncExtensionUpdatePanel() {
+        var state = getExtensionUpdateState();
+        var view = getExtensionUpdateView(state);
+        document.querySelectorAll('.tm-update-panel').forEach(function (panel) {
+            panel.classList.toggle('has-update', state.phase === 'ready' && state.available === true);
+            var status = panel.querySelector('.tm-update-status');
+            var detail = panel.querySelector('.tm-update-detail');
+            var action = panel.querySelector('.tm-update-action');
+            if (status) status.textContent = view.status;
+            if (detail) {
+                detail.textContent = view.detail;
+                detail.hidden = !view.detail;
+            }
+            if (action) {
+                action.innerHTML = (view.mode === 'update' ? '<i class="fa-solid fa-download"></i> ' : '<i class="fa-solid fa-rotate"></i> ') + esc(view.action);
+                action.disabled = view.disabled;
+                action.dataset.updateMode = view.mode;
+            }
+        });
+    }
+
+    function checkExtensionUpdate(force) {
+        if (!extensionUpdater) return Promise.resolve(getExtensionUpdateState());
+        return extensionUpdater.check({ force: force === true }).catch(function (error) {
+            console.warn('[美化管理] 在线更新检查失败:', error);
+            throw error;
+        });
+    }
+
+    function openExtensionUpdateConfirmSheet() {
+        var state = getExtensionUpdateState();
+        if (!extensionUpdater || state.phase !== 'ready' || !state.available) {
+            toast('当前没有可安装的更新', true);
+            return;
+        }
+        var confirmSheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid fa-cloud-arrow-down"></i>更新美化管理</div>',
+            '<div class="tm-update-confirm-copy"><strong>更新当前安装分支并刷新页面？</strong><p>将由 SillyTavern 官方扩展接口执行 Git 更新。不会读取或上传聊天、角色卡、密钥及美化数据。</p>' +
+            (state.branch ? '<small>当前分支：' + esc(state.branch) + '</small>' : '') + '</div>',
+            '<div class="tm-edit-foot"><button type="button" class="tm-btn tm-btn-outline" id="tm-update-cancel">取消</button><button type="button" class="tm-btn tm-btn-safe" id="tm-update-confirm"><i class="fa-solid fa-download"></i> 更新并刷新</button></div>',
+        ].join(''));
+        confirmSheet.querySelector('#tm-update-cancel').addEventListener('click', function () { closeSheet(confirmSheet); });
+        confirmSheet.querySelector('#tm-update-confirm').addEventListener('click', function () {
+            var button = this;
+            button.disabled = true;
+            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在更新…';
+            extensionUpdater.update().then(function () {
+                toast('✅ 更新成功，正在刷新页面');
+                global.setTimeout(function () {
+                    if (global.location && typeof global.location.reload === 'function') global.location.reload();
+                }, 900);
+            }).catch(function (error) {
+                closeSheet(confirmSheet);
+                console.warn('[美化管理] 在线更新失败:', error);
+                toast('更新失败，当前插件文件未被覆盖；请检查网络或 Git 状态', true);
+            });
+        });
     }
 
     function dispatchPreparedNativeThemeChange(themeEl, themeName, bypassLazyGuard) {
@@ -3615,12 +3751,14 @@
             '<button type="button" class="tm-bottom-status tm-avatars-only" id="tm-avatar-bottom-status" title="调整当前角色卡原头像"></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
-            '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i></button>' +
+            '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
             '</div>' +
             '<div id="tm-popup-slot" style="position:absolute;inset:0;pointer-events:none;z-index:20;isolation:isolate;">' + pageMenuHtml + '</div>' +
             '</div>';
 
         document.body.appendChild(ov);
+        syncExtensionUpdateIndicator();
+        checkExtensionUpdate(false).catch(function () {});
         createAppShellController(ov);
         if (lastAppPage === 'avatars') {
             avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
@@ -5659,6 +5797,8 @@
             '<div class="tm-field"><label>角色 / 聊天绑定</label><button type="button" class="tm-theme-bind-card" id="tm-theme-bind-overview">' + buildBindingsOverviewHtml() + '</button></div>' +
             '<div class="tm-field"><label>User 头像绑定</label><button type="button" class="tm-theme-bind-card" id="tm-user-avatar-bind-overview"><span class="tm-theme-bind-icon"><i class="fa-solid fa-user"></i></span><span class="tm-theme-bind-copy"><strong>User 头像绑定</strong><small>正在读取头像绑定…</small></span><i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i></button></div>';
         var annotationFieldsHtml =
+            '<div class="tm-field"><label>分类</label><button type="button" class="tm-picker-trigger" id="tm-edit-category-trigger"></button></div>' +
+            '<div class="tm-field"><label>标签</label><button type="button" class="tm-picker-trigger" id="tm-edit-tags-trigger"></button></div>' +
             '<div class="tm-field"><label>作者</label><input type="text" id="tm-dauthor" placeholder="主题作者名" value="' + esc(meta.author || '') + '" /></div>' +
             '<div class="tm-field"><label>备注</label><textarea id="tm-ddesc" rows="2" placeholder="主题特点、适用场景等">' + esc(meta.description || '') + '</textarea></div>';
         var operationFieldsHtml =
@@ -5676,17 +5816,16 @@
                 '<button type="button" data-variant="night" class="' + (selectedVariant === 'night' ? 'on' : '') + '" title="编辑并应用夜间版"><i class="fa-solid fa-moon"></i></button>' +
                 '</div>' : '') + '</div>',
             '<div class="tm-field"><label>美化名称</label><input type="text" id="tm-edit-name" maxlength="80" value="' + esc(pair ? pair.name : item.name) + '" /></div>',
-            '<div class="tm-field"><label>分类</label><button type="button" class="tm-picker-trigger" id="tm-edit-category-trigger"></button></div>',
-            '<div class="tm-field"><label>标签</label><button type="button" class="tm-picker-trigger" id="tm-edit-tags-trigger"></button></div>',
+            buildDisclosureHtml('tm-edit-annotation-section', '标注信息', 'fa-note-sticky', annotationFieldsHtml),
+            buildDisclosureHtml('tm-edit-binding-section', '绑定信息', 'fa-link', bindingFieldsHtml),
+            buildDisclosureHtml('tm-edit-operation-section', '其他操作', 'fa-ellipsis', operationFieldsHtml),
             '<div class="tm-field"><label>预览截图</label>' +
             '<div class="tm-imgarea" id="tm-dimgarea">' + (editPreviewData ? '<img src="' + esc(editPreviewData) + '" />' : '<div class="tm-imgph"><i class="fa-regular fa-image"></i><span>点击或拖拽上传截图</span></div>') + '</div>' +
             '<input type="file" id="tm-dfile" accept="image/*" style="display:none" />' +
             '<div class="tm-img-actions"></div></div>',
-            buildDisclosureHtml('tm-edit-binding-section', '绑定信息', 'fa-link', bindingFieldsHtml),
-            buildDisclosureHtml('tm-edit-annotation-section', '其他标注', 'fa-note-sticky', annotationFieldsHtml),
-            buildDisclosureHtml('tm-edit-operation-section', '其他操作', 'fa-ellipsis', operationFieldsHtml),
             '<div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" id="tm-dcopy-diagnostic" style="display:none">复制诊断</button><button class="tm-btn tm-btn-outline" id="tm-dcancel">取消</button><button class="tm-btn tm-btn-safe" id="tm-dsave">保存</button></div>',
         ].join(''));
+        sheet.classList.add('tm-sheet-tall');
 
         function renderBackgroundBind() {
             sheet.querySelector('#tm-bg-bind').innerHTML = buildBackgroundBindHtml(editBackgroundName);
@@ -6409,6 +6548,8 @@
     // ── 设置 ─────────────────────────────────────────────────
     function openSettingsSheet() {
         var d = load();
+        var updateState = getExtensionUpdateState();
+        var updateView = getExtensionUpdateView(updateState);
         var metadataDiagnostics = metadataApi.inspect(stThemeList, d.themeMeta);
         var metaCount = metadataDiagnostics.annotatedCount;
         var orphanMetaCount = metadataDiagnostics.orphanMetadata.length;
@@ -6451,6 +6592,14 @@
             '<button class="tm-btn tm-btn-danger" id="tm-clear-orphan"><i class="fa-solid fa-broom"></i><span><strong>清除孤儿标注</strong><small>只删除可靠主题清单中已不存在美化的 metadata</small></span></button>' +
             '<button class="tm-btn tm-btn-danger" id="tm-clear-all-annotations"><i class="fa-solid fa-trash-can"></i><span><strong>清空全部标注</strong><small>清空分类、标签、截图等全部附加信息</small></span></button>' +
             '</div>';
+        var extensionInfoHtml =
+            '<div class="tm-update-panel' + (updateState.phase === 'ready' && updateState.available ? ' has-update' : '') + '">' +
+            '<div class="tm-update-panel-head"><div><strong>美化管理 v' + esc(TM_VERSION) + '</strong><span class="tm-update-status">' + esc(updateView.status) + '</span></div>' +
+            '<button type="button" class="tm-btn tm-btn-outline tm-update-action" id="tm-update-action" data-update-mode="' + esc(updateView.mode) + '"' + (updateView.disabled ? ' disabled' : '') + '>' +
+            (updateView.mode === 'update' ? '<i class="fa-solid fa-download"></i> ' : '<i class="fa-solid fa-rotate"></i> ') + esc(updateView.action) + '</button></div>' +
+            '<div class="tm-update-detail"' + (updateView.detail ? '' : ' hidden') + '>' + esc(updateView.detail) + '</div>' +
+            '<div class="tm-plugin-credit"><span>作者：温水</span><span>发布于毛毛雨美化群、旅程</span></div>' +
+            '</div>';
 
         var sheet = createSheet([
             '<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>',
@@ -6473,7 +6622,22 @@
                 '<div class="tm-hint" style="margin-bottom:8px">用于修复旧版本遗留的固定头像。会清除全局 User 头像、所有美化专属 User 绑定与候选、User 原头像调整；不会删除头像库，也不会影响角色头像。</div>',
                 '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>',
             ].join('') : '',
+            extensionInfoHtml,
         ].join(''));
+        sheet.classList.add('tm-sheet-tall', 'tm-settings-sheet');
+        syncExtensionUpdatePanel();
+
+        sheet.querySelector('#tm-update-action').addEventListener('click', function () {
+            var state = getExtensionUpdateState();
+            if (state.phase === 'ready' && state.available) {
+                openExtensionUpdateConfirmSheet();
+                return;
+            }
+            this.disabled = true;
+            checkExtensionUpdate(true).catch(function () {
+                toast('检查更新失败；请检查网络、Git 状态或酒馆服务日志', true);
+            });
+        });
 
         var followAppearanceInput = sheet.querySelector('#tm-follow-appearance');
         var showThemeAvatarFrameInput = sheet.querySelector('#tm-show-theme-avatar-frame');

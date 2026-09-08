@@ -980,7 +980,7 @@ test('81 avatar settings exposes a confirmed complete User recovery action', () 
 
 test('82 development module loading replaces stale-build scripts and uses a build cache token', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-    assert.match(source, /TM_BUILD = 'beauty-ui-editor-r1'/);
+    assert.match(source, /TM_BUILD = 'beauty-ui-update-r1'/);
     assert.match(source, /existing\.dataset\.themeMgrBuild === TM_BUILD/);
     assert.match(source, /existing\.parentNode\.removeChild\(existing\)/);
     assert.match(source, /encodeURIComponent\(MODULE_LOAD_TOKEN\)/);

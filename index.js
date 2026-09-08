@@ -1,7 +1,7 @@
 // ST美化管理扩展 v4.0.5 - 模块装配与总入口
 (function () {
     var TM_VERSION = '4.0.5';
-    var TM_BUILD = 'beauty-ui-editor-r1';
+    var TM_BUILD = 'beauty-ui-update-r1';
     var MODULE_LOAD_TOKEN = TM_VERSION + '-' + TM_BUILD;
 
     function getExtensionBaseUrl() {
@@ -43,6 +43,7 @@
         var files = [
             'src/theme-schema.js',
             'src/theme-api.js',
+            'src/update-manager.js',
             'src/theme-runtime.js',
             'src/theme-transactions.js',
             'src/theme-transfer.js',

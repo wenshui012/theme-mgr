@@ -15,19 +15,19 @@ test('theme card ellipsis opens the editor directly while preserving click isola
     assert.doesNotMatch(source, /function openContextMenu/);
 });
 
-test('theme editor keeps permanent fields before the three requested disclosure groups', () => {
+test('theme editor keeps the name permanent, moves annotations first and leaves preview last', () => {
     const editor = source.slice(source.indexOf('function openEditSheet'), source.indexOf('function mergeImportedAnnotations'));
-    const title = editor.indexOf('编辑美化');
-    const name = editor.indexOf('id="tm-edit-name"');
-    const category = editor.indexOf('id="tm-edit-category-trigger"');
-    const tags = editor.indexOf('id="tm-edit-tags-trigger"');
-    const preview = editor.indexOf('id="tm-dimgarea"');
-    const bindings = editor.indexOf("buildDisclosureHtml('tm-edit-binding-section'");
-    const annotations = editor.indexOf("buildDisclosureHtml('tm-edit-annotation-section'");
-    const operations = editor.indexOf("buildDisclosureHtml('tm-edit-operation-section'");
+    const markup = editor.slice(editor.indexOf('var sheet = createSheet'), editor.indexOf('function renderBackgroundBind'));
+    const title = markup.indexOf('编辑美化');
+    const name = markup.indexOf('id="tm-edit-name"');
+    const annotations = markup.indexOf("buildDisclosureHtml('tm-edit-annotation-section', '标注信息'");
+    const bindings = markup.indexOf("buildDisclosureHtml('tm-edit-binding-section'");
+    const operations = markup.indexOf("buildDisclosureHtml('tm-edit-operation-section'");
+    const preview = markup.indexOf('id="tm-dimgarea"');
     assert.ok(title >= 0 && title < name);
-    assert.ok(name < category && category < tags && tags < preview);
-    assert.ok(preview < bindings && bindings < annotations && annotations < operations);
+    assert.ok(name < annotations && annotations < bindings && bindings < operations && operations < preview);
+    assert.match(editor, /var annotationFieldsHtml =[\s\S]*id="tm-edit-category-trigger"[\s\S]*id="tm-edit-tags-trigger"[\s\S]*id="tm-dauthor"[\s\S]*id="tm-ddesc"/);
+    assert.match(markup, /sheet\.classList\.add\('tm-sheet-tall'\)/);
 });
 
 test('current binding actions stay inside the binding overview scope', () => {
@@ -61,4 +61,18 @@ test('settings keep clear-all and reliable orphan cleanup as separate actions', 
     assert.match(settings, /fetchThemeList\(function \(\)/);
     assert.match(settings, /if \(!stThemeListReliable\)/);
     assert.match(settings, /metadataApi\.removeOrphanMetadata/);
+});
+
+test('settings use the tall sheet and expose version, credit and safe update controls', () => {
+    const settings = source.slice(source.indexOf('function openSettingsSheet'), source.indexOf('// ── 分类管理'));
+    assert.match(settings, /sheet\.classList\.add\('tm-sheet-tall', 'tm-settings-sheet'\)/);
+    assert.match(settings, /美化管理 v/);
+    assert.match(settings, /作者：温水/);
+    assert.match(settings, /发布于毛毛雨美化群、旅程/);
+    assert.match(settings, /id="tm-update-action"/);
+    const confirmSheet = source.slice(source.indexOf('function openExtensionUpdateConfirmSheet'), source.indexOf('function dispatchPreparedNativeThemeChange'));
+    assert.match(confirmSheet, /extensionUpdater\.update\(\)/);
+    assert.match(confirmSheet, /global\.location\.reload\(\)/);
+    assert.doesNotMatch(confirmSheet, /\bconfirm\s*\(/);
+    assert.match(source, /class="tm-update-dot" hidden/);
 });
