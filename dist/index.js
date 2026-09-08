@@ -9104,7 +9104,7 @@
 })(window);
 /* END MODULE 17/25: src/avatar-image-tools.js */
 
-/* BEGIN MODULE 18/25: src/avatar-runtime.js | sha256:06c7aaf26aaf99f6cd03a923d53fa914c10933ee9525fcd95181f76ed3e40127 */
+/* BEGIN MODULE 18/25: src/avatar-runtime.js | sha256:b2df76211e2da7537e081b860787df1b28d98e94719dcea6d3c53405eecf1bc1 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -9112,7 +9112,11 @@
     var SCALE_STEP = 0.05;
     var POSITION_STEP = 0.05;
     var ROTATE_STEP = 1;
-    var SOURCE_CACHE_LIMIT = 8;
+    var SOURCE_CACHE_LIMIT = 2;
+    var SOURCE_ASSET_CACHE_LIMIT = 2;
+    var SOURCE_EDGE_MARGIN = 1;
+    var EDITOR_PREVIEW_MAX_DIMENSION = 384;
+    var EDITOR_SETTLE_DELAY = 120;
     var TOOLBAR_ID = 'tm-avatar-editor-toolbar';
     var STYLE_ID = 'tm-avatar-editor-style';
     var TARGET_CLASS = 'tm-avatar-editor-target';
@@ -9294,6 +9298,24 @@
     }
     function objectViewBoxForView(view) {
         view = normalizeView(view);
+        var geometry = arguments[1];
+        if (geometry && Number(geometry.canvasWidth) > 0 && Number(geometry.canvasHeight) > 0) {
+            var canvasWidth = Number(geometry.canvasWidth);
+            var canvasHeight = Number(geometry.canvasHeight);
+            var logicalWidth = Number(geometry.logicalWidth) || canvasWidth;
+            var logicalHeight = Number(geometry.logicalHeight) || canvasHeight;
+            var logicalLeft = Number.isFinite(Number(geometry.logicalLeft)) ? Number(geometry.logicalLeft) : (canvasWidth - logicalWidth) / 2;
+            var logicalTop = Number.isFinite(Number(geometry.logicalTop)) ? Number(geometry.logicalTop) : (canvasHeight - logicalHeight) / 2;
+            var visibleWidth = logicalWidth / view.scale;
+            var visibleHeight = logicalHeight / view.scale;
+            var leftPixels = logicalLeft + (logicalWidth - visibleWidth) / 2 - view.x * visibleWidth;
+            var topPixels = logicalTop + (logicalHeight - visibleHeight) / 2 - view.y * visibleHeight;
+            var rightPixels = canvasWidth - leftPixels - visibleWidth;
+            var bottomPixels = canvasHeight - topPixels - visibleHeight;
+            return 'inset(' + [topPixels / canvasHeight, rightPixels / canvasWidth, bottomPixels / canvasHeight, leftPixels / canvasWidth].map(function (value) {
+                return round(value * 100, 4) + '%';
+            }).join(' ') + ')';
+        }
         var visible = 1 / view.scale;
         var centerInset = (1 - visible) / 2;
         var left = centerInset - view.x / view.scale;
@@ -9301,6 +9323,60 @@
         var right = 1 - visible - left;
         var bottom = 1 - visible - top;
         return 'inset(' + [top, right, bottom, left].map(function (value) { return round(value * 100, 4) + '%'; }).join(' ') + ')';
+    }
+    function transformedSourceGeometry(asset, view) {
+        view = normalizeView(view);
+        var width = Math.max(1, Number(asset && asset.width) || 1);
+        var height = Math.max(1, Number(asset && asset.height) || 1);
+        var radians = view.rotate * Math.PI / 180;
+        var cosine = Math.abs(Math.cos(radians));
+        var sine = Math.abs(Math.sin(radians));
+        if (cosine < 1e-12) cosine = 0;
+        if (sine < 1e-12) sine = 0;
+        var rotatedWidth = width * cosine + height * sine;
+        var rotatedHeight = width * sine + height * cosine;
+        var canvasWidth = Math.ceil(Math.max(width, rotatedWidth) + SOURCE_EDGE_MARGIN * 2);
+        var canvasHeight = Math.ceil(Math.max(height, rotatedHeight) + SOURCE_EDGE_MARGIN * 2);
+        return {
+            canvasWidth: canvasWidth,
+            canvasHeight: canvasHeight,
+            logicalWidth: width,
+            logicalHeight: height,
+            logicalLeft: (canvasWidth - width) / 2,
+            logicalTop: (canvasHeight - height) / 2,
+            rotatedWidth: rotatedWidth,
+            rotatedHeight: rotatedHeight,
+        };
+    }
+    function editorPreviewGeometry(asset) {
+        var width = Math.max(1, Number(asset && asset.width) || 1);
+        var height = Math.max(1, Number(asset && asset.height) || 1);
+        var envelope = Math.sqrt(width * width + height * height);
+        var canvasWidth = Math.ceil(Math.max(width, envelope) + SOURCE_EDGE_MARGIN * 2);
+        var canvasHeight = Math.ceil(Math.max(height, envelope) + SOURCE_EDGE_MARGIN * 2);
+        return {
+            canvasWidth: canvasWidth,
+            canvasHeight: canvasHeight,
+            logicalWidth: width,
+            logicalHeight: height,
+            logicalLeft: (canvasWidth - width) / 2,
+            logicalTop: (canvasHeight - height) / 2,
+            rotatedWidth: envelope,
+            rotatedHeight: envelope,
+            previewEnvelope: true,
+        };
+    }
+    function editorPreviewAsset(asset) {
+        if (!asset || !/^data:image\//i.test(asset.thumbData || '') || asset.thumbData === asset.imageData) return asset;
+        var width = Math.max(1, Number(asset.width) || 1);
+        var height = Math.max(1, Number(asset.height) || 1);
+        var ratio = Math.min(1, EDITOR_PREVIEW_MAX_DIMENSION / Math.max(width, height));
+        return {
+            id: asset.id + ':editor-preview',
+            imageData: asset.thumbData,
+            width: Math.max(1, round(width * ratio, 3)),
+            height: Math.max(1, round(height * ratio, 3)),
+        };
     }
     function setImportantStyle(element, name, value) {
         if (element && element.style && typeof element.style.setProperty === 'function') {
@@ -9352,6 +9428,7 @@
         var promotedBindings = new Map();
         var rotatedSources = new Map();
         var nativeImageCache = new Map();
+        var runtimeAttributeValues = new WeakMap();
         var listeners = [];
         var chatObserver = null;
         var observedChat = null;
@@ -9366,10 +9443,29 @@
         var styleNode = null;
         var toolbarViewport = null;
         var editorRenderFrame = null;
+        var editorSettleTimer = null;
+        var editorSyncAll = false;
+        var editorControlActive = false;
+        var editorPreviewSettled = true;
         var activePointer = null;
         var dragOrigin = null;
         var temporaryUserOverride = null;
         var hostSourceTargets = new Set();
+
+        function syncRuntimeAttribute(element, name, value) {
+            if (!syncExactAttribute(element, name, value)) return false;
+            var expected = runtimeAttributeValues.get(element);
+            if (!expected) { expected = {}; runtimeAttributeValues.set(element, expected); }
+            var normalized = value == null ? null : String(value);
+            expected[name] = normalized;
+            return true;
+        }
+        function isRuntimeAttributeMutation(record) {
+            if (!record || record.type !== 'attributes' || (record.attributeName !== 'src' && record.attributeName !== 'srcset')) return false;
+            var expected = runtimeAttributeValues.get(record.target);
+            return Boolean(expected && Object.prototype.hasOwnProperty.call(expected, record.attributeName) &&
+                expected[record.attributeName] === getAttribute(record.target, record.attributeName));
+        }
 
         function requireMutable() {
             if (canMutate()) return null;
@@ -9392,24 +9488,35 @@
                 var href = String(asset.imageData).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                 cached = {
                     imageData: asset.imageData,
-                    centerX: round(width / 2, 3),
-                    centerY: round(height / 2, 3),
-                    prefix: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '"><image href="' + href + '" width="' + width + '" height="' + height + '" transform="'),
-                    suffix: encodeURIComponent('"/></svg>'),
+                    width: width,
+                    height: height,
+                    encodedHref: encodeURIComponent(href),
                     sources: new Map(),
                 };
+                while (rotatedSources.size >= SOURCE_ASSET_CACHE_LIMIT) rotatedSources.delete(rotatedSources.keys().next().value);
+                rotatedSources.set(asset.id, cached);
+            } else {
+                rotatedSources.delete(asset.id);
                 rotatedSources.set(asset.id, cached);
             }
             return cached;
         }
-        function sourceForView(asset, view) {
+        function sourceForView(asset, view, geometryOverride) {
             view = normalizeView(view);
-            if (!view.rotate && !view.flipX && !view.flipY) return asset.imageData;
-            var signature = [view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1].join(':');
+            if (!geometryOverride && !view.rotate && !view.flipX && !view.flipY) return { source: asset.imageData, geometry: null };
+            var signature = [geometryOverride ? 'envelope' : 'exact', view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1].join(':');
             var cached = ensureSourceCache(asset);
             if (cached.sources.has(signature)) return cached.sources.get(signature);
-            var transform = 'translate(' + cached.centerX + ' ' + cached.centerY + ') rotate(' + view.rotate + ') scale(' + (view.flipX ? -1 : 1) + ' ' + (view.flipY ? -1 : 1) + ') translate(' + (-cached.centerX) + ' ' + (-cached.centerY) + ')';
-            var source = cached.prefix + encodeURIComponent(transform) + cached.suffix;
+            var geometry = geometryOverride || transformedSourceGeometry(asset, view);
+            var centerX = round(geometry.canvasWidth / 2, 3);
+            var centerY = round(geometry.canvasHeight / 2, 3);
+            var transform = 'translate(' + centerX + ' ' + centerY + ') rotate(' + view.rotate + ') scale(' + (view.flipX ? -1 : 1) + ' ' + (view.flipY ? -1 : 1) + ') translate(' + round(-cached.width / 2, 3) + ' ' + round(-cached.height / 2, 3) + ')';
+            var prefix = '<svg xmlns="http://www.w3.org/2000/svg" width="' + geometry.canvasWidth + '" height="' + geometry.canvasHeight + '" viewBox="0 0 ' + geometry.canvasWidth + ' ' + geometry.canvasHeight + '"><image href="';
+            var suffix = '" width="' + cached.width + '" height="' + cached.height + '" transform="' + transform + '"/></svg>';
+            var source = {
+                source: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(prefix) + cached.encodedHref + encodeURIComponent(suffix),
+                geometry: geometry,
+            };
             if (cached.sources.size >= SOURCE_CACHE_LIMIT) cached.sources.delete(cached.sources.keys().next().value);
             cached.sources.set(signature, source);
             return source;
@@ -9476,8 +9583,8 @@
             var record = baselines.get(image);
             if (!record) return;
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
-            syncExactAttribute(image, 'src', record.src);
-            syncExactAttribute(image, 'srcset', record.srcset);
+            syncRuntimeAttribute(image, 'src', record.src);
+            syncRuntimeAttribute(image, 'srcset', record.srcset);
             setExactAttribute(image, 'style', record.style);
             if (!record.targetClass) image.classList.remove(TARGET_CLASS);
             if (image.parentElement && !record.avatarClass) image.parentElement.classList.remove(AVATAR_CLASS);
@@ -9494,13 +9601,14 @@
         function restoreAll() {
             Array.from(activeImages).forEach(restoreImage);
         }
-        function applyToEntry(entry, asset, view, targetKey) {
+        function applyToEntry(entry, asset, view, targetKey, preview) {
             var image = entry.image;
             var record = captureBaseline(image);
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
-            syncExactAttribute(image, 'srcset', null);
-            var source = sourceForView(asset, view);
-            syncExactAttribute(image, 'src', source);
+            syncRuntimeAttribute(image, 'srcset', null);
+            var sourceAsset = preview ? editorPreviewAsset(asset) : asset;
+            var renderedSource = sourceForView(sourceAsset, view, preview ? editorPreviewGeometry(sourceAsset) : null);
+            syncRuntimeAttribute(image, 'src', renderedSource.source);
             // Some theme CSS uses `content: url(...)` on avatar images. That
             // replaces the replaced element's rendered content and wins over
             // the new src, leaving a stale avatar visible even though the DOM
@@ -9509,7 +9617,7 @@
             if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
                 throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
             }
-            setImportantStyle(image, 'object-view-box', objectViewBoxForView(view));
+            setImportantStyle(image, 'object-view-box', objectViewBoxForView(view, renderedSource.geometry));
             record.targetKey = targetKey || '';
             activeImages.add(image);
         }
@@ -9521,8 +9629,8 @@
             var nativeAsset = nativeAssetForEntry(entry, target);
             var transformsSource = Boolean(normalized.x || normalized.y || normalized.scale !== 1 || normalized.rotate || normalized.flipX || normalized.flipY);
             if (!transformsSource) {
-                syncExactAttribute(image, 'src', record.src || nativeAsset.imageData);
-                syncExactAttribute(image, 'srcset', record.srcset);
+                syncRuntimeAttribute(image, 'src', record.src || nativeAsset.imageData);
+                syncRuntimeAttribute(image, 'srcset', record.srcset);
                 setExactAttribute(image, 'style', record.style);
                 setImportantStyle(image, 'content', 'normal');
                 record.targetKey = target && target.key || '';
@@ -9745,10 +9853,23 @@
             });
             return true;
         }
+        function syncEditorRepresentative() {
+            if (!editor || !editor.representative || editor.representative.image.isConnected === false) {
+                if (editor) cancelEdit('target-disconnected');
+                return false;
+            }
+            if (editor.mode === 'native') applyNativeToEntry(editor.representative, editor.view, editor.target, editor.asset);
+            else applyToEntry(editor.representative, editor.asset, editor.view, editor.target.key, !editorPreviewSettled);
+            return true;
+        }
         function reconcile() {
             var request = ++sequence;
             var requestedThemeKey = currentThemeKey();
-            if (editor) { syncEditorInstances(); return Promise.resolve({ editing: true }); }
+            if (editor) {
+                if (editorPreviewSettled) syncEditorInstances();
+                else syncEditorRepresentative();
+                return Promise.resolve({ editing: true });
+            }
             return Promise.resolve(store.ready).then(function () { return resolveRuntimeDesired(requestedThemeKey); }).then(function (desired) {
                 if (request !== sequence || editor || requestedThemeKey !== currentThemeKey()) return { superseded: true };
                 hasRuntimeBinding = desired.hasBinding;
@@ -9763,7 +9884,7 @@
             reconcileTimer = win.setTimeout(function () { reconcileTimer = null; reconcile(); }, delay == null ? 40 : delay);
         }
         function applyCachedPlans() {
-            if (editor) return syncEditorInstances();
+            if (editor) return editorPreviewSettled ? syncEditorInstances() : syncEditorRepresentative();
             if (!bindingPlans.length) return false;
             try {
                 applyDesired(bindingPlans.reduce(function (all, plan) { return all.concat(desiredForPlan(plan)); }, []));
@@ -9784,7 +9905,8 @@
             if (chatObserver) chatObserver.disconnect();
             observedChat = chat;
             if (!chat || typeof win.MutationObserver !== 'function') return;
-            chatObserver = new win.MutationObserver(function () {
+            chatObserver = new win.MutationObserver(function (records) {
+                if (records && records.length && records.every(isRuntimeAttributeMutation)) return;
                 applyCachedPlans();
                 scheduleReconcile(0);
             });
@@ -9959,6 +10081,10 @@
                     : '') + '<div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">↔ 水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">↕ 垂直</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
             toolbar.addEventListener('click', onToolbarClick);
             toolbar.addEventListener('input', onToolbarInput);
+            toolbar.addEventListener('change', onToolbarCommit);
+            toolbar.addEventListener('pointerdown', onToolbarPointerStart);
+            toolbar.addEventListener('pointerup', onToolbarPointerEnd);
+            toolbar.addEventListener('pointercancel', onToolbarPointerEnd);
             toolbarRoot.appendChild(toolbar);
             doc.body.appendChild(toolbarHost);
             bindToolbarViewport();
@@ -10011,14 +10137,21 @@
         function finishEditorUi() {
             unbindRepresentative();
             unbindToolbarViewport();
+            cancelEditorSettle();
             cancelEditorSync();
             if (toolbar) toolbar.removeEventListener('click', onToolbarClick);
             if (toolbar) toolbar.removeEventListener('input', onToolbarInput);
+            if (toolbar) toolbar.removeEventListener('change', onToolbarCommit);
+            if (toolbar) toolbar.removeEventListener('pointerdown', onToolbarPointerStart);
+            if (toolbar) toolbar.removeEventListener('pointerup', onToolbarPointerEnd);
+            if (toolbar) toolbar.removeEventListener('pointercancel', onToolbarPointerEnd);
             if (toolbarHost && toolbarHost.parentNode) toolbarHost.parentNode.removeChild(toolbarHost);
             if (styleNode && styleNode.parentNode) styleNode.parentNode.removeChild(styleNode);
             toolbarHost = null;
             toolbar = null;
             styleNode = null;
+            editorControlActive = false;
+            editorPreviewSettled = true;
         }
         function beginEdit(input) {
             var mutationError = requireMutable();
@@ -10079,11 +10212,13 @@
                     representative: cap.representative,
                     diagnostics: null,
                 };
-                if (!rotatedSources.has(asset.id)) {
-                    win.setTimeout(function () {
-                        if (editor && editor.asset.id === asset.id) ensureSourceCache(asset);
-                    }, 0);
-                }
+                editorPreviewSettled = true;
+                win.setTimeout(function () {
+                    if (editor && editor.asset.id === asset.id) {
+                        ensureSourceCache(asset);
+                        ensureSourceCache(editorPreviewAsset(asset));
+                    }
+                }, 0);
                 if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
                     try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
                 }
@@ -10125,6 +10260,7 @@
                     representative: cap.representative,
                     diagnostics: null,
                 };
+                editorPreviewSettled = true;
                 if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
                     try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
                 }
@@ -10160,8 +10296,10 @@
             if (!editor || activePointer == null || !dragOrigin || event.pointerId != null && event.pointerId !== activePointer) return;
             editor.view.x = round(dragOrigin.view.x + ((Number(event.clientX) || 0) - dragOrigin.clientX) / dragOrigin.width);
             editor.view.y = round(dragOrigin.view.y + ((Number(event.clientY) || 0) - dragOrigin.clientY) / dragOrigin.height);
+            editorPreviewSettled = false;
             updateToolbar();
             scheduleEditorSync();
+            scheduleEditorSettle();
             event.preventDefault(); event.stopImmediatePropagation();
         }
         function onPointerUp(event) {
@@ -10169,6 +10307,7 @@
             endDrag(event);
         }
         function endDrag(event) {
+            var completedDrag = activePointer != null && dragOrigin;
             if (activePointer != null && editor && editor.representative) {
                 try { editor.representative.image.releasePointerCapture(activePointer); } catch (_) {}
             }
@@ -10177,26 +10316,54 @@
             doc.removeEventListener('pointermove', onPointerMove, true);
             doc.removeEventListener('pointerup', onPointerUp, true);
             doc.removeEventListener('pointercancel', onPointerUp, true);
+            if (completedDrag) commitEditorPreview();
             if (event && event.preventDefault) event.preventDefault();
         }
         function setScale(value) {
             if (!editor) return getState();
             editor.view.scale = clampScale(value);
-            scheduleEditorSync(); updateToolbar();
+            editorPreviewSettled = true;
+            scheduleEditorSync(true); updateToolbar();
             return getState();
+        }
+        function cancelEditorSettle() {
+            if (editorSettleTimer == null) return;
+            win.clearTimeout(editorSettleTimer);
+            editorSettleTimer = null;
+        }
+        function scheduleEditorSettle() {
+            if (!editor || editor.mode === 'native') return;
+            cancelEditorSettle();
+            if (editorControlActive) return;
+            editorSettleTimer = win.setTimeout(function () {
+                editorSettleTimer = null;
+                commitEditorPreview();
+            }, EDITOR_SETTLE_DELAY);
+        }
+        function commitEditorPreview() {
+            if (!editor || editor.mode === 'native') return;
+            cancelEditorSettle();
+            editorPreviewSettled = true;
+            scheduleEditorSync(true);
         }
         function cancelEditorSync() {
             if (editorRenderFrame == null) return;
             if (typeof win.cancelAnimationFrame === 'function') win.cancelAnimationFrame(editorRenderFrame);
             else win.clearTimeout(editorRenderFrame);
             editorRenderFrame = null;
+            editorSyncAll = false;
         }
-        function scheduleEditorSync() {
-            if (!editor || editorRenderFrame != null) return;
+        function scheduleEditorSync(syncAll) {
+            if (!editor) return;
+            if (syncAll) editorSyncAll = true;
+            if (editorRenderFrame != null) return;
             var render = function () {
                 editorRenderFrame = null;
-                if (editor && editor.mode === 'native') applyNativeToEntry(editor.representative, editor.view, editor.target, editor.asset);
-                else if (editor) syncEditorInstances();
+                var shouldSyncAll = editorSyncAll;
+                editorSyncAll = false;
+                if (!editor) return;
+                if (shouldSyncAll && editor.mode !== 'native') syncEditorInstances();
+                else syncEditorRepresentative();
             };
             editorRenderFrame = typeof win.requestAnimationFrame === 'function' ? win.requestAnimationFrame(render) : win.setTimeout(render, 16);
         }
@@ -10211,12 +10378,15 @@
         function stepView(name, direction) {
             if (!editor) return getState();
             var step = name === 'scale' ? SCALE_STEP : name === 'rotate' ? ROTATE_STEP : POSITION_STEP;
-            return setViewValue(name, Number(editor.view[name]) + step * (direction < 0 ? -1 : 1));
+            var state = setViewValue(name, Number(editor.view[name]) + step * (direction < 0 ? -1 : 1));
+            commitEditorPreview();
+            return state;
         }
         function toggleFlip(name) {
             if (!editor || (name !== 'flipX' && name !== 'flipY')) return getState();
             editor.view[name] = !editor.view[name];
-            scheduleEditorSync(); updateToolbar();
+            editorPreviewSettled = true;
+            scheduleEditorSync(true); updateToolbar();
             return getState();
         }
         function setBindToTheme(enabled) {
@@ -10229,7 +10399,8 @@
         function resetEdit() {
             if (!editor) return getState();
             editor.view = normalizeView(null);
-            scheduleEditorSync(); updateToolbar();
+            editorPreviewSettled = true;
+            scheduleEditorSync(true); updateToolbar();
             return getState();
         }
         function cancelEdit(reason) {
@@ -10343,7 +10514,25 @@
             if (!input || !toolbar.contains(input)) return;
             var name = input.getAttribute('data-view');
             var value = Number(input.value);
+            editorPreviewSettled = false;
             setViewValue(name, value);
+            scheduleEditorSettle();
+        }
+        function onToolbarPointerStart(event) {
+            var input = event.target && event.target.closest ? event.target.closest('[data-view]') : null;
+            if (!input || !toolbar.contains(input)) return;
+            editorControlActive = true;
+            cancelEditorSettle();
+        }
+        function onToolbarPointerEnd(event) {
+            if (!editorControlActive) return;
+            editorControlActive = false;
+            onToolbarCommit(event);
+        }
+        function onToolbarCommit(event) {
+            var input = event.target && event.target.closest ? event.target.closest('[data-view]') : null;
+            if (!input || !toolbar.contains(input)) return;
+            commitEditorPreview();
         }
         function clearBinding(kind) {
             var mutationError = requireMutable();
@@ -10599,6 +10788,8 @@
         pixelsForView: pixelsForView,
         transformForPixels: transformForPixels,
         objectViewBoxForView: objectViewBoxForView,
+        transformedSourceGeometry: transformedSourceGeometry,
+        editorPreviewGeometry: editorPreviewGeometry,
     };
 })(window);
 /* END MODULE 18/25: src/avatar-runtime.js */

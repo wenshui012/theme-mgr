@@ -380,6 +380,125 @@ test('49 mirror flags normalize safely and survive binding persistence', async (
     assert.deepEqual(saved.view, { x: 0, y: 0, scale: 1, rotate: 0, flipX: true, flipY: true });
     assert.deepEqual(JSON.parse(JSON.stringify(modules.avatarRuntime.normalizeView({ flipX: 'true', flipY: 1 }))), { x: 0, y: 0, scale: 1, rotate: 0, flipX: false, flipY: false });
 });
+test('rotated source geometry contains both the logical window and transformed pixels with an antialias margin', () => {
+    const shapes = [
+        { label: 'square', width: 800, height: 800 },
+        { label: 'portrait', width: 600, height: 1200 },
+        { label: 'landscape', width: 1400, height: 700 },
+    ];
+    for (const shape of shapes) {
+        for (const angle of [-90, -35, -15, 15, 35, 90]) {
+            const geometry = modules.avatarRuntime.transformedSourceGeometry(shape, { rotate: angle });
+            assert.ok(geometry.canvasWidth >= shape.width, `${shape.label} ${angle} logical width`);
+            assert.ok(geometry.canvasHeight >= shape.height, `${shape.label} ${angle} logical height`);
+            assert.ok((geometry.canvasWidth - geometry.rotatedWidth) / 2 >= 1, `${shape.label} ${angle} rotated width margin`);
+            assert.ok((geometry.canvasHeight - geometry.rotatedHeight) / 2 >= 1, `${shape.label} ${angle} rotated height margin`);
+            assert.equal(geometry.logicalLeft, (geometry.canvasWidth - shape.width) / 2);
+            assert.equal(geometry.logicalTop, (geometry.canvasHeight - shape.height) / 2);
+        }
+    }
+});
+test('expanded source crop maps pan and scale from the original logical coordinates', () => {
+    const shape = { width: 1400, height: 700 };
+    const view = { x: .2, y: -.15, scale: 1.4, rotate: 35 };
+    const geometry = modules.avatarRuntime.transformedSourceGeometry(shape, view);
+    const crop = modules.avatarRuntime.objectViewBoxForView(view, geometry);
+    const values = crop.match(/-?[\d.]+/g).map(Number);
+    const [top, right, bottom, left] = values;
+    const leftPixels = left * geometry.canvasWidth / 100;
+    const rightPixels = right * geometry.canvasWidth / 100;
+    const topPixels = top * geometry.canvasHeight / 100;
+    const bottomPixels = bottom * geometry.canvasHeight / 100;
+    const visibleWidth = geometry.canvasWidth - leftPixels - rightPixels;
+    const visibleHeight = geometry.canvasHeight - topPixels - bottomPixels;
+    assert.ok(Math.abs(visibleWidth - shape.width / view.scale) < .02);
+    assert.ok(Math.abs(visibleHeight - shape.height / view.scale) < .02);
+    assert.ok(Math.abs((leftPixels + visibleWidth / 2) - (geometry.canvasWidth / 2 - view.x * shape.width / view.scale)) < .02);
+    assert.ok(Math.abs((topPixels + visibleHeight / 2) - (geometry.canvasHeight / 2 - view.y * shape.height / view.scale)) < .02);
+});
+test('live rotation preview keeps one geometric envelope and crop across every angle', () => {
+    const shapes = [
+        { label: 'square', width: 384, height: 384 },
+        { label: 'portrait', width: 192, height: 384 },
+        { label: 'landscape', width: 384, height: 192 },
+    ];
+    for (const shape of shapes) {
+        const geometry = modules.avatarRuntime.editorPreviewGeometry(shape);
+        const crops = [];
+        for (const angle of [-90, -35, -15, 0, 15, 35, 90]) {
+            const exact = modules.avatarRuntime.transformedSourceGeometry(shape, { rotate: angle });
+            assert.ok(geometry.canvasWidth >= exact.rotatedWidth + 2, `${shape.label} ${angle} horizontal envelope`);
+            assert.ok(geometry.canvasHeight >= exact.rotatedHeight + 2, `${shape.label} ${angle} vertical envelope`);
+            crops.push(modules.avatarRuntime.objectViewBoxForView({ x: .12, y: -.08, scale: .8, rotate: angle }, geometry));
+        }
+        assert.equal(new Set(crops).size, 1, `${shape.label} angle-invariant crop`);
+    }
+});
+test('flip plus rotation uses the expanded SVG while preserving theme transforms masks and logical crop', async () => {
+    const transformed = asset('wide', { width: 1400, height: 700 });
+    const view = { x: .2, y: -.15, scale: 1.4, rotate: -35, flipX: true, flipY: false };
+    const f = runtimeFixture({ seed: { assets: [transformed], bindings: [
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:char.png', avatarId: 'wide', view },
+    ] } });
+    const before = { transform: f.chars[0].image.computed.transform, clip: f.chars[0].image.computed.clipPath, mask: f.chars[0].image.computed.maskImage };
+    await f.runtime.start();
+    const source = f.chars[0].image.getAttribute('src');
+    const svgText = decodeURIComponent(source.slice(source.indexOf(',') + 1));
+    const geometry = modules.avatarRuntime.transformedSourceGeometry(transformed, view);
+    assert.match(source, /^data:image\/svg\+xml/);
+    assert.match(svgText, new RegExp(`width="${geometry.canvasWidth}" height="${geometry.canvasHeight}" viewBox="0 0 ${geometry.canvasWidth} ${geometry.canvasHeight}"`));
+    assert.match(svgText, /rotate\(-35\) scale\(-1 1\)/);
+    assert.ok((geometry.canvasWidth - geometry.rotatedWidth) / 2 >= 1);
+    assert.ok((geometry.canvasHeight - geometry.rotatedHeight) / 2 >= 1);
+    assert.deepEqual({ transform: f.chars[0].image.computed.transform, clip: f.chars[0].image.computed.clipPath, mask: f.chars[0].image.computed.maskImage }, before);
+    assert.match(f.chars[0].image.getAttribute('style'), /object-view-box:inset\(/);
+});
+test('library drag updates only the representative until pointer release then synchronizes the target once', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset()] } });
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'a' });
+    const representative = f.chars.find((entry) => entry.image.classList.contains('tm-avatar-editor-target'));
+    const before = f.chars.map((entry) => entry.image.getAttribute('style'));
+    const rect = representative.avatar.getBoundingClientRect();
+    representative.image.dispatchEvent({ type: 'pointerdown', pointerId: 2, button: 0, clientX: 0, clientY: 0 });
+    f.doc.dispatchEvent({ type: 'pointermove', pointerId: 2, clientX: rect.width * .2, clientY: rect.height * .1 });
+    const observer = MutationObserver.instances[MutationObserver.instances.length - 1];
+    observer.fn([{ type: 'attributes', attributeName: 'src', target: representative.image }]);
+    const during = f.chars.map((entry) => entry.image.getAttribute('style'));
+    assert.equal(during.filter((style, index) => style !== before[index]).length, 1);
+    assert.match(representative.image.getAttribute('src'), /^data:image\/svg\+xml/);
+    assert.match(decodeURIComponent(representative.image.getAttribute('src').slice(representative.image.getAttribute('src').indexOf(',') + 1)), /thumb-a/);
+    assert.equal(f.chars.filter((entry) => entry !== representative).every((entry) => /main-a/.test(entry.image.getAttribute('src'))), true);
+    f.doc.dispatchEvent({ type: 'pointerup', pointerId: 2 });
+    const settled = f.chars.map((entry) => entry.image.getAttribute('style'));
+    assert.ok(settled.every((style, index) => style !== before[index]));
+    assert.ok(settled.every((style) => /object-view-box:inset\(/.test(style)));
+    assert.ok(f.chars.every((entry) => /main-a/.test(entry.image.getAttribute('src'))));
+    await f.runtime.cancelEdit();
+});
+test('saved rotated preview reloads to the identical expanded source and crop', async () => {
+    const transformed = asset('portrait', { width: 600, height: 1200 });
+    const view = { x: -.18, y: .22, scale: 1.6, rotate: 90, flipX: false, flipY: true };
+    const f = runtimeFixture({ seed: { assets: [transformed], bindings: [
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:char.png', avatarId: 'portrait', view },
+    ] } });
+    await f.runtime.start();
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'portrait' });
+    const visual = (entry) => {
+        const style = entry.image.getAttribute('style');
+        const crops = [...style.matchAll(/object-view-box:([^;]+)!important/g)];
+        return { src: entry.image.getAttribute('src'), crop: crops.at(-1)?.[1] || '' };
+    };
+    const preview = visual(f.chars[0]);
+    await f.runtime.saveEdit();
+    const saved = visual(f.chars[0]);
+    f.runtime.stop();
+    await f.runtime.start();
+    const reloaded = visual(f.chars[0]);
+    assert.equal(saved.src, preview.src);
+    assert.equal(reloaded.src, saved.src);
+    assert.equal(saved.crop, preview.crop);
+    assert.equal(reloaded.crop, saved.crop);
+});
 test('50 native character views persist without copying the original image into the avatar library', async () => {
     const { adapter, store } = memoryStore();
     await store.putNativeView({ targetKey: 'character:char.png', sourceKey: 'char.png', view: { x: .2, scale: 1.4 } });
