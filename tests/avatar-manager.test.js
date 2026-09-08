@@ -17,7 +17,7 @@ function loadModules(window) {
     window.JSON = JSON;
     window.Number = Number;
     const context = vm.createContext(window);
-    ['image-tools.js', 'avatar-storage.js', 'avatar-sync.js', 'avatar-image-tools.js', 'avatar-runtime.js', 'avatar-page.js'].forEach((name) => {
+    ['image-tools.js', 'avatar-storage.js', 'avatar-sync.js', 'avatar-image-tools.js', 'avatar-runtime.js', 'avatar-library.js', 'avatar-page.js'].forEach((name) => {
         vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', name), 'utf8'), context, { filename: name });
     });
     return window.ThemeMgrModules;
@@ -106,6 +106,55 @@ test('10 avatar deletion transaction removes every referencing binding', async (
     assert.equal((await store.listBindings()).length, 0);
 });
 
+test('avatar library assigns explicit monotonic import order and keeps a stable legacy fallback', () => {
+    const data = {};
+    modules.avatarLibrary.assignImportOrders(data, ['new-a', 'new-b']);
+    assert.equal(data.avatarLibrary.assetMeta['new-a'].importOrder, 1);
+    assert.equal(data.avatarLibrary.assetMeta['new-b'].importOrder, 2);
+    assert.equal(data.avatarLibrary.nextImportOrder, 3);
+
+    const oldA = asset('old-a', { createdAt: '2025-01-01T00:00:00.000Z' });
+    const oldB = asset('old-b', { createdAt: '2025-02-01T00:00:00.000Z' });
+    assert.ok(modules.avatarLibrary.compareAssets(data, oldA, oldB, 'import-asc') < 0);
+    const reloaded = JSON.parse(JSON.stringify(data));
+    assert.equal(Math.sign(modules.avatarLibrary.compareAssets(reloaded, oldA, oldB, 'import-desc')), 1);
+});
+
+test('avatar series enforce one owner, preserve explicit order, and auto-dissolve below two members', () => {
+    const data = {};
+    const created = modules.avatarLibrary.createSeries(data, '双人组', ['b', 'a']);
+    assert.equal(created.ok, true);
+    assert.deepEqual(Array.from(data.avatarLibrary.series.groups[created.series.id].members), ['b', 'a']);
+    assert.equal(modules.avatarLibrary.createSeries(data, '冲突组', ['a', 'c']).reason, 'already-series');
+    assert.equal(modules.avatarLibrary.addMember(data, created.series.id, 'c').ok, true);
+    assert.deepEqual(Array.from(data.avatarLibrary.series.groups[created.series.id].members), ['b', 'a', 'c']);
+    assert.equal(modules.avatarLibrary.moveMember(data, created.series.id, 'c', -1).ok, true);
+    assert.deepEqual(Array.from(data.avatarLibrary.series.groups[created.series.id].members), ['b', 'c', 'a']);
+    assert.equal(modules.avatarLibrary.removeMember(data, created.series.id, 'b').dissolved, false);
+    assert.equal(modules.avatarLibrary.removeMember(data, created.series.id, 'c').dissolved, true);
+    assert.equal(modules.avatarLibrary.findSeries(data, 'a'), null);
+});
+
+test('avatar series normalization resolves duplicate ownership without deleting valid later groups', () => {
+    const data = { avatarLibrary: { series: { groups: {
+        first: { id: 'first', name: '第一组', members: ['a', 'b'] },
+        invalid: { id: 'invalid', name: '冲突后不足两张', members: ['b', 'c'] },
+        later: { id: 'later', name: '后一组', members: ['c', 'd'] },
+    } } } };
+    modules.avatarLibrary.ensureState(data);
+    assert.deepEqual(Object.keys(data.avatarLibrary.series.groups), ['first', 'later']);
+    assert.deepEqual(Array.from(data.avatarLibrary.series.groups.later.members), ['c', 'd']);
+});
+
+test('avatar category rename and delete update annotations only', () => {
+    const data = { avatarLibrary: { categories: ['旧分类'], assetMeta: { a: { category: '旧分类', tags: ['标签'] } } } };
+    assert.equal(modules.avatarLibrary.renameCategory(data, '旧分类', '新分类').ok, true);
+    assert.equal(data.avatarLibrary.assetMeta.a.category, '新分类');
+    assert.equal(modules.avatarLibrary.deleteCategory(data, '新分类'), true);
+    assert.equal(data.avatarLibrary.assetMeta.a.category, '');
+    assert.deepEqual(Array.from(data.avatarLibrary.assetMeta.a.tags), ['标签']);
+});
+
 test('binding batches validate every operation before changing local state', async () => {
     const { store } = memoryStore({ assets: [asset('a')] });
     await assert.rejects(store.mutateBindings([
@@ -125,6 +174,7 @@ class Classes {
     constructor() { this.values = new Set(); }
     add(...v) { v.forEach((x) => this.values.add(x)); }
     remove(...v) { v.forEach((x) => this.values.delete(x)); }
+    toggle(v, force) { const next = force === undefined ? !this.values.has(v) : Boolean(force); if (next) this.values.add(v); else this.values.delete(v); return next; }
     contains(v) { return this.values.has(v); }
     toString() { return [...this.values].join(' '); }
 }
@@ -136,7 +186,7 @@ class Animation {
 class Element extends Events {
     constructor(tag = 'div', rect = { x: 20, y: 20, width: 100, height: 100 }) {
         super(); this.tagName = tag.toUpperCase(); this.children = []; this.parentNode = null; this.parentElement = null;
-        this.attributes = {}; this.classList = new Classes(); this.rect = { ...rect }; this.animations = []; this.id = ''; this.textContent = ''; this.hidden = false; this.disabled = false; this._html = '';
+        this.attributes = {}; this.classList = new Classes(); this.rect = { ...rect }; this.animations = []; this.id = ''; this.textContent = ''; this.hidden = false; this.disabled = false; this._html = ''; this.style = {}; this.value = '';
         this.computed = { objectFit: 'cover', objectPosition: '50% 50%', transform: 'rotate(8deg)', translate: '3px 2px', scale: '1.1', rotate: '8deg', transformOrigin: '50px 50px', borderRadius: '50%', clipPath: 'circle(48%)', webkitMaskImage: 'url(mask.png)', maskImage: 'url(mask.png)', overflow: 'hidden', overflowX: 'hidden', overflowY: 'hidden' };
     }
     appendChild(child) { child.parentNode = this; child.parentElement = this; this.children.push(child); return child; }
@@ -167,6 +217,8 @@ class Element extends Events {
         return { ...rect, left: rect.x, top: rect.y, right: rect.x + rect.width, bottom: rect.y + rect.height };
     }
     animate(frames) { const a = new Animation(frames); this.animations.push(a); return a; }
+    focus() {}
+    click() { this.dispatchEvent({ type: 'click' }); }
     setPointerCapture() {}
     releasePointerCapture() {}
     get isConnected() { let node = this; while (node) { if (node._root) return true; node = node.parentElement; } return false; }
@@ -211,8 +263,25 @@ function runtimeFixture(options = {}) {
 }
 
 class PageRoot extends Events {
-    constructor() { super(); this.grid = new Element('div'); this.notice = new Element('div'); this.actions = new Element('div'); this.selected = new Element('div'); this.tools = new Element('div'); this.input = new Element('input'); this.buttons = {}; ['apply-character','apply-user','restore-character','restore-user'].forEach((x) => this.buttons[x] = new Element('button')); }
-    querySelector(s) { if (s === '[data-avatar-grid]') return this.grid; if (s === '[data-avatar-notice]') return this.notice; if (s === '[data-avatar-actions]') return this.actions; if (s === '[data-avatar-selected]') return this.selected; if (s === '[data-avatar-tools]') return this.tools; if (s === '[data-avatar-file]') return this.input; const m=s.match(/data-avatar-action="([^"]+)/); return m ? this.buttons[m[1]] : null; }
+    constructor() {
+        super();
+        this.grid = new Element('div'); this.grid.clientWidth = 360;
+        this.notice = new Element('div'); this.input = new Element('input'); this.search = new Element('input');
+        this.searchClear = new Element('button'); this.searchBar = new Element('div'); this.sortBar = new Element('div');
+        this.catBar = new Element('div'); this.batchArea = new Element('div'); this.classList = new Classes();
+    }
+    querySelector(s) {
+        if (s === '[data-avatar-grid]') return this.grid;
+        if (s === '[data-avatar-notice]') return this.notice;
+        if (s === '[data-avatar-file]') return this.input;
+        if (s === '[data-avatar-search]') return this.search;
+        if (s === '[data-avatar-search-clear]') return this.searchClear;
+        if (s === '[data-avatar-search-bar]') return this.searchBar;
+        if (s === '[data-avatar-sortbar]') return this.sortBar;
+        if (s === '[data-avatar-catbar]') return this.catBar;
+        if (s === '[data-avatar-batch-area]') return this.batchArea;
+        return null;
+    }
     querySelectorAll() { return []; }
     contains() { return true; }
 }
@@ -221,10 +290,17 @@ function pageFixture(seed = [], bindings = [], options = {}) {
     const { store } = memoryStore({ assets: seed, bindings }); let disconnected = 0; let observed = 0;
     const imageLoader = { PLACEHOLDER_SRC: 'placeholder', createImageLoader: () => ({ observe: () => { observed++; }, disconnect: () => { disconnected++; } }) };
     const runtime = { getCapabilities: () => ({ themeKey: 'theme-name:A', character: { available: true, target: { key: 'character:c' } }, user: { available: true, target: { key: 'user:global' } } }), notifyAssetChanged: async () => {}, deleteAsset: (id) => store.deleteAsset(id), clearBinding: async () => {}, beginEdit: async () => {} };
-    const win = { document: doc, confirm: () => true }; const mods = loadModules(win);
+    const win = { document: doc, confirm: () => true, setTimeout, clearTimeout }; const mods = loadModules(win);
     const processor = options.processor || { processFile: async (file) => asset(file.name) };
-    const page = mods.createAvatarPage({ document: doc, store, processor, runtime, imageLoader, getRoot: () => pageRoot, closeManager() {}, toast() {}, confirm: () => true, canMutate: options.canMutate });
-    return { page, doc, pageRoot, store, stats: () => ({ disconnected, observed }) };
+    const uiData = {};
+    let lastDialog = '';
+    const page = mods.createAvatarPage({
+        document: doc, store, processor, runtime, imageLoader, getRoot: () => pageRoot,
+        closeManager() {}, toast() {}, confirm: () => true, canMutate: options.canMutate,
+        loadUiData: () => uiData, saveUiData: () => {},
+        createActionDialog(html) { lastDialog = html; return new Element('div'); },
+    });
+    return { page, doc, pageRoot, store, uiData, lastDialog: () => lastDialog, stats: () => ({ disconnected, observed }) };
 }
 test('11 Avatar Page mount and unmount own their loader and style', async () => { const f=pageFixture(); await f.page.mount(); assert.equal(f.page.getState().mounted,true); f.page.unmount(); assert.equal(f.page.getState().mounted,false); assert.ok(f.stats().disconnected >= 1); });
 test('12 avatar grid uses thumbnail lazy loader rather than main image', async () => { const f=pageFixture([asset()]); await f.page.mount(); assert.match(f.pageRoot.grid.innerHTML,/placeholder/); assert.doesNotMatch(f.pageRoot.grid.innerHTML,/main-a/); assert.ok(f.stats().observed >= 1); });
@@ -303,24 +379,50 @@ test('43 Avatar Page exposes a visible importing state until the pipeline settle
     await pending;
     assert.equal(custom.getState().importing, false);
 });
-test('44 avatar cards are image-only and expose a three-dot menu instead of delete', async () => {
+test('44 avatar grid starts with the original-avatar slot and cards stay image-only', async () => {
     const f = pageFixture([asset('1000116691')]);
     await f.page.mount();
-    assert.match(f.pageRoot.grid.innerHTML, /data-avatar-action="menu"/);
-    assert.match(f.pageRoot.grid.innerHTML, /fa-ellipsis/);
-    assert.match(f.pageRoot.grid.innerHTML, /data-avatar-action="view"/);
-    assert.doesNotMatch(f.pageRoot.grid.innerHTML, /tm-avatar-page-name|fa-trash/);
+    assert.ok(f.pageRoot.grid.innerHTML.indexOf('tm-avatar-native-slot') < f.pageRoot.grid.innerHTML.indexOf('tm-avatar-page-card'));
+    assert.match(f.pageRoot.grid.innerHTML, /fa-circle-user/);
+    assert.doesNotMatch(f.pageRoot.grid.innerHTML, /data-avatar-action="menu"|fa-ellipsis|data-avatar-action="view"/);
+    assert.doesNotMatch(f.pageRoot.grid.innerHTML, /tm-avatar-page-name|fa-trash|<span[^>]*>调整原头像/);
     assert.doesNotMatch(modules.avatarPage.styleText(), /\.tm-avatar-page-menu\{/);
+    await f.page.openAssetMenu('1000116691');
+    assert.match(f.lastDialog(), /使用这张头像/);
+    assert.match(f.lastDialog(), /设为 User 头像/);
+    assert.match(f.lastDialog(), /设为当前角色头像/);
+    assert.match(f.lastDialog(), /查看完整大图/);
+    assert.match(f.lastDialog(), /管理头像/);
+    assert.match(f.lastDialog(), /is-weak/);
 });
 test('45 shared header owns the only Avatar add entry and remembers the last app page', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     assert.match(source, /id="tm-avatar-add"/);
-    assert.match(source, /id="tm-avatar-bottom-status"/);
-    assert.match(source, /avatarPageController\.openNativeMenu\(\)/);
+    assert.match(source, /id="tm-avatar-restore-user"/);
+    assert.match(source, /id="tm-avatar-restore-character"/);
+    assert.doesNotMatch(source, /id="tm-avatar-bottom-status"/);
     assert.match(source, /renderAvatarBottomStatus/);
     assert.match(source, /avatarPageController\.pickFiles\(\)/);
     assert.match(source, /defaultPage: lastAppPage/);
     assert.match(source, /lastAppPage = appShellController\.getActivePage\(\)/);
+});
+
+test('avatar click opens the action dialog directly without a double-click delay', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
+    assert.match(source, /else openAssetMenu\(id\)\.catch/);
+    assert.doesNotMatch(source, /dblclick|doubleclick|setTimeout\([^)]*openAssetMenu/);
+});
+
+test('avatar and beauty managers expose their intended import sorting choices', () => {
+    const avatarHtml = modules.avatarPage.buildPageHtml();
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    assert.match(avatarHtml, /data-avatar-sort="import-asc"/);
+    assert.match(avatarHtml, /data-avatar-sort="import-desc"/);
+    assert.doesNotMatch(avatarHtml, /data-avatar-sort="name"/);
+    assert.match(source, /data-sort="name"/);
+    assert.match(source, /data-sort="import-asc"/);
+    assert.match(source, /data-sort="import-desc"/);
+    assert.match(source, /themeImportOrder/);
 });
 test('46 editor toolbar uses a host-level important layout and Shadow DOM isolation when supported', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-runtime.js'), 'utf8');

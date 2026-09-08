@@ -61,6 +61,7 @@
     var avatarCoordinator = null;
     var avatarStore = null;
     var avatarImageProcessor = null;
+    var avatarLibraryApi = null;
     var avatarRuntime = null;
     var avatarPageController = null;
     var appShellApi = null;
@@ -142,7 +143,7 @@
                 !modules.themeBindings ||
                 !modules.themeAppearance ||
                 !modules.createAvatarStore || !modules.createAvatarStorageCoordinator || !modules.createAvatarImageProcessor ||
-                !modules.createAvatarRuntime || !modules.createAvatarPage || !modules.avatarPage ||
+                !modules.avatarLibrary || !modules.createAvatarRuntime || !modules.createAvatarPage || !modules.avatarPage ||
                 !modules.createBackgrounds ||
                 !modules.createUiSheets ||
                 !modules.createUiEvents || !modules.appShell ||
@@ -170,6 +171,7 @@
                     if (!modules.createAvatarStore) missing.push('avatar-storage.js');
                     if (!modules.createAvatarStorageCoordinator) missing.push('avatar-sync.js');
                     if (!modules.createAvatarImageProcessor) missing.push('avatar-image-tools.js');
+                    if (!modules.avatarLibrary) missing.push('avatar-library.js');
                     if (!modules.createAvatarRuntime) missing.push('avatar-runtime.js');
                     if (!modules.createAvatarPage || !modules.avatarPage) missing.push('avatar-page.js');
                     if (!modules.createBackgrounds) missing.push('backgrounds.js');
@@ -205,6 +207,7 @@
                 metadata: modules.themeMetadata,
             });
             metadataApi = modules.themeMetadata;
+            avatarLibraryApi = modules.avatarLibrary;
             editorDraftApi = modules.editorDraft;
             pairsApi = modules.themePairs;
             seriesApi = modules.themeSeries;
@@ -328,6 +331,12 @@
                 createSheet: createSheet,
                 closeSheet: closeSheet,
                 openImageLightbox: uiSheetsApi.openImageLightbox,
+                createActionDialog: uiSheetsApi.createActionDialog,
+                openCategoryPicker: openCategoryPicker,
+                openTagPicker: openTagPicker,
+                loadUiData: load,
+                saveUiData: save,
+                library: avatarLibraryApi,
                 onImportingChange: function (importing) {
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = importing || !avatarCoordinator || !avatarCoordinator.canMutate();
@@ -403,12 +412,20 @@
         else if (typeof d.themeMeta !== 'object' || !d.themeMeta) d.themeMeta = Object.create(null);
         if (!Array.isArray(d.categories)) d.categories = [];
         if (typeof d.sortMode !== 'string') d.sortMode = 'name';
+        if (!d.themeImportOrder || typeof d.themeImportOrder !== 'object' || Array.isArray(d.themeImportOrder)) d.themeImportOrder = Object.create(null);
+        if (!Number.isSafeInteger(d.nextThemeImportOrder) || d.nextThemeImportOrder < 1) d.nextThemeImportOrder = 1;
+        Object.keys(d.themeImportOrder).forEach(function (name) {
+            var value = Number(d.themeImportOrder[name]);
+            if (!Number.isSafeInteger(value) || value < 1) delete d.themeImportOrder[name];
+            else d.nextThemeImportOrder = Math.max(d.nextThemeImportOrder, value + 1);
+        });
         d.previewImageQuality = d.previewImageQuality === 'quality' ? 'quality' : 'performance';
         if (typeof d.followThemeAppearance !== 'boolean') d.followThemeAppearance = false;
         if (typeof d.showThemeAvatarFrame !== 'boolean') d.showThemeAvatarFrame = false;
         if (typeof d.followThemePreviewShape !== 'boolean') d.followThemePreviewShape = false;
         if (typeof d.simplifyGridText !== 'boolean') d.simplifyGridText = false;
         if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
+        if (avatarLibraryApi) avatarLibraryApi.ensureState(d);
         var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
         var seriesNormalizationDiagnostics = seriesApi && typeof seriesApi.inspectState === 'function' ? seriesApi.inspectState(d) : [];
         var bindingNormalizationDiagnostics = bindingsApi && typeof bindingsApi.inspectState === 'function' ? bindingsApi.inspectState(d) : [];
@@ -458,6 +475,8 @@
             bgPickerSize: 132,
             gridCardSize: 108,
             sortMode: 'name',
+            themeImportOrder: Object.create(null),
+            nextThemeImportOrder: 1,
             previewImageQuality: 'performance',
             followThemeAppearance: false,
             showThemeAvatarFrame: false,
@@ -466,7 +485,8 @@
             autoHideHeader: false,
             dayNight: { version: 1, pairs: Object.create(null) },
             series: { version: 1, groups: Object.create(null) },
-            bindings: { version: 2, characters: Object.create(null), chats: Object.create(null), manualTheme: '', manualTarget: null }
+            bindings: { version: 2, characters: Object.create(null), chats: Object.create(null), manualTheme: '', manualTarget: null },
+            avatarLibrary: { version: 1, categories: [], assetMeta: Object.create(null), series: { version: 1, groups: Object.create(null) }, sortMode: 'import-desc', nextImportOrder: 1 }
         };
     }
 
@@ -1998,7 +2018,14 @@
                     syncThemeOption(res.theme.name);
                 });
                 var okNames = successful.map(function (res) { return res.theme.name; });
-                if (okNames.length > 0) mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories, opts.forceCategory);
+                if (okNames.length > 0) {
+                    mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories, opts.forceCategory);
+                    var importData = load();
+                    okNames.forEach(function (name) {
+                        if (!importData.themeImportOrder[name]) importData.themeImportOrder[name] = importData.nextThemeImportOrder++;
+                    });
+                    save(importData);
+                }
                 var pairImport = { imported: 0, skipped: 0, idMap: {}, skippedIds: [] };
                 var seriesImport = { imported: 0, skipped: 0 };
                 var relationData = load();
@@ -2345,6 +2372,19 @@
             case 'starred': sorted.sort(function (a, b) {
                 var sa = getItemMeta(d, a).starred ? 1 : 0, sb = getItemMeta(d, b).starred ? 1 : 0;
                 return sb - sa || a.name.localeCompare(b.name, 'zh');
+            }); break;
+            case 'import-asc':
+            case 'import-desc': sorted.sort(function (a, b) {
+                var direction = mode === 'import-asc' ? 1 : -1;
+                function rank(item) {
+                    var names = item && item.themeNames && item.themeNames.length ? item.themeNames : [item && item.themeName];
+                    var values = names.map(function (name) { return Number(d.themeImportOrder && d.themeImportOrder[name]) || 0; }).filter(Boolean);
+                    return values.length ? Math.min.apply(Math, values) : 0;
+                }
+                var ra = rank(a), rb = rank(b);
+                if (ra && rb && ra !== rb) return direction * (ra - rb);
+                if (ra !== rb) return direction * (ra ? 1 : -1);
+                return direction * a.name.localeCompare(b.name, 'zh');
             }); break;
         }
         if (list === view.items) view.sortedByMode[mode] = sorted;
@@ -3702,6 +3742,8 @@
             '<button class="tm-sort-chip" data-sort="recent">最近使用</button>' +
             '<button class="tm-sort-chip" data-sort="freq">使用频率</button>' +
             '<button class="tm-sort-chip" data-sort="starred">收藏优先</button>' +
+            '<button class="tm-sort-chip" data-sort="import-asc">导入正序</button>' +
+            '<button class="tm-sort-chip" data-sort="import-desc">导入倒序</button>' +
             '<span class="tm-sort-divider"></span>' +
             '<span class="tm-grid-size-label">网格</span>' +
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-out" title="缩小卡片"><i class="fa-solid fa-minus"></i></button>' +
@@ -3740,15 +3782,16 @@
             '<div class="tm-head-actions">' +
             '<button class="tm-icon-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
             (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
-            '<button class="tm-icon-btn tm-themes-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
-            '<button class="tm-icon-btn tm-themes-only" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
+            '<button class="tm-icon-btn tm-library-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
+            '<button class="tm-icon-btn tm-library-only" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
             '<button class="tm-icon-btn" id="tm-theme-toggle" title="切换明暗"><i class="fa-solid fa-circle-half-stroke"></i></button>' +
             '<button class="tm-icon-btn" id="tm-x" title="关闭"><i class="fa-solid fa-xmark"></i></button>' +
             '</div></div>' +
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
-            '<button type="button" class="tm-bottom-status tm-avatars-only" id="tm-avatar-bottom-status" title="调整当前角色卡原头像"></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-user" title="恢复 User 原头像" aria-label="恢复 User 原头像"><i class="fa-solid fa-user-rotate"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-character" title="恢复当前角色原头像" aria-label="恢复当前角色原头像"><i class="fa-solid fa-address-card"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
@@ -3821,6 +3864,7 @@
 
         // 搜索
         ov.querySelector('#tm-search-toggle').addEventListener('click', function () {
+            if (appShellController && appShellController.getActivePage() === 'avatars') { avatarPageController.toggleSearch(); return; }
             searchOpen = !searchOpen;
             ov.querySelector('#tm-search-bar').classList.toggle('open', searchOpen);
             if (searchOpen) ov.querySelector('#tm-search-inp').focus();
@@ -3860,6 +3904,7 @@
 
         // 排序
         ov.querySelector('#tm-sort-toggle').addEventListener('click', function () {
+            if (appShellController && appShellController.getActivePage() === 'avatars') { avatarPageController.toggleSort(); return; }
             sortOpen = !sortOpen;
             ov.querySelector('#tm-sortbar').classList.toggle('open', sortOpen);
         });
@@ -3886,11 +3931,15 @@
             renderGrid();
         });
         ov.querySelector('#tm-bottom-settings').addEventListener('click', function () { openSettingsSheet(); });
-        ov.querySelector('#tm-avatar-bottom-status').addEventListener('click', function () {
-            if (!avatarPageController) return;
-            avatarPageController.openNativeMenu().catch(function (error) {
-                toast(error.message || '原头像操作菜单无法打开', true);
-            });
+        ov.querySelector('#tm-avatar-restore-user').addEventListener('click', function () {
+            if (!avatarRuntime || this.disabled || !confirm('恢复使用 User 原头像？当前美化专属头像与全局 User 头像都会停止使用；其他美化的专属头像保持不变。')) return;
+            var themeName = getCurrentThemeName();
+            var clearTheme = themeName ? avatarRuntime.clearThemeUserBinding(themeName) : Promise.resolve();
+            clearTheme.then(function () { return avatarRuntime.clearBinding('user'); }).then(function () { toast('已恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复 User 原头像失败', true); });
+        });
+        ov.querySelector('#tm-avatar-restore-character').addEventListener('click', function () {
+            if (!avatarRuntime || this.disabled || !confirm('恢复使用当前角色原头像？')) return;
+            avatarRuntime.clearBinding('character').then(function () { toast('已恢复当前角色原头像'); }).catch(function (error) { toast(error.message || '恢复角色原头像失败', true); });
         });
         ov.querySelector('#tm-bottom-status').addEventListener('click', function () {
             var curTheme = getCurrentThemeName();
@@ -4025,7 +4074,7 @@
     function openCategoryPicker(options) {
         options = options || {};
         var data = load();
-        var categories = (data.categories || []).slice();
+        var categories = (Array.isArray(options.categories) ? options.categories : (data.categories || [])).slice();
         var selected = String(options.selected || '');
         var rows = categories.map(function (category) {
             var active = category === selected;
@@ -4089,7 +4138,7 @@
 
     function openTagPicker(options) {
         options = options || {};
-        var knownTags = collectThemeTags(load());
+        var knownTags = (Array.isArray(options.knownTags) ? options.knownTags : collectThemeTags(load())).slice();
         var selectedTags = Array.isArray(options.selectedTags) ? options.selectedTags.slice() : [];
         var selected = new Set(selectedTags.map(function (tag) { return String(tag || '').trim(); }).filter(Boolean));
         selected.forEach(function (tag) { if (knownTags.indexOf(tag) === -1) knownTags.push(tag); });
@@ -5397,13 +5446,13 @@
     }
 
     function renderAvatarBottomStatus() {
-        var el = document.getElementById('tm-avatar-bottom-status'); if (!el || !avatarPageController) return;
-        var status = avatarPageController.getNativeStatus();
-        var hasTarget = !!(status && status.targetKey);
-        var text = status && status.label || '未进入角色卡';
-        el.innerHTML = '<div class="tm-status-dot ' + (hasTarget ? 'green' : 'gray') + '"></div><span class="tm-status-text">' + esc(text) + '</span>';
-        el.title = hasTarget ? '管理「' + text + '」与 User 的原头像调整' : '管理角色与 User 原头像调整';
-        el.setAttribute('aria-label', el.title);
+        if (!avatarPageController) return;
+        var character = avatarPageController.getNativeStatus('character');
+        var user = avatarPageController.getNativeStatus('user');
+        var characterButton = document.getElementById('tm-avatar-restore-character');
+        var userButton = document.getElementById('tm-avatar-restore-user');
+        if (characterButton) { characterButton.disabled = !character.targetKey; characterButton.title = character.targetKey ? '恢复当前角色原头像：' + (character.label || '当前角色') : (character.reason || '当前没有选择角色'); }
+        if (userButton) { userButton.disabled = !user.targetKey; userButton.title = user.targetKey ? '恢复 User 原头像' : (user.reason || '当前 User 不可用'); }
     }
 
     // ── 角色 / 聊天绑定 ──────────────────────────────────────
@@ -6546,7 +6595,36 @@
     }
 
     // ── 设置 ─────────────────────────────────────────────────
+    function openAvatarSettingsSheet() {
+        var d = load();
+        var state = avatarPageController ? avatarPageController.getState() : { count: 0, categories: 0, series: 0 };
+        var updateState = getExtensionUpdateState();
+        var updateView = getExtensionUpdateView(updateState);
+        var interfaceHtml =
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>跟随当前美化外观</span><small>沿用美化管理器的颜色、圆角与面板质感</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + '></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + '></div>';
+        var organizeHtml =
+            '<button class="tm-btn tm-btn-outline" id="tm-avatar-open-categories" style="width:100%;text-align:left;margin-bottom:8px"><i class="fa-solid fa-tags"></i> 管理分类（' + state.categories + '个）</button>' +
+            '<button class="tm-btn tm-btn-outline" id="tm-avatar-enter-batch" style="width:100%;text-align:left"><i class="fa-solid fa-list-check"></i> 批量整理头像</button>';
+        var dataHtml =
+            '<div class="tm-storage-info">头像 ' + state.count + ' 张 / 分类 ' + state.categories + ' 个 / 系列 ' + state.series + ' 个</div>' +
+            '<div class="tm-hint" style="margin-bottom:9px">图片、绑定与原头像调整继续由 Avatar 安全存储管理；分类、标签和系列是独立轻量标注。</div>' +
+            '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>';
+        var extensionHtml = '<div class="tm-update-panel' + (updateState.phase === 'ready' && updateState.available ? ' has-update' : '') + '"><div class="tm-update-panel-head"><div><strong>美化管理 v' + esc(TM_VERSION) + '</strong><span class="tm-update-status">' + esc(updateView.status) + '</span></div><button type="button" class="tm-btn tm-btn-outline tm-update-action" id="tm-avatar-update-action" data-update-mode="' + esc(updateView.mode) + '"' + (updateView.disabled ? ' disabled' : '') + '><i class="fa-solid ' + (updateView.mode === 'update' ? 'fa-download' : 'fa-rotate') + '"></i> ' + esc(updateView.action) + '</button></div><div class="tm-update-detail"' + (updateView.detail ? '' : ' hidden') + '>' + esc(updateView.detail) + '</div><div class="tm-plugin-credit"><span>作者：温水</span><span>发布于毛毛雨美化群、旅程</span></div></div>';
+        var sheet = createSheet(['<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>头像设置</div>', buildDisclosureHtml('tm-avatar-settings-interface', '界面显示', 'fa-display', interfaceHtml), buildDisclosureHtml('tm-avatar-settings-organize', '分类与整理', 'fa-tags', organizeHtml), buildDisclosureHtml('tm-avatar-settings-data', '数据管理', 'fa-database', dataHtml), extensionHtml].join(''));
+        sheet.classList.add('tm-sheet-tall', 'tm-settings-sheet');
+        sheet.querySelector('#tm-avatar-follow-appearance').addEventListener('change', function () { var next = load(); next.followThemeAppearance = this.checked; save(next); syncManagerAppearance(); });
+        sheet.querySelector('#tm-avatar-auto-hide-header').addEventListener('change', function () { var next = load(); next.autoHideHeader = this.checked; save(next); syncManagerAppearance(); });
+        sheet.querySelector('#tm-avatar-open-categories').addEventListener('click', function () { closeSheet(sheet); avatarPageController.openCategoryManager(); });
+        sheet.querySelector('#tm-avatar-enter-batch').addEventListener('click', function () { closeSheet(sheet); avatarPageController.enterBatchMode(); });
+        sheet.querySelector('#tm-clear-all-user-avatar-overrides').addEventListener('click', function () { if (!confirm('彻底恢复 User 原头像？\n这会清除全局 User 头像、所有美化专属 User 头像与候选，以及 User 原头像调整；不会删除头像库。')) return; avatarRuntime.clearAllUserOverrides().then(function () { closeSheet(sheet); toast('已彻底恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复失败', true); }); });
+        sheet.querySelector('#tm-avatar-update-action').addEventListener('click', function () { var current = getExtensionUpdateState(); if (current.phase === 'ready' && current.available) openExtensionUpdateConfirmSheet(); else { this.disabled = true; checkExtensionUpdate(true).catch(function () { toast('检查更新失败；请检查网络、Git 状态或酒馆服务日志', true); }); } });
+        syncExtensionUpdatePanel();
+        return sheet;
+    }
+
     function openSettingsSheet() {
+        if (lastAppPage === 'avatars') return openAvatarSettingsSheet();
         var d = load();
         var updateState = getExtensionUpdateState();
         var updateView = getExtensionUpdateView(updateState);

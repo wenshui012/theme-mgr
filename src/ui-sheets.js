@@ -20,6 +20,23 @@
             return overlay;
         }
 
+        function createActionDialog(contentHtml) {
+            var overlay = global.document.createElement('div');
+            overlay.className = 'tm-sheet-overlay tm-action-dialog-overlay';
+            overlay.innerHTML = '<div class="tm-action-dialog" role="dialog" aria-modal="true" tabindex="-1">' + contentHtml + '</div>';
+            getPopupLayer().appendChild(overlay);
+            overlay.addEventListener('click', function (event) {
+                if (event.target === overlay) requestClose(overlay, 'backdrop');
+            });
+            overlay.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') { event.preventDefault(); requestClose(overlay, 'escape'); }
+            });
+            var first = overlay.querySelector('button:not([disabled]),[tabindex="0"]');
+            if (first && typeof first.focus === 'function') first.focus();
+            else if (overlay.firstElementChild && typeof overlay.firstElementChild.focus === 'function') overlay.firstElementChild.focus();
+            return overlay;
+        }
+
         function setBeforeClose(overlay, handler) {
             if (!overlay) return;
             if (typeof handler === 'function') beforeCloseHandlers.set(overlay, handler);
@@ -143,6 +160,7 @@
 
         return {
             createSheet: createSheet,
+            createActionDialog: createActionDialog,
             closeSheet: closeSheet,
             requestClose: requestClose,
             requestCloseAll: requestCloseAll,
