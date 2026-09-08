@@ -289,10 +289,12 @@ function pageFixture(seed = [], bindings = [], options = {}) {
     const doc = new Document(); const pageRoot = new PageRoot(); doc.pageRoot = pageRoot;
     const { store } = memoryStore({ assets: seed, bindings }); let disconnected = 0; let observed = 0;
     const imageLoader = { PLACEHOLDER_SRC: 'placeholder', createImageLoader: () => ({ observe: () => { observed++; }, disconnect: () => { disconnected++; } }) };
-    const runtime = { getCapabilities: () => ({ themeKey: 'theme-name:A', character: { available: true, target: { key: 'character:c' } }, user: { available: true, target: { key: 'user:global' } } }), notifyAssetChanged: async () => {}, deleteAsset: (id) => store.deleteAsset(id), clearBinding: async () => {}, beginEdit: async () => {} };
-    const win = { document: doc, confirm: () => true, setTimeout, clearTimeout }; const mods = loadModules(win);
+    const runtime = { getCapabilities: () => ({ themeKey: 'theme-name:A', character: { available: true, target: { key: 'character:c' } }, user: { available: true, target: { key: 'user:global' } } }), getActiveAvatarIds: () => options.activeAvatarIds || { user: '', character: '' }, notifyAssetChanged: async () => {}, deleteAsset: (id) => store.deleteAsset(id), clearBinding: async () => {}, beginEdit: async () => {} };
+    const win = { document: doc, confirm: () => true, setTimeout, clearTimeout };
+    if (options.gridTemplateColumns) win.getComputedStyle = () => ({ gridTemplateColumns: options.gridTemplateColumns });
+    const mods = loadModules(win);
     const processor = options.processor || { processFile: async (file) => asset(file.name) };
-    const uiData = {};
+    const uiData = options.uiData || {};
     let lastDialog = '';
     const page = mods.createAvatarPage({
         document: doc, store, processor, runtime, imageLoader, getRoot: () => pageRoot,
@@ -395,16 +397,60 @@ test('44 avatar grid starts with the original-avatar slot and cards stay image-o
     assert.match(f.lastDialog(), /管理头像/);
     assert.match(f.lastDialog(), /is-weak/);
 });
-test('45 shared header owns the only Avatar add entry and remembers the last app page', () => {
+test('45 Avatar bottom bar owns add and batch actions in the requested five-button order', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     assert.match(source, /id="tm-avatar-add"/);
     assert.match(source, /id="tm-avatar-restore-user"/);
     assert.match(source, /id="tm-avatar-restore-character"/);
+    assert.match(source, /id="tm-avatar-restore-user"[\s\S]*id="tm-avatar-restore-character"[\s\S]*id="tm-avatar-add"[\s\S]*id="tm-avatar-batch-toggle"[\s\S]*id="tm-bottom-settings"/);
+    assert.doesNotMatch(source, /tm-icon-btn tm-avatars-only" id="tm-avatar-add"/);
+    assert.doesNotMatch(source, /fa-user-rotate/);
+    assert.doesNotMatch(source, /tm-avatar-enter-batch/);
     assert.doesNotMatch(source, /id="tm-avatar-bottom-status"/);
     assert.match(source, /renderAvatarBottomStatus/);
     assert.match(source, /avatarPageController\.pickFiles\(\)/);
+    assert.match(source, /avatarPageController\.toggleBatchMode\(\)/);
     assert.match(source, /defaultPage: lastAppPage/);
     assert.match(source, /lastAppPage = appShellController\.getActivePage\(\)/);
+});
+
+test('active User and Character avatars are promoted after the fixed original-avatar slot', async () => {
+    const f = pageFixture([asset('a'), asset('b'), asset('c')], [], { activeAvatarIds: { user: 'b', character: 'c' } });
+    await f.page.mount();
+    const html = f.pageRoot.grid.innerHTML;
+    assert.ok(html.indexOf('tm-avatar-native-slot') < html.indexOf('data-avatar-id="b"'));
+    assert.ok(html.indexOf('data-avatar-id="b"') < html.indexOf('data-avatar-id="c"'));
+    assert.ok(html.indexOf('data-avatar-id="c"') < html.indexOf('data-avatar-id="a"'));
+    assert.equal((html.match(/tm-avatar-page-card is-active/g) || []).length, 2);
+});
+
+test('runtime exposes only the currently applied library avatar ids for grid prioritization', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('user-active'), asset('char-active')], bindings: [
+        { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'user-active', view: {} },
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:char.png', avatarId: 'char-active', view: {} },
+    ] } });
+    await f.runtime.start();
+    assert.deepEqual(JSON.parse(JSON.stringify(f.runtime.getActiveAvatarIds())), { user: 'user-active', character: 'char-active' });
+});
+
+test('series use the computed three-column grid and stay in one invisible row container', async () => {
+    const ids = ['a', 'b', 'c', 'd'];
+    const uiData = { avatarLibrary: { series: { groups: { trio: { id: 'trio', name: '三人组', members: ids.slice(0, 3) } } } } };
+    const f = pageFixture(ids.map(asset), [], { uiData, gridTemplateColumns: '100px 100px 100px' });
+    await f.page.mount();
+    assert.match(f.pageRoot.grid.innerHTML, /class="tm-avatar-series-inline"[^>]*--tm-avatar-series-size:3/);
+    assert.doesNotMatch(f.pageRoot.grid.innerHTML, /class="tm-avatar-series-block/);
+    assert.match(modules.avatarPage.styleText(), /grid-auto-flow:row dense/);
+    assert.match(modules.avatarPage.styleText(), /grid-column:span var\(--tm-avatar-series-size,2\)/);
+});
+
+test('a series larger than the computed row capacity becomes a single-row rail', async () => {
+    const ids = ['a', 'b', 'c', 'd'];
+    const uiData = { avatarLibrary: { series: { groups: { four: { id: 'four', name: '四人组', members: ids } } } } };
+    const f = pageFixture(ids.map(asset), [], { uiData, gridTemplateColumns: '100px 100px 100px' });
+    await f.page.mount();
+    assert.match(f.pageRoot.grid.innerHTML, /class="tm-avatar-series-block/);
+    assert.match(f.pageRoot.grid.innerHTML, /--tm-avatar-series-cols:3/);
 });
 
 test('avatar click opens the action dialog directly without a double-click delay', () => {

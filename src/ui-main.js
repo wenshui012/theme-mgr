@@ -341,6 +341,10 @@
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = importing || !avatarCoordinator || !avatarCoordinator.canMutate();
                 },
+                onBatchModeChange: function (enabled) {
+                    var button = document.getElementById('tm-avatar-batch-toggle');
+                    if (button) button.classList.toggle('on', enabled === true);
+                },
                 toast: toast,
                 confirm: global.confirm.bind(global),
             });
@@ -3780,8 +3784,6 @@
             '<div class="tm-head">' +
             pageSwitcherHtml +
             '<div class="tm-head-actions">' +
-            '<button class="tm-icon-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
-            (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
             '<button class="tm-icon-btn tm-library-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
             '<button class="tm-icon-btn tm-library-only" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
             '<button class="tm-icon-btn" id="tm-theme-toggle" title="切换明暗"><i class="fa-solid fa-circle-half-stroke"></i></button>' +
@@ -3790,8 +3792,11 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-user" title="恢复 User 原头像" aria-label="恢复 User 原头像"><i class="fa-solid fa-user-rotate"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-user" title="恢复 User 原头像" aria-label="恢复 User 原头像"><i class="fa-solid fa-user"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-character" title="恢复当前角色原头像" aria-label="恢复当前角色原头像"><i class="fa-solid fa-address-card"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatar-add-primary tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
+            (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选整理" aria-label="多选整理"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
@@ -3843,6 +3848,9 @@
         ov.querySelector('#tm-x').addEventListener('click', closePopup);
         ov.querySelector('#tm-avatar-add').addEventListener('click', function () {
             if (avatarPageController) avatarPageController.pickFiles();
+        });
+        ov.querySelector('#tm-avatar-batch-toggle').addEventListener('click', function () {
+            if (avatarPageController) avatarPageController.toggleBatchMode();
         });
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
@@ -3935,11 +3943,11 @@
             if (!avatarRuntime || this.disabled || !confirm('恢复使用 User 原头像？当前美化专属头像与全局 User 头像都会停止使用；其他美化的专属头像保持不变。')) return;
             var themeName = getCurrentThemeName();
             var clearTheme = themeName ? avatarRuntime.clearThemeUserBinding(themeName) : Promise.resolve();
-            clearTheme.then(function () { return avatarRuntime.clearBinding('user'); }).then(function () { toast('已恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复 User 原头像失败', true); });
+            clearTheme.then(function () { return avatarRuntime.clearBinding('user'); }).then(function () { toast('已恢复 User 原头像'); if (avatarPageController) return avatarPageController.refresh(); }).catch(function (error) { toast(error.message || '恢复 User 原头像失败', true); });
         });
         ov.querySelector('#tm-avatar-restore-character').addEventListener('click', function () {
             if (!avatarRuntime || this.disabled || !confirm('恢复使用当前角色原头像？')) return;
-            avatarRuntime.clearBinding('character').then(function () { toast('已恢复当前角色原头像'); }).catch(function (error) { toast(error.message || '恢复角色原头像失败', true); });
+            avatarRuntime.clearBinding('character').then(function () { toast('已恢复当前角色原头像'); if (avatarPageController) return avatarPageController.refresh(); }).catch(function (error) { toast(error.message || '恢复角色原头像失败', true); });
         });
         ov.querySelector('#tm-bottom-status').addEventListener('click', function () {
             var curTheme = getCurrentThemeName();
@@ -6604,8 +6612,7 @@
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>跟随当前美化外观</span><small>沿用美化管理器的颜色、圆角与面板质感</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + '></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + '></div>';
         var organizeHtml =
-            '<button class="tm-btn tm-btn-outline" id="tm-avatar-open-categories" style="width:100%;text-align:left;margin-bottom:8px"><i class="fa-solid fa-tags"></i> 管理分类（' + state.categories + '个）</button>' +
-            '<button class="tm-btn tm-btn-outline" id="tm-avatar-enter-batch" style="width:100%;text-align:left"><i class="fa-solid fa-list-check"></i> 批量整理头像</button>';
+            '<button class="tm-btn tm-btn-outline" id="tm-avatar-open-categories" style="width:100%;text-align:left"><i class="fa-solid fa-tags"></i> 管理分类（' + state.categories + '个）</button>';
         var dataHtml =
             '<div class="tm-storage-info">头像 ' + state.count + ' 张 / 分类 ' + state.categories + ' 个 / 系列 ' + state.series + ' 个</div>' +
             '<div class="tm-hint" style="margin-bottom:9px">图片、绑定与原头像调整继续由 Avatar 安全存储管理；分类、标签和系列是独立轻量标注。</div>' +
@@ -6616,7 +6623,6 @@
         sheet.querySelector('#tm-avatar-follow-appearance').addEventListener('change', function () { var next = load(); next.followThemeAppearance = this.checked; save(next); syncManagerAppearance(); });
         sheet.querySelector('#tm-avatar-auto-hide-header').addEventListener('change', function () { var next = load(); next.autoHideHeader = this.checked; save(next); syncManagerAppearance(); });
         sheet.querySelector('#tm-avatar-open-categories').addEventListener('click', function () { closeSheet(sheet); avatarPageController.openCategoryManager(); });
-        sheet.querySelector('#tm-avatar-enter-batch').addEventListener('click', function () { closeSheet(sheet); avatarPageController.enterBatchMode(); });
         sheet.querySelector('#tm-clear-all-user-avatar-overrides').addEventListener('click', function () { if (!confirm('彻底恢复 User 原头像？\n这会清除全局 User 头像、所有美化专属 User 头像与候选，以及 User 原头像调整；不会删除头像库。')) return; avatarRuntime.clearAllUserOverrides().then(function () { closeSheet(sheet); toast('已彻底恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复失败', true); }); });
         sheet.querySelector('#tm-avatar-update-action').addEventListener('click', function () { var current = getExtensionUpdateState(); if (current.phase === 'ready' && current.available) openExtensionUpdateConfirmSheet(); else { this.disabled = true; checkExtensionUpdate(true).catch(function () { toast('检查更新失败；请检查网络、Git 状态或酒馆服务日志', true); }); } });
         syncExtensionUpdatePanel();

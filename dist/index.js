@@ -9551,7 +9551,7 @@
 })(window);
 /* END MODULE 19/27: src/avatar-library.js */
 
-/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:b2df76211e2da7537e081b860787df1b28d98e94719dcea6d3c53405eecf1bc1 */
+/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:a8429d2846114b0fca20a225fe472df680fb84d505a48353a2d4948ad799c0ee */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -11187,6 +11187,14 @@
                 diagnostics: clone(editor.diagnostics),
             } : { state: 'idle' };
         }
+        function getActiveAvatarIds() {
+            var result = { user: '', character: '' };
+            bindingPlans.forEach(function (plan) {
+                if (!plan || plan.native || plan.hostSource || !plan.target || !plan.binding || !plan.binding.avatarId) return;
+                if (plan.target.kind === 'user' || plan.target.kind === 'character') result[plan.target.kind] = plan.binding.avatarId;
+            });
+            return result;
+        }
         function notifyAssetChanged(id) { if (id) { assetCache.delete(id); rotatedSources.delete(id); } return reconcile(); }
 
         return {
@@ -11216,6 +11224,7 @@
             deleteAsset: deleteAsset,
             notifyAssetChanged: notifyAssetChanged,
             getState: getState,
+            getActiveAvatarIds: getActiveAvatarIds,
             isEditing: function () { return !!editor; },
         };
     };
@@ -11241,7 +11250,7 @@
 })(window);
 /* END MODULE 20/27: src/avatar-runtime.js */
 
-/* BEGIN MODULE 21/27: src/avatar-page.js | sha256:9b8b9707fb0c048167f462ad72a431e7993ca51426ef8aa1ced3025faece7b33 */
+/* BEGIN MODULE 21/27: src/avatar-page.js | sha256:77869f001e913dae723d5beb18dc1922c505554546238242c166df731ef541b7 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -11259,13 +11268,13 @@
         '.tm-app-page-avatars{display:block;place-items:initial;min-width:0;overflow:hidden;padding:0}',
         '.tm-avatar-page{height:100%;min-width:0;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden}',
         '.tm-avatar-page-notice{flex:0 0 auto;margin:9px 14px 0;padding:8px 10px;border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));border-radius:var(--tm-control-radius,8px);background:var(--tm-control-bg,rgba(127,127,127,.06));color:inherit;font-size:.8em}.tm-avatar-page-notice[data-kind="loading"] i{display:inline-block;margin-right:6px;animation:tm-spin 1s linear infinite}.tm-avatar-page-notice[data-kind="error"]{border-color:currentColor}',
-        '.tm-avatar-page-grid{min-width:0;min-height:0;flex:1 1 auto;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));grid-auto-rows:max-content;align-content:start;align-items:start;gap:9px;padding:12px}',
+        '.tm-avatar-page-grid{min-width:0;min-height:0;flex:1 1 auto;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));grid-auto-flow:row dense;grid-auto-rows:max-content;align-content:start;align-items:start;gap:9px;padding:12px}',
         '.tm-avatar-page-card,.tm-avatar-native-slot{min-width:0;width:100%;height:auto;aspect-ratio:1;align-self:start;position:relative;overflow:hidden;border:var(--tm-card-border-style,2px solid var(--tm-card-border,transparent));border-radius:var(--tm-card-radius,10px);background:var(--tm-card-bg,rgba(127,127,127,.06));box-shadow:var(--tm-card-shadow,none)}.tm-avatar-page-card{width:100%;aspect-ratio:1;align-self:start;cursor:pointer}.tm-avatar-page-card:focus-visible,.tm-avatar-native-slot:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf);outline-offset:2px}',
         '.tm-avatar-page-thumb{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;background:var(--tm-control-bg,rgba(127,127,127,.1))}',
         '.tm-avatar-native-slot{display:grid;place-items:center;cursor:pointer;color:inherit}.tm-avatar-native-slot>i{font-size:2.15em;opacity:.16}.tm-avatar-native-slot:hover>i{opacity:.27;color:var(--SmartThemeQuoteColor,#7c6daf)}',
-        '.tm-avatar-card-check{position:absolute;right:7px;top:7px;z-index:2;width:23px;height:23px;display:none;place-items:center;border-radius:50%;background:rgba(0,0,0,.52);color:#fff;border:1px solid rgba(255,255,255,.55)}.tm-avatar-page.is-batch .tm-avatar-card-check{display:grid}.tm-avatar-page-card.batch-sel{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-avatar-page-card.batch-sel .tm-avatar-card-check{background:var(--SmartThemeQuoteColor,#7c6daf)}',
+        '.tm-avatar-card-active,.tm-avatar-card-check{position:absolute;right:7px;top:7px;z-index:2;width:23px;height:23px;place-items:center;border-radius:50%;background:rgba(0,0,0,.52);color:#fff;border:1px solid rgba(255,255,255,.55)}.tm-avatar-card-active{display:grid;font-size:.68em}.tm-avatar-card-check{display:none}.tm-avatar-page.is-batch .tm-avatar-card-active{display:none}.tm-avatar-page.is-batch .tm-avatar-card-check{display:grid}.tm-avatar-page-card.is-active{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-avatar-page-card.batch-sel{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-avatar-page-card.batch-sel .tm-avatar-card-check{background:var(--SmartThemeQuoteColor,#7c6daf)}',
         '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}.tm-avatar-page-empty{padding:18px 12px;font-size:.78em;opacity:.48}',
-        '.tm-avatar-series-block{grid-column:1/-1;min-width:0;position:relative;overflow:hidden}.tm-avatar-series-track{display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - (var(--tm-avatar-series-cols,3) - 1)*9px)/var(--tm-avatar-series-cols,3));gap:9px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}.tm-avatar-series-track::-webkit-scrollbar{display:none}.tm-avatar-series-block.is-expanded{overflow:visible}.tm-avatar-series-block.is-expanded .tm-avatar-series-track{grid-auto-flow:row;grid-auto-columns:initial;grid-template-columns:repeat(var(--tm-avatar-series-cols,3),minmax(0,1fr));overflow:visible}',
+        '.tm-avatar-series-inline{grid-column:span var(--tm-avatar-series-size,2);min-width:0;display:grid;grid-template-columns:repeat(var(--tm-avatar-series-size,2),minmax(0,1fr));gap:9px}.tm-avatar-series-block{grid-column:1/-1;min-width:0;position:relative;overflow:hidden}.tm-avatar-series-track{display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - (var(--tm-avatar-series-cols,3) - 1)*9px)/var(--tm-avatar-series-cols,3));gap:9px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}.tm-avatar-series-track::-webkit-scrollbar{display:none}.tm-avatar-series-block.is-expanded{overflow:visible}.tm-avatar-series-block.is-expanded .tm-avatar-series-track{grid-auto-flow:row;grid-auto-columns:initial;grid-template-columns:repeat(var(--tm-avatar-series-cols,3),minmax(0,1fr));overflow:visible}',
         '.tm-avatar-series-controls{position:absolute;right:6px;top:6px;z-index:4;display:flex;gap:4px;opacity:0;visibility:hidden;transform:translateY(-3px);transition:.18s;pointer-events:none}.tm-avatar-series-block.is-interacting .tm-avatar-series-controls,.tm-avatar-series-controls:focus-within{opacity:1;visibility:visible;transform:none;pointer-events:auto}.tm-avatar-series-control{width:32px;height:32px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.28);border-radius:9px;background:rgba(0,0,0,.58);color:#fff;cursor:pointer}',
         '.tm-avatar-manage-summary{display:flex;align-items:center;gap:10px;margin-bottom:10px}.tm-avatar-manage-thumb{width:54px;height:54px;border-radius:10px;object-fit:cover;background:rgba(127,127,127,.1)}.tm-avatar-manage-summary>span{display:flex;min-width:0;flex-direction:column;gap:3px}.tm-avatar-manage-summary small{opacity:.5}.tm-avatar-category-actions{display:flex;gap:4px}.tm-avatar-category-actions button{width:30px;height:30px;padding:0}',
         '@media(max-width:430px){.tm-avatar-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}.tm-avatar-page-notice{margin:8px 10px 0}.tm-avatar-series-track{gap:7px;grid-auto-columns:calc((100% - (var(--tm-avatar-series-cols,3) - 1)*7px)/var(--tm-avatar-series-cols,3))}}'
@@ -11278,10 +11287,10 @@
         var imageLoaderApi = options.imageLoader, imageToolsApi = options.imageTools || ns.imageTools, getRoot = options.getRoot;
         var closeManager = options.closeManager || function () {}, createSheet = options.createSheet, closeSheet = options.closeSheet || function (sheet) { if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet); };
         var createActionDialog = options.createActionDialog, openImageLightbox = options.openImageLightbox, openCategoryPicker = options.openCategoryPicker, openTagPicker = options.openTagPicker;
-        var loadUiData = options.loadUiData || function () { return {}; }, saveUiData = options.saveUiData || function () {}, onImportingChange = options.onImportingChange || function () {}, toast = options.toast || function () {};
+        var loadUiData = options.loadUiData || function () { return {}; }, saveUiData = options.saveUiData || function () {}, onImportingChange = options.onImportingChange || function () {}, onBatchModeChange = options.onBatchModeChange || function () {}, toast = options.toast || function () {};
         var confirmAction = options.confirm || global.confirm, logger = options.console || global.console || { error: function () {} };
         var mounted = false, root = null, fileInput = null, gridLoader = null, resizeObserver = null, assets = [], refreshToken = 0, importing = false;
-        var searchOpen = false, sortOpen = false, query = '', category = '__all__', batchMode = false, batchSelected = new Set(), expandedSeriesId = '', railTimers = new Map(), lastColumnCount = 0;
+        var searchOpen = false, sortOpen = false, query = '', category = '__all__', batchMode = false, batchSelected = new Set(), expandedSeriesId = '', railTimers = new Map(), lastColumnCount = 0, activeAvatarIds = [];
         function data() { var value = loadUiData(); library.ensureState(value); return value; }
         function reportError(stage, error, file) { if (logger && typeof logger.error === 'function') logger.error('[Theme Manager][Avatar] ' + stage, { file: file && file.name, error: error, cause: error && error.cause }); }
         function setNotice(message, kind) { if (!root) return; var notice = root.querySelector('[data-avatar-notice]'); notice.innerHTML = kind === 'loading' && message ? '<i class="fa-solid fa-spinner"></i>' + esc(message) : esc(message || ''); if (kind) notice.setAttribute('data-kind', kind); else notice.removeAttribute('data-kind'); notice.hidden = !message; }
@@ -11292,15 +11301,18 @@
         function setImporting(value) { importing = Boolean(value); onImportingChange(importing); if (root && importing) setNotice('正在添加头像…', 'loading'); }
         function mutationBlocked() { if (canMutate()) return false; setNotice('头像存储当前只读或尚未安全就绪', 'error'); return true; }
         function nativeSlotHtml() { return '<button type="button" class="tm-avatar-native-slot" data-avatar-action="native" aria-label="调整原头像"><i class="fa-regular fa-circle-user" aria-hidden="true"></i></button>'; }
-        function cardHtml(asset) { var selected = batchSelected.has(asset.id); return '<article class="tm-avatar-page-card' + (selected ? ' batch-sel' : '') + '" data-avatar-id="' + esc(asset.id) + '" tabindex="0" role="button" aria-label="使用头像 ' + esc(asset.name) + '"><img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" alt=""><span class="tm-avatar-card-check"><i class="fa-solid ' + (selected ? 'fa-check' : 'fa-plus') + '"></i></span></article>'; }
-        function columns() { var grid = root && root.querySelector('[data-avatar-grid]'), width = grid && grid.clientWidth || 0; if (width <= 430) return 3; return Math.max(1, Math.floor((Math.max(112, width - 24) + 9) / 121)); }
-        function matchingAssets(state) { var lowered = query.toLocaleLowerCase(); return assets.filter(function (asset) { var meta = library.peekMeta(state, asset.id); if (category !== '__all__' && (category === '__uncategorized__' ? !!meta.category : meta.category !== category)) return false; if (!lowered) return true; var series = library.findSeries(state, asset.id); return [meta.category].concat(meta.tags, series ? [series.name] : []).some(function (text) { return String(text || '').toLocaleLowerCase().indexOf(lowered) !== -1; }); }).sort(function (a, b) { var mode = library.ensureState(state).sortMode; return library.compareAssets(state, a, b, mode); }); }
-        function layoutHtml(state, list, count) { var byId = Object.create(null), emitted = new Set(), chunks = []; list.forEach(function (item) { byId[item.id] = item; }); list.forEach(function (asset) { if (emitted.has(asset.id)) return; var group = library.findSeries(state, asset.id), members = group ? group.members.map(function (id) { return byId[id]; }).filter(Boolean) : []; if (!group || members.length < 2) { emitted.add(asset.id); chunks.push(cardHtml(asset)); return; } members.forEach(function (item) { emitted.add(item.id); }); if (members.length <= count) { chunks.push(members.map(cardHtml).join('')); return; } var expanded = expandedSeriesId === group.id; chunks.push('<section class="tm-avatar-series-block' + (expanded ? ' is-expanded' : '') + '" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-cols:' + count + '"><div class="tm-avatar-series-track">' + members.map(cardHtml).join('') + '</div><div class="tm-avatar-series-controls"><button type="button" class="tm-avatar-series-control" data-avatar-series-manage="' + esc(group.id) + '" title="管理系列" aria-label="管理系列"><i class="fa-solid fa-sliders"></i></button><button type="button" class="tm-avatar-series-control" data-avatar-series-toggle="' + esc(group.id) + '" title="' + (expanded ? '收起系列' : '展开系列') + '" aria-label="' + (expanded ? '收起系列' : '展开系列') + '"><i class="fa-solid ' + (expanded ? 'fa-compress' : 'fa-expand') + '"></i></button></div></section>'); }); return chunks.join(''); }
+        function activeRank(id) { var index = activeAvatarIds.indexOf(id); return index === -1 ? Number.MAX_SAFE_INTEGER : index; }
+        function syncActiveAvatarIds() { var current = runtime && typeof runtime.getActiveAvatarIds === 'function' ? runtime.getActiveAvatarIds() : {}; activeAvatarIds = [current && current.user, current && current.character].filter(function (id, index, list) { return id && list.indexOf(id) === index; }); }
+        function cardHtml(asset) { var selected = batchSelected.has(asset.id), active = activeRank(asset.id) !== Number.MAX_SAFE_INTEGER; return '<article class="tm-avatar-page-card' + (active ? ' is-active' : '') + (selected ? ' batch-sel' : '') + '" data-avatar-id="' + esc(asset.id) + '" tabindex="0" role="button" aria-label="使用头像 ' + esc(asset.name) + '"><img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" alt="">' + (active ? '<span class="tm-avatar-card-active" title="当前正在使用"><i class="fa-solid fa-check"></i></span>' : '') + '<span class="tm-avatar-card-check"><i class="fa-solid ' + (selected ? 'fa-check' : 'fa-plus') + '"></i></span></article>'; }
+        function countGridTracks(value) { value = String(value || '').trim(); if (/^repeat\(\s*auto-(?:fill|fit)/i.test(value)) return 0; var repeat = value.match(/^repeat\(\s*(\d+)/i); if (repeat) return Number(repeat[1]); var depth = 0, count = 0, token = false; value.split('').forEach(function (character) { if (/\s/.test(character) && depth === 0) { if (token) { count += 1; token = false; } return; } token = true; if (character === '(') depth += 1; else if (character === ')' && depth > 0) depth -= 1; }); return count + (token ? 1 : 0); }
+        function columns() { var grid = root && root.querySelector('[data-avatar-grid]'), width = grid && grid.clientWidth || 0; if (grid && typeof global.getComputedStyle === 'function') { var template = global.getComputedStyle(grid).gridTemplateColumns, actual = template && template !== 'none' ? countGridTracks(template) : 0; if (actual > 0) return actual; } if (width <= 430) return 3; return Math.max(1, Math.floor((Math.max(112, width - 24) + 9) / 121)); }
+        function matchingAssets(state) { var lowered = query.toLocaleLowerCase(), mode = library.ensureState(state).sortMode; var sorted = assets.filter(function (asset) { var meta = library.peekMeta(state, asset.id); if (category !== '__all__' && (category === '__uncategorized__' ? !!meta.category : meta.category !== category)) return false; if (!lowered) return true; var series = library.findSeries(state, asset.id); return [meta.category].concat(meta.tags, series ? [series.name] : []).some(function (text) { return String(text || '').toLocaleLowerCase().indexOf(lowered) !== -1; }); }).sort(function (a, b) { return library.compareAssets(state, a, b, mode); }); var stableIndex = new Map(sorted.map(function (asset, index) { return [asset.id, index]; })); return sorted.sort(function (a, b) { var priority = activeRank(a.id) - activeRank(b.id); return priority || stableIndex.get(a.id) - stableIndex.get(b.id); }); }
+        function layoutHtml(state, list, count) { var byId = Object.create(null), emitted = new Set(), chunks = []; list.forEach(function (item) { byId[item.id] = item; }); list.forEach(function (asset) { if (emitted.has(asset.id)) return; var group = library.findSeries(state, asset.id), members = group ? group.members.map(function (id) { return byId[id]; }).filter(Boolean) : []; if (!group || members.length < 2) { emitted.add(asset.id); chunks.push(cardHtml(asset)); return; } members.forEach(function (item) { emitted.add(item.id); }); members.sort(function (a, b) { var priority = activeRank(a.id) - activeRank(b.id); return priority || group.members.indexOf(a.id) - group.members.indexOf(b.id); }); if (members.length <= count) { chunks.push('<section class="tm-avatar-series-inline" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-size:' + members.length + '">' + members.map(cardHtml).join('') + '</section>'); return; } var expanded = expandedSeriesId === group.id; chunks.push('<section class="tm-avatar-series-block' + (expanded ? ' is-expanded' : '') + '" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-cols:' + count + '"><div class="tm-avatar-series-track">' + members.map(cardHtml).join('') + '</div><div class="tm-avatar-series-controls"><button type="button" class="tm-avatar-series-control" data-avatar-series-manage="' + esc(group.id) + '" title="管理系列" aria-label="管理系列"><i class="fa-solid fa-sliders"></i></button><button type="button" class="tm-avatar-series-control" data-avatar-series-toggle="' + esc(group.id) + '" title="' + (expanded ? '收起系列' : '展开系列') + '" aria-label="' + (expanded ? '收起系列' : '展开系列') + '"><i class="fa-solid ' + (expanded ? 'fa-compress' : 'fa-expand') + '"></i></button></div></section>'); }); return chunks.join(''); }
         function setupGridLoader() { if (gridLoader) gridLoader.disconnect(); var grid = root.querySelector('[data-avatar-grid]'); gridLoader = imageLoaderApi.createImageLoader({ root: grid, rootMargin: '320px 0px', resolveSource: function (id) { return store.getThumbnail(id); } }); gridLoader.observe(grid.querySelectorAll('.tm-avatar-page-thumb')); }
         function renderCategoryBar(state) { var bar = root.querySelector('[data-avatar-catbar]'), categories = library.ensureState(state).categories; bar.innerHTML = [{ key: '__all__', label: '全部' }, { key: '__uncategorized__', label: '未分类' }].concat(categories.map(function (name) { return { key: name, label: name }; })).map(function (item) { return '<button class="tm-catbtn' + (category === item.key ? ' on' : '') + '" data-avatar-category="' + esc(item.key) + '">' + esc(item.label) + '</button>'; }).join(''); }
-        function renderBatch() { var area = root.querySelector('[data-avatar-batch-area]'); root.classList.toggle('is-batch', batchMode); if (!batchMode) { area.innerHTML = ''; area.style.display = 'none'; return; } area.style.display = ''; area.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">已选 <b>' + batchSelected.size + '</b> 个</span><div class="tm-batch-divider"></div><div class="tm-batch-acts"><button class="tm-batch-btn" data-avatar-batch="all">全选</button><button class="tm-batch-btn" data-avatar-batch="none">取消</button><button class="tm-batch-btn" data-avatar-batch="category"><i class="fa-solid fa-folder"></i> 分类</button><button class="tm-batch-btn" data-avatar-batch="tags"><i class="fa-solid fa-tag"></i> 标签</button><button class="tm-batch-btn" data-avatar-batch="series"><i class="fa-solid fa-layer-group"></i> 系列</button><button class="tm-batch-btn" data-avatar-batch="exit">完成</button></div></div>'; }
+        function renderBatch() { var area = root.querySelector('[data-avatar-batch-area]'); root.classList.toggle('is-batch', batchMode); onBatchModeChange(batchMode); if (!batchMode) { area.innerHTML = ''; area.style.display = 'none'; return; } area.style.display = ''; area.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">已选 <b>' + batchSelected.size + '</b> 个</span><div class="tm-batch-divider"></div><div class="tm-batch-acts"><button class="tm-batch-btn" data-avatar-batch="all">全选</button><button class="tm-batch-btn" data-avatar-batch="none">取消</button><button class="tm-batch-btn" data-avatar-batch="category"><i class="fa-solid fa-folder"></i> 分类</button><button class="tm-batch-btn" data-avatar-batch="tags"><i class="fa-solid fa-tag"></i> 标签</button><button class="tm-batch-btn" data-avatar-batch="series"><i class="fa-solid fa-layer-group"></i> 系列</button><button class="tm-batch-btn" data-avatar-batch="exit">完成</button></div></div>'; }
         function bindRailInteractions() { root.querySelectorAll('.tm-avatar-series-block').forEach(function (block) { var id = block.dataset.avatarSeriesId; function show() { block.classList.add('is-interacting'); if (railTimers.has(id)) global.clearTimeout(railTimers.get(id)); railTimers.set(id, global.setTimeout(function () { block.classList.remove('is-interacting'); railTimers.delete(id); }, 1700)); } block.addEventListener('pointerdown', show, { passive: true }); block.addEventListener('scroll', show, { passive: true }); block.addEventListener('focusin', show); }); }
-        function render() { if (!root) return; var state = data(), list = matchingAssets(state), grid = root.querySelector('[data-avatar-grid]'), count = columns(); lastColumnCount = count; renderCategoryBar(state); renderBatch(); grid.innerHTML = nativeSlotHtml() + layoutHtml(state, list, count) + (!assets.length ? '<div class="tm-avatar-page-empty">点击顶栏的＋添加头像</div>' : (!list.length ? '<div class="tm-avatar-page-empty">没有符合条件的头像</div>' : '')); root.querySelectorAll('[data-avatar-sort]').forEach(function (button) { button.classList.toggle('on', button.dataset.avatarSort === library.ensureState(state).sortMode); }); setupGridLoader(); setImporting(importing); bindRailInteractions(); }
+        function render() { if (!root) return; syncActiveAvatarIds(); var state = data(), list = matchingAssets(state), grid = root.querySelector('[data-avatar-grid]'), count = columns(); lastColumnCount = count; renderCategoryBar(state); renderBatch(); grid.innerHTML = nativeSlotHtml() + layoutHtml(state, list, count) + (!assets.length ? '<div class="tm-avatar-page-empty">点击底栏中间的＋添加头像</div>' : (!list.length ? '<div class="tm-avatar-page-empty">没有符合条件的头像</div>' : '')); root.querySelectorAll('[data-avatar-sort]').forEach(function (button) { button.classList.toggle('on', button.dataset.avatarSort === library.ensureState(state).sortMode); }); setupGridLoader(); setImporting(importing); bindRailInteractions(); }
         function refresh() { var token = ++refreshToken; return store.listAssets().then(function (items) { if (!mounted || token !== refreshToken) return; assets = items || []; render(); }).catch(function (error) { reportError('library refresh failed', error); if (mounted) setNotice('头像库读取失败', 'error'); throw error; }); }
         function importFiles(files) { if (mutationBlocked()) return Promise.reject(Object.assign(new Error('头像存储当前不可写'), { code: 'AVATAR_STORAGE_READ_ONLY' })); files = Array.prototype.slice.call(files || []); if (!files.length) return Promise.resolve([]); setImporting(true); return Promise.all(files.map(function (file) { return processor.processFile(file).then(function (asset) { return store.putAsset(asset).then(function (saved) { runtime.notifyAssetChanged(saved.id); return { ok: true, asset: saved }; }); }).catch(function (error) { reportError('import failed', error, file); return { ok: false, name: file.name || '未命名图片', error: error }; }); })).then(function (results) { var failed = results.filter(function (item) { return !item.ok; }), passed = results.filter(function (item) { return item.ok; }), orderSave = Promise.resolve(); if (passed.length) { var state = data(); library.assignImportOrders(state, passed.map(function (item) { return item.asset.id; })); orderSave = persist(state); } return orderSave.then(function () { return passed.length ? refresh() : null; }).then(function () { if (failed.length) setNotice(failed.map(function (item) { return item.name + '：' + friendlyImportError(item.error); }).join('；'), 'error'); else setNotice('已添加 ' + passed.length + ' 张头像', 'success'); if (passed.length) toast('✅ 已添加 ' + passed.length + ' 张头像'); return results; }); }).finally(function () { setImporting(false); }); }
         function beginEdit(kind, avatarId, overlay) { if (mutationBlocked()) return; var caps = runtime.getCapabilities(), cap = kind === 'character' ? caps.character : caps.user; if (!caps.themeKey || !cap || !cap.available) { setNotice(!caps.themeKey ? '头像存储暂不可用' : cap && cap.reason || '当前目标不可用'); return; } if (overlay) closeSheet(overlay); if (closeManager() === false) return; global.setTimeout(function () { runtime.beginEdit({ kind: kind, avatarId: avatarId, bindingMode: kind === 'user' ? 'adaptive' : undefined }).catch(function (error) { toast(error.message || '无法启动头像调整', true); }); }, 32); }
@@ -11355,6 +11367,7 @@
         function toggleSearch() { if (!root) return false; searchOpen = !searchOpen; var bar = root.querySelector('[data-avatar-search-bar]'); bar.classList.toggle('open', searchOpen); if (searchOpen) root.querySelector('[data-avatar-search]').focus(); else { query = ''; root.querySelector('[data-avatar-search]').value = ''; render(); } return searchOpen; }
         function toggleSort() { if (!root) return false; sortOpen = !sortOpen; root.querySelector('[data-avatar-sortbar]').classList.toggle('open', sortOpen); return sortOpen; }
         function enterBatchMode() { if (!root) return false; batchMode = true; batchSelected.clear(); render(); return true; }
+        function toggleBatchMode() { if (!root) return false; batchMode = !batchMode; batchSelected.clear(); render(); return batchMode; }
         function openCategoryRenameSheet(name, parentSheet) {
             var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-pen"></i>重命名分类</div><div class="tm-field"><label>分类名称</label><input type="text" data-avatar-category-rename maxlength="80" value="' + esc(name) + '"></div><div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" data-avatar-category-rename-cancel>取消</button><button class="tm-btn tm-btn-safe" data-avatar-category-rename-save>保存</button></div>');
             sheet.querySelector('[data-avatar-category-rename-cancel]').addEventListener('click', function () { closeSheet(sheet); });
@@ -11390,7 +11403,7 @@
             });
             return sheet;
         }
-        return { mount: mount, unmount: unmount, refresh: refresh, importFiles: importFiles, pickFiles: function () { if (!mounted || !fileInput || importing || mutationBlocked()) return false; fileInput.click(); return true; }, beginNativeEdit: beginNativeEdit, openNativeMenu: openNativeMenu, openAssetMenu: openAssetMenu, viewAsset: viewAsset, toggleSearch: toggleSearch, toggleSort: toggleSort, enterBatchMode: enterBatchMode, openCategoryManager: openCategoryManager, getNativeStatus: function (kind) { kind = kind === 'user' ? 'user' : 'character'; var cap = runtime.getCapabilities()[kind] || {}; return { available: !!cap.available, reason: cap.reason || '', label: cap.target && cap.target.label || '', targetKey: cap.target && cap.target.key || '' }; }, getState: function () { var state = data(); return { mounted: mounted, count: assets.length, importing: importing, batchMode: batchMode, categories: library.ensureState(state).categories.length, series: Object.keys(library.ensureState(state).series.groups).length }; } };
+        return { mount: mount, unmount: unmount, refresh: refresh, importFiles: importFiles, pickFiles: function () { if (!mounted || !fileInput || importing || mutationBlocked()) return false; fileInput.click(); return true; }, beginNativeEdit: beginNativeEdit, openNativeMenu: openNativeMenu, openAssetMenu: openAssetMenu, viewAsset: viewAsset, toggleSearch: toggleSearch, toggleSort: toggleSort, enterBatchMode: enterBatchMode, toggleBatchMode: toggleBatchMode, openCategoryManager: openCategoryManager, getNativeStatus: function (kind) { kind = kind === 'user' ? 'user' : 'character'; var cap = runtime.getCapabilities()[kind] || {}; return { available: !!cap.available, reason: cap.reason || '', label: cap.target && cap.target.label || '', targetKey: cap.target && cap.target.key || '' }; }, getState: function () { var state = data(); return { mounted: mounted, count: assets.length, importing: importing, batchMode: batchMode, categories: library.ensureState(state).categories.length, series: Object.keys(library.ensureState(state).series.groups).length }; } };
     };
     ns.avatarPage = { buildPageHtml: buildPageHtml, styleText: styleText };
 })(window);
@@ -11726,7 +11739,7 @@
 })(window);
 /* END MODULE 22/27: src/app-shell.js */
 
-/* BEGIN MODULE 23/27: src/styles.js | sha256:15dced0253a6e8661f478e1eb9c6c6a1d63796d53cda9207894beec5f43572af */
+/* BEGIN MODULE 23/27: src/styles.js | sha256:894a58a49f78ba552881c4f1d6d478b14160e88531b1ea380290d4a1ad1f52d5 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -11784,8 +11797,13 @@
             '.tm-overlay:not([data-tm-active-page="themes"]) .tm-themes-only{display:none !important;}',
             '.tm-overlay:not([data-tm-active-page="avatars"]) .tm-avatars-only{display:none !important;}',
             '.tm-overlay[data-tm-active-page="backgrounds"] .tm-library-only{display:none !important;}',
-            '.tm-overlay:not([data-tm-active-page="themes"]) .tm-bottombar{justify-content:flex-end;}',
+            '.tm-overlay[data-tm-active-page="backgrounds"] .tm-bottombar{justify-content:flex-end;}',
             '#tm-bottom-settings{margin-left:auto;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottombar{justify-content:space-between;gap:8px;padding-left:max(14px,env(safe-area-inset-left,14px));padding-right:max(14px,env(safe-area-inset-right,14px));}',
+            '.tm-overlay[data-tm-active-page="avatars"] #tm-bottom-settings{margin-left:0;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn{width:40px;height:40px;border-radius:50% !important;font-size:1em;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-avatar-add-primary{width:52px;height:44px;border:0 !important;border-radius:0 !important;background:transparent !important;box-shadow:none !important;font-size:1.55em;opacity:.82;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-avatar-add-primary:hover{background:transparent !important;opacity:1;transform:scale(1.08);}',
             '.tm-auto-hide-head .tm-head{cursor:pointer;}',
             '.tm-auto-hide-head .tm-head-title-switcher,.tm-auto-hide-head .tm-head-actions{transition:opacity .18s ease,transform .18s ease,visibility .18s;}',
             '.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-title-switcher,.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-actions{opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-4px);}',
@@ -12940,7 +12958,7 @@
 })(window);
 /* END MODULE 26/27: src/ui-events.js */
 
-/* BEGIN MODULE 27/27: src/ui-main.js | sha256:0b09f564fee803a6e7db8e56c464139cce1f59ecac5d4f795127f1de49a1bfa2 */
+/* BEGIN MODULE 27/27: src/ui-main.js | sha256:a6c63ffa4811519226ad12d5c57517d722d9c88a1362622de8ec4f24d3f5d9a4 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -13283,6 +13301,10 @@
                 onImportingChange: function (importing) {
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = importing || !avatarCoordinator || !avatarCoordinator.canMutate();
+                },
+                onBatchModeChange: function (enabled) {
+                    var button = document.getElementById('tm-avatar-batch-toggle');
+                    if (button) button.classList.toggle('on', enabled === true);
                 },
                 toast: toast,
                 confirm: global.confirm.bind(global),
@@ -16723,8 +16745,6 @@
             '<div class="tm-head">' +
             pageSwitcherHtml +
             '<div class="tm-head-actions">' +
-            '<button class="tm-icon-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
-            (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
             '<button class="tm-icon-btn tm-library-only" id="tm-search-toggle" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>' +
             '<button class="tm-icon-btn tm-library-only" id="tm-sort-toggle" title="排序"><i class="fa-solid fa-arrow-down-wide-short"></i></button>' +
             '<button class="tm-icon-btn" id="tm-theme-toggle" title="切换明暗"><i class="fa-solid fa-circle-half-stroke"></i></button>' +
@@ -16733,8 +16753,11 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-user" title="恢复 User 原头像" aria-label="恢复 User 原头像"><i class="fa-solid fa-user-rotate"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-user" title="恢复 User 原头像" aria-label="恢复 User 原头像"><i class="fa-solid fa-user"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-character" title="恢复当前角色原头像" aria-label="恢复当前角色原头像"><i class="fa-solid fa-address-card"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatar-add-primary tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
+            (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选整理" aria-label="多选整理"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
@@ -16786,6 +16809,9 @@
         ov.querySelector('#tm-x').addEventListener('click', closePopup);
         ov.querySelector('#tm-avatar-add').addEventListener('click', function () {
             if (avatarPageController) avatarPageController.pickFiles();
+        });
+        ov.querySelector('#tm-avatar-batch-toggle').addEventListener('click', function () {
+            if (avatarPageController) avatarPageController.toggleBatchMode();
         });
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
@@ -16878,11 +16904,11 @@
             if (!avatarRuntime || this.disabled || !confirm('恢复使用 User 原头像？当前美化专属头像与全局 User 头像都会停止使用；其他美化的专属头像保持不变。')) return;
             var themeName = getCurrentThemeName();
             var clearTheme = themeName ? avatarRuntime.clearThemeUserBinding(themeName) : Promise.resolve();
-            clearTheme.then(function () { return avatarRuntime.clearBinding('user'); }).then(function () { toast('已恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复 User 原头像失败', true); });
+            clearTheme.then(function () { return avatarRuntime.clearBinding('user'); }).then(function () { toast('已恢复 User 原头像'); if (avatarPageController) return avatarPageController.refresh(); }).catch(function (error) { toast(error.message || '恢复 User 原头像失败', true); });
         });
         ov.querySelector('#tm-avatar-restore-character').addEventListener('click', function () {
             if (!avatarRuntime || this.disabled || !confirm('恢复使用当前角色原头像？')) return;
-            avatarRuntime.clearBinding('character').then(function () { toast('已恢复当前角色原头像'); }).catch(function (error) { toast(error.message || '恢复角色原头像失败', true); });
+            avatarRuntime.clearBinding('character').then(function () { toast('已恢复当前角色原头像'); if (avatarPageController) return avatarPageController.refresh(); }).catch(function (error) { toast(error.message || '恢复角色原头像失败', true); });
         });
         ov.querySelector('#tm-bottom-status').addEventListener('click', function () {
             var curTheme = getCurrentThemeName();
@@ -19547,8 +19573,7 @@
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>跟随当前美化外观</span><small>沿用美化管理器的颜色、圆角与面板质感</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + '></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + '></div>';
         var organizeHtml =
-            '<button class="tm-btn tm-btn-outline" id="tm-avatar-open-categories" style="width:100%;text-align:left;margin-bottom:8px"><i class="fa-solid fa-tags"></i> 管理分类（' + state.categories + '个）</button>' +
-            '<button class="tm-btn tm-btn-outline" id="tm-avatar-enter-batch" style="width:100%;text-align:left"><i class="fa-solid fa-list-check"></i> 批量整理头像</button>';
+            '<button class="tm-btn tm-btn-outline" id="tm-avatar-open-categories" style="width:100%;text-align:left"><i class="fa-solid fa-tags"></i> 管理分类（' + state.categories + '个）</button>';
         var dataHtml =
             '<div class="tm-storage-info">头像 ' + state.count + ' 张 / 分类 ' + state.categories + ' 个 / 系列 ' + state.series + ' 个</div>' +
             '<div class="tm-hint" style="margin-bottom:9px">图片、绑定与原头像调整继续由 Avatar 安全存储管理；分类、标签和系列是独立轻量标注。</div>' +
@@ -19559,7 +19584,6 @@
         sheet.querySelector('#tm-avatar-follow-appearance').addEventListener('change', function () { var next = load(); next.followThemeAppearance = this.checked; save(next); syncManagerAppearance(); });
         sheet.querySelector('#tm-avatar-auto-hide-header').addEventListener('change', function () { var next = load(); next.autoHideHeader = this.checked; save(next); syncManagerAppearance(); });
         sheet.querySelector('#tm-avatar-open-categories').addEventListener('click', function () { closeSheet(sheet); avatarPageController.openCategoryManager(); });
-        sheet.querySelector('#tm-avatar-enter-batch').addEventListener('click', function () { closeSheet(sheet); avatarPageController.enterBatchMode(); });
         sheet.querySelector('#tm-clear-all-user-avatar-overrides').addEventListener('click', function () { if (!confirm('彻底恢复 User 原头像？\n这会清除全局 User 头像、所有美化专属 User 头像与候选，以及 User 原头像调整；不会删除头像库。')) return; avatarRuntime.clearAllUserOverrides().then(function () { closeSheet(sheet); toast('已彻底恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复失败', true); }); });
         sheet.querySelector('#tm-avatar-update-action').addEventListener('click', function () { var current = getExtensionUpdateState(); if (current.phase === 'ready' && current.available) openExtensionUpdateConfirmSheet(); else { this.disabled = true; checkExtensionUpdate(true).catch(function () { toast('检查更新失败；请检查网络、Git 状态或酒馆服务日志', true); }); } });
         syncExtensionUpdatePanel();

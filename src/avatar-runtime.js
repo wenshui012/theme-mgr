@@ -1633,6 +1633,14 @@
                 diagnostics: clone(editor.diagnostics),
             } : { state: 'idle' };
         }
+        function getActiveAvatarIds() {
+            var result = { user: '', character: '' };
+            bindingPlans.forEach(function (plan) {
+                if (!plan || plan.native || plan.hostSource || !plan.target || !plan.binding || !plan.binding.avatarId) return;
+                if (plan.target.kind === 'user' || plan.target.kind === 'character') result[plan.target.kind] = plan.binding.avatarId;
+            });
+            return result;
+        }
         function notifyAssetChanged(id) { if (id) { assetCache.delete(id); rotatedSources.delete(id); } return reconcile(); }
 
         return {
@@ -1662,6 +1670,7 @@
             deleteAsset: deleteAsset,
             notifyAssetChanged: notifyAssetChanged,
             getState: getState,
+            getActiveAvatarIds: getActiveAvatarIds,
             isEditing: function () { return !!editor; },
         };
     };
