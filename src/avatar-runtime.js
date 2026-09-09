@@ -18,6 +18,7 @@
     var THEME_BINDING_VERSION = 4;
     var USER_TARGET_KEY = 'user:global';
     var THEME_USER_CANDIDATE_PREFIX = USER_TARGET_KEY + ':theme-avatar:';
+    var CHAT_BINDING_PREFIX = 'chat-integrity:';
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -60,6 +61,10 @@
         themeName = clean(themeName);
         return themeName ? 'theme-name:' + themeName : '';
     }
+    function chatBindingKey(chatKey) {
+        chatKey = clean(chatKey);
+        return chatKey ? CHAT_BINDING_PREFIX + encodeURIComponent(chatKey) : '';
+    }
     function getContextInfo(context) {
         context = context || {};
         var characters = Array.isArray(context.characters) ? context.characters : [];
@@ -69,8 +74,19 @@
         var isGroup = groupId !== undefined && groupId !== null && String(groupId) !== '';
         var characterAvatar = character && clean(character.avatar);
         var characterName = character && clean(character.name);
+        var chatMetadata = context.chatMetadata && typeof context.chatMetadata === 'object' ? context.chatMetadata : {};
+        var chatKey = clean(chatMetadata.integrity);
+        var chatId = '';
+        try {
+            chatId = typeof context.getCurrentChatId === 'function'
+                ? clean(context.getCurrentChatId())
+                : clean(context.chatId);
+        } catch (_) { chatId = clean(context.chatId); }
         return {
             isGroup: isGroup,
+            chatKey: chatKey,
+            chatId: chatId,
+            chatBindingKey: chatKey && chatId ? chatBindingKey(chatKey) : '',
             character: !isGroup && characterAvatar ? {
                 kind: 'character',
                 key: 'character:' + characterAvatar,
@@ -294,6 +310,7 @@
         var getContext = options.getContext || function () { return {}; };
         var getThemeName = options.getThemeName || function () { return ''; };
         var onError = options.onError || function () {};
+        var overwriteHostAvatar = options.overwriteHostAvatar;
         var imageTools = options.imageTools || ns.imageTools;
         var fetchImage = options.fetch || (typeof win.fetch === 'function' ? win.fetch.bind(win) : null);
         var loadNativeImage = options.loadNativeImage || function (asset) {
@@ -369,9 +386,13 @@
             try { return getContext() || {}; } catch (_) { return {}; }
         }
         function currentThemeKey() { return themeKey(getThemeName()); }
+        function currentChatBindingKey() { return targets().chatBindingKey || ''; }
         function targets() { return getContextInfo(contextSafe()); }
         function isDedicatedThemeBinding(binding) {
             return Boolean(binding && /^theme-name:/.test(binding.themeKey || '') && Number(binding.version) >= THEME_BINDING_VERSION);
+        }
+        function isDedicatedChatBinding(binding) {
+            return Boolean(binding && binding.themeKey && binding.themeKey.indexOf(CHAT_BINDING_PREFIX) === 0 && Number(binding.version) >= THEME_BINDING_VERSION);
         }
         function ensureSourceCache(asset) {
             var cached = rotatedSources.get(asset.id);
@@ -599,22 +620,29 @@
                 return promoted;
             });
         }
-        function getBindingForTarget(target, requestedThemeKey) {
+        function getBindingForTarget(target, requestedThemeKey, requestedChatKey) {
             requestedThemeKey = requestedThemeKey || '';
-            if (target.kind === 'user' && temporaryUserOverride) {
-                if (temporaryUserOverride.themeKey === requestedThemeKey && temporaryUserOverride.targetKey === target.key) {
-                    return Promise.resolve(temporaryUserOverride);
-                }
-                temporaryUserOverride = null;
-            }
-            var themed = requestedThemeKey
-                ? store.getBinding(requestedThemeKey, target.key)
+            requestedChatKey = requestedChatKey || '';
+            var chatScoped = requestedChatKey
+                ? store.getBinding(requestedChatKey, target.key)
                 : Promise.resolve(null);
-            return themed.then(function (themeBinding) {
-                if (target.kind === 'user' && isDedicatedThemeBinding(themeBinding)) return themeBinding;
-                return getDefaultBinding(target).then(function (binding) {
-                    if (binding) return binding;
-                    return promoteLegacyBinding(target, themeBinding);
+            return chatScoped.then(function (chatBinding) {
+                if (isDedicatedChatBinding(chatBinding)) return chatBinding;
+                if (target.kind === 'user' && temporaryUserOverride) {
+                    if (temporaryUserOverride.themeKey === requestedThemeKey && temporaryUserOverride.targetKey === target.key) {
+                        return temporaryUserOverride;
+                    }
+                    temporaryUserOverride = null;
+                }
+                var themed = requestedThemeKey
+                    ? store.getBinding(requestedThemeKey, target.key)
+                    : Promise.resolve(null);
+                return themed.then(function (themeBinding) {
+                    if (isDedicatedThemeBinding(themeBinding)) return themeBinding;
+                    return getDefaultBinding(target).then(function (binding) {
+                        if (binding) return binding;
+                        return promoteLegacyBinding(target, themeBinding);
+                    });
                 });
             });
         }
@@ -647,12 +675,12 @@
                 else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
             });
         }
-        function resolveRuntimeDesired(requestedThemeKey) {
+        function resolveRuntimeDesired(requestedThemeKey, requestedChatKey) {
             var info = targets();
             var targetList = [info.character, info.user].filter(Boolean);
             var foundBinding = false;
             return Promise.all(targetList.map(function (target) {
-                return getBindingForTarget(target, requestedThemeKey).then(function (binding) {
+                return getBindingForTarget(target, requestedThemeKey, requestedChatKey).then(function (binding) {
                     if (binding) {
                         foundBinding = true;
                         return getAsset(binding.avatarId).then(function (asset) {
@@ -758,13 +786,14 @@
         function reconcile() {
             var request = ++sequence;
             var requestedThemeKey = currentThemeKey();
+            var requestedChatKey = currentChatBindingKey();
             if (editor) {
                 if (editorPreviewSettled) syncEditorInstances();
                 else syncEditorRepresentative();
                 return Promise.resolve({ editing: true });
             }
-            return Promise.resolve(store.ready).then(function () { return resolveRuntimeDesired(requestedThemeKey); }).then(function (desired) {
-                if (request !== sequence || editor || requestedThemeKey !== currentThemeKey()) return { superseded: true };
+            return Promise.resolve(store.ready).then(function () { return resolveRuntimeDesired(requestedThemeKey, requestedChatKey); }).then(function (desired) {
+                if (request !== sequence || editor || requestedThemeKey !== currentThemeKey() || requestedChatKey !== currentChatBindingKey()) return { superseded: true };
                 hasRuntimeBinding = desired.hasBinding;
                 bindingPlans = desired.plans;
                 try { applyDesired(desired.items); observeChat(); }
@@ -1054,11 +1083,18 @@
             var kind = input.target && input.target.kind || input.kind;
             var cap = capability(kind);
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
-            var bindingMode = kind === 'user' && (input.bindingMode === 'theme' || input.bindingMode === 'temporary' || input.bindingMode === 'adaptive')
-                ? input.bindingMode
+            var requestedMode = clean(input.bindingMode);
+            var bindingMode = requestedMode === 'theme' || requestedMode === 'chat' ||
+                (kind === 'user' && (requestedMode === 'temporary' || requestedMode === 'adaptive'))
+                ? requestedMode
                 : 'global';
-            var requestedThemeKey = bindingMode === 'global' ? DEFAULT_BINDING_KEY : themeKey(input.themeName || getThemeName());
-            if (bindingMode !== 'global' && !requestedThemeKey) {
+            var requestedThemeKey = bindingMode === 'global'
+                ? DEFAULT_BINDING_KEY
+                : (bindingMode === 'chat' ? currentChatBindingKey() : themeKey(input.themeName || getThemeName()));
+            if (bindingMode === 'chat' && !requestedThemeKey) {
+                return Promise.reject(Object.assign(new Error('无法可靠识别当前聊天'), { code: 'CHAT_UNAVAILABLE' }));
+            }
+            if (bindingMode !== 'global' && bindingMode !== 'chat' && !requestedThemeKey) {
                 return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             }
             var editContextPromise;
@@ -1078,9 +1114,10 @@
                 });
             } else {
                 var previousPromise = bindingMode === 'temporary'
-                    ? getBindingForTarget(cap.target, requestedThemeKey)
+                    ? getBindingForTarget(cap.target, requestedThemeKey, currentChatBindingKey())
                     : store.getBinding(requestedThemeKey, cap.target.key).then(function (binding) {
                         if (bindingMode === 'theme' && !isDedicatedThemeBinding(binding)) return null;
+                        if (bindingMode === 'chat' && !isDedicatedChatBinding(binding)) return null;
                         return binding;
                     });
                 editContextPromise = previousPromise.then(function (binding) {
@@ -1303,9 +1340,14 @@
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
             if (!editor || editorClosing) return Promise.resolve(null);
-            if (editor.mode === 'library' && editor.bindingMode !== 'global' && editor.themeKey !== currentThemeKey()) {
+            var editorContextChanged = editor.mode === 'library' && (
+                (editor.bindingMode === 'chat' && editor.themeKey !== currentChatBindingKey()) ||
+                (editor.bindingMode !== 'global' && editor.bindingMode !== 'chat' && editor.themeKey !== currentThemeKey())
+            );
+            if (editorContextChanged) {
+                var changedScope = editor.bindingMode;
                 return cancelEdit('superseded').then(function () {
-                    throw Object.assign(new Error('当前美化已切换，头像修改未保存'), { code: 'superseded' });
+                    throw Object.assign(new Error(changedScope === 'chat' ? '当前聊天已切换，头像修改未保存' : '当前美化已切换，头像修改未保存'), { code: 'superseded' });
                 });
             }
             editorClosing = true;
@@ -1338,6 +1380,7 @@
                 avatarId: editor.avatarId,
                 view: normalizeView(editor.view),
             };
+            if (effectiveBindingMode === 'theme' || effectiveBindingMode === 'chat') binding.version = THEME_BINDING_VERSION;
             var diagnostics = clone(editor.diagnostics);
             if (effectiveBindingMode === 'temporary') {
                 var savedTemporary = Object.assign({ version: THEME_BINDING_VERSION, temporary: true }, binding);
@@ -1350,7 +1393,7 @@
                     return { saved: true, temporary: true, binding: clone(savedTemporary), diagnostics: diagnostics };
                 }, function (error) { editorClosing = false; throw error; });
             }
-            var saveBinding = effectiveBindingMode === 'theme'
+            var saveBinding = effectiveBindingMode === 'theme' && editor.target.kind === 'user'
                 ? putThemeUserBindingByKey(editor.themeKey, binding.avatarId, binding.view)
                 : store.putBinding(binding);
             return saveBinding.then(function (saved) {
@@ -1432,6 +1475,79 @@
             return putHostSourceIntent(cap.target.key).then(function () {
                 return deleteTargetBindings(cap.target.key);
             }).then(reconcile);
+        }
+        function getApplicationScopes(kind) {
+            kind = kind === 'user' ? 'user' : 'character';
+            var cap = capability(kind);
+            var info = targets();
+            var target = cap.target;
+            var themeScopeKey = currentThemeKey();
+            var chatScopeKey = info.chatBindingKey || '';
+            if (!target) return Promise.resolve({ kind: kind, target: null, available: false, reason: cap.reason || '目标不可用', scopes: {} });
+            return Promise.resolve(store.ready).then(function () {
+                return Promise.all([
+                    getDefaultBinding(target),
+                    themeScopeKey ? store.getBinding(themeScopeKey, target.key) : Promise.resolve(null),
+                    chatScopeKey ? store.getBinding(chatScopeKey, target.key) : Promise.resolve(null),
+                ]);
+            }).then(function (parts) {
+                return {
+                    kind: kind,
+                    target: clone(target),
+                    available: cap.available,
+                    reason: cap.reason || '',
+                    themeName: clean(getThemeName()),
+                    chatId: info.chatId,
+                    scopes: {
+                        original: { available: cap.available && typeof overwriteHostAvatar === 'function', binding: null },
+                        chat: { available: cap.available && Boolean(chatScopeKey), binding: isDedicatedChatBinding(parts[2]) ? clone(parts[2]) : null },
+                        global: { available: cap.available, binding: clone(parts[0]) },
+                        theme: { available: cap.available && Boolean(themeScopeKey), binding: isDedicatedThemeBinding(parts[1]) ? clone(parts[1]) : null },
+                    },
+                };
+            });
+        }
+        function clearApplicationScope(kind, scope) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
+            kind = kind === 'user' ? 'user' : 'character';
+            scope = clean(scope);
+            var cap = capability(kind);
+            if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
+            if (editor) return cancelEdit('binding-cleared').then(function () { return clearApplicationScope(kind, scope); });
+            var scopeKey = scope === 'chat' ? currentChatBindingKey() : (scope === 'theme' ? currentThemeKey() : DEFAULT_BINDING_KEY);
+            if ((scope === 'chat' || scope === 'theme') && !scopeKey) {
+                return Promise.reject(Object.assign(new Error(scope === 'chat' ? '无法可靠识别当前聊天' : '无法识别当前美化'), { code: scope === 'chat' ? 'CHAT_UNAVAILABLE' : 'THEME_UNAVAILABLE' }));
+            }
+            if (scope !== 'chat' && scope !== 'theme' && scope !== 'global') {
+                return Promise.reject(Object.assign(new Error('头像应用范围无效'), { code: 'AVATAR_SCOPE_INVALID' }));
+            }
+            if (scope === 'theme' && kind === 'user') return clearThemeUserBinding(getThemeName());
+            if (scope === 'global') promotedBindings.delete(cap.target.key);
+            sequence += 1;
+            return store.deleteBinding(scopeKey, cap.target.key).then(reconcile);
+        }
+        function overwriteOriginal(kind, avatarId) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
+            kind = kind === 'user' ? 'user' : 'character';
+            var cap = capability(kind);
+            if (!cap.available || !cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
+            if (typeof overwriteHostAvatar !== 'function') return Promise.reject(Object.assign(new Error('当前环境不支持覆盖原头像'), { code: 'HOST_AVATAR_WRITE_UNAVAILABLE' }));
+            if (editor) return cancelEdit('original-overwrite').then(function () { return overwriteOriginal(kind, avatarId); });
+            var context = contextSafe();
+            var target = clone(cap.target);
+            return getAsset(avatarId).then(function (avatarAsset) {
+                if (!avatarAsset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
+                return Promise.resolve(overwriteHostAvatar({ kind: kind, target: target, asset: clone(avatarAsset), context: context }));
+            }).then(function (result) {
+                nativeImageCache.clear();
+                sequence += 1;
+                var reload = context && typeof context.reloadCurrentChat === 'function'
+                    ? Promise.resolve().then(function () { return context.reloadCurrentChat(); })
+                    : Promise.resolve();
+                return reload.then(function () { return reconcile(); }).then(function () { return result || { ok: true }; });
+            });
         }
         function getThemeUserBinding(themeName) {
             var key = themeKey(themeName || getThemeName());
@@ -1654,6 +1770,9 @@
             scaleUp: function () { return setScale(editor ? editor.view.scale + SCALE_STEP : 1); },
             scaleDown: function () { return setScale(editor ? editor.view.scale - SCALE_STEP : 1); },
             clearBinding: clearBinding,
+            getApplicationScopes: getApplicationScopes,
+            clearApplicationScope: clearApplicationScope,
+            overwriteOriginal: overwriteOriginal,
             getThemeUserBinding: getThemeUserBinding,
             getThemeUserBindingSet: getThemeUserBindingSet,
             getGlobalUserBinding: getGlobalUserBinding,
@@ -1674,9 +1793,11 @@
         MAX_SCALE: MAX_SCALE,
         SCALE_STEP: SCALE_STEP,
         DEFAULT_BINDING_KEY: DEFAULT_BINDING_KEY,
+        CHAT_BINDING_PREFIX: CHAT_BINDING_PREFIX,
         THEME_USER_CANDIDATE_PREFIX: THEME_USER_CANDIDATE_PREFIX,
         themeUserCandidateTargetKey: themeUserCandidateTargetKey,
         themeKey: themeKey,
+        chatBindingKey: chatBindingKey,
         getContextInfo: getContextInfo,
         messageImages: messageImages,
         chooseRepresentative: chooseRepresentative,

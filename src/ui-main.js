@@ -89,6 +89,65 @@
     var supportErrorText = '';
     var pendingOpenAfterReady = false;
     var pendingOpenAfterAvatarCancel = false;
+
+    function overwriteSillyTavernAvatar(input) {
+        input = input || {};
+        var context = input.context || {};
+        var asset = input.asset || {};
+        var kind = input.kind === 'user' ? 'user' : 'character';
+        if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(String(asset.imageData || ''))) {
+            return Promise.reject(Object.assign(new Error('头像主图数据无效'), { code: 'HOST_AVATAR_IMAGE_INVALID' }));
+        }
+        var modulePromise = kind === 'user' ? import('/script.js') : Promise.resolve(null);
+        return Promise.all([
+            modulePromise,
+            global.fetch(asset.imageData).then(function (response) {
+                if (!response.ok) throw new Error('avatar data decode failed');
+                return response.blob();
+            }),
+        ]).then(function (parts) {
+            var stModule = parts[0];
+            var blob = parts[1];
+            var targetName = kind === 'user'
+                ? String(stModule && stModule.user_avatar || '').trim()
+                : String(input.target && input.target.characterAvatar || '').trim();
+            if (!targetName) throw Object.assign(new Error(kind === 'user' ? '无法识别当前人设头像' : '无法识别当前角色卡'), { code: 'HOST_AVATAR_TARGET_UNAVAILABLE' });
+            var extension = /image\/jpeg/i.test(blob.type || asset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || asset.mimeType) ? '.webp' : '.png');
+            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || asset.mimeType || 'image/png' });
+            var form = new global.FormData();
+            form.append('avatar', file);
+            if (kind === 'user') form.append('overwrite_name', targetName);
+            else form.append('avatar_url', targetName);
+            var getHeaders = typeof context.getRequestHeaders === 'function'
+                ? context.getRequestHeaders
+                : stModule && stModule.getRequestHeaders;
+            if (typeof getHeaders !== 'function') throw Object.assign(new Error('SillyTavern 请求头接口不可用'), { code: 'HOST_AVATAR_HEADERS_UNAVAILABLE' });
+            return global.fetch(kind === 'user' ? '/api/avatars/upload' : '/api/characters/edit-avatar', {
+                method: 'POST',
+                headers: getHeaders({ omitContentType: true }),
+                cache: 'no-cache',
+                body: form,
+            }).then(function (response) {
+                if (!response.ok) throw Object.assign(new Error((kind === 'user' ? '人设头像' : '角色卡卡面') + '覆盖失败（HTTP ' + response.status + '）'), { code: 'HOST_AVATAR_WRITE_FAILED', status: response.status });
+                var thumbnailUrl = typeof context.getThumbnailUrl === 'function'
+                    ? context.getThumbnailUrl(kind === 'user' ? 'persona' : 'avatar', targetName)
+                    : '';
+                var refreshThumbnail = thumbnailUrl ? global.fetch(thumbnailUrl, { cache: 'reload' }).catch(function () {}) : Promise.resolve();
+                var getCharacters = typeof context.getCharacters === 'function'
+                    ? context.getCharacters
+                    : stModule && stModule.getCharacters;
+                var refreshCharacters = kind === 'character' && typeof getCharacters === 'function'
+                    ? Promise.resolve(getCharacters()).catch(function () {})
+                    : Promise.resolve();
+                return Promise.all([refreshThumbnail, refreshCharacters]).then(function () {
+                    return { ok: true, kind: kind, targetName: targetName };
+                });
+            });
+        }).catch(function (error) {
+            if (!error.code) error.code = 'HOST_AVATAR_WRITE_FAILED';
+            throw error;
+        });
+    }
     var darkMode = false;
 
     // 缓存主题列表
@@ -314,6 +373,7 @@
                     } catch (e) { return {}; }
                 },
                 getThemeName: getCurrentThemeName,
+                overwriteHostAvatar: overwriteSillyTavernAvatar,
                 onError: function (error) {
                     console.warn('[头像管理] runtime 失败:', error);
                     toast(error && error.message ? error.message : '头像运行时失败', true);

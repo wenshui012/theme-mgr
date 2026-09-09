@@ -9597,7 +9597,7 @@
 })(window);
 /* END MODULE 19/27: src/avatar-library.js */
 
-/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:bbc1a13b8ed9bab93c2a97f7c0aeaf96a851a9d03a65bb32c03ba20e862129ff */
+/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:e8567a1f8af9fd3a5922cd6fce440895a3224417d767589ff8c194125b3a125b */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -9618,6 +9618,7 @@
     var THEME_BINDING_VERSION = 4;
     var USER_TARGET_KEY = 'user:global';
     var THEME_USER_CANDIDATE_PREFIX = USER_TARGET_KEY + ':theme-avatar:';
+    var CHAT_BINDING_PREFIX = 'chat-integrity:';
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -9660,6 +9661,10 @@
         themeName = clean(themeName);
         return themeName ? 'theme-name:' + themeName : '';
     }
+    function chatBindingKey(chatKey) {
+        chatKey = clean(chatKey);
+        return chatKey ? CHAT_BINDING_PREFIX + encodeURIComponent(chatKey) : '';
+    }
     function getContextInfo(context) {
         context = context || {};
         var characters = Array.isArray(context.characters) ? context.characters : [];
@@ -9669,8 +9674,19 @@
         var isGroup = groupId !== undefined && groupId !== null && String(groupId) !== '';
         var characterAvatar = character && clean(character.avatar);
         var characterName = character && clean(character.name);
+        var chatMetadata = context.chatMetadata && typeof context.chatMetadata === 'object' ? context.chatMetadata : {};
+        var chatKey = clean(chatMetadata.integrity);
+        var chatId = '';
+        try {
+            chatId = typeof context.getCurrentChatId === 'function'
+                ? clean(context.getCurrentChatId())
+                : clean(context.chatId);
+        } catch (_) { chatId = clean(context.chatId); }
         return {
             isGroup: isGroup,
+            chatKey: chatKey,
+            chatId: chatId,
+            chatBindingKey: chatKey && chatId ? chatBindingKey(chatKey) : '',
             character: !isGroup && characterAvatar ? {
                 kind: 'character',
                 key: 'character:' + characterAvatar,
@@ -9894,6 +9910,7 @@
         var getContext = options.getContext || function () { return {}; };
         var getThemeName = options.getThemeName || function () { return ''; };
         var onError = options.onError || function () {};
+        var overwriteHostAvatar = options.overwriteHostAvatar;
         var imageTools = options.imageTools || ns.imageTools;
         var fetchImage = options.fetch || (typeof win.fetch === 'function' ? win.fetch.bind(win) : null);
         var loadNativeImage = options.loadNativeImage || function (asset) {
@@ -9969,9 +9986,13 @@
             try { return getContext() || {}; } catch (_) { return {}; }
         }
         function currentThemeKey() { return themeKey(getThemeName()); }
+        function currentChatBindingKey() { return targets().chatBindingKey || ''; }
         function targets() { return getContextInfo(contextSafe()); }
         function isDedicatedThemeBinding(binding) {
             return Boolean(binding && /^theme-name:/.test(binding.themeKey || '') && Number(binding.version) >= THEME_BINDING_VERSION);
+        }
+        function isDedicatedChatBinding(binding) {
+            return Boolean(binding && binding.themeKey && binding.themeKey.indexOf(CHAT_BINDING_PREFIX) === 0 && Number(binding.version) >= THEME_BINDING_VERSION);
         }
         function ensureSourceCache(asset) {
             var cached = rotatedSources.get(asset.id);
@@ -10199,22 +10220,29 @@
                 return promoted;
             });
         }
-        function getBindingForTarget(target, requestedThemeKey) {
+        function getBindingForTarget(target, requestedThemeKey, requestedChatKey) {
             requestedThemeKey = requestedThemeKey || '';
-            if (target.kind === 'user' && temporaryUserOverride) {
-                if (temporaryUserOverride.themeKey === requestedThemeKey && temporaryUserOverride.targetKey === target.key) {
-                    return Promise.resolve(temporaryUserOverride);
-                }
-                temporaryUserOverride = null;
-            }
-            var themed = requestedThemeKey
-                ? store.getBinding(requestedThemeKey, target.key)
+            requestedChatKey = requestedChatKey || '';
+            var chatScoped = requestedChatKey
+                ? store.getBinding(requestedChatKey, target.key)
                 : Promise.resolve(null);
-            return themed.then(function (themeBinding) {
-                if (target.kind === 'user' && isDedicatedThemeBinding(themeBinding)) return themeBinding;
-                return getDefaultBinding(target).then(function (binding) {
-                    if (binding) return binding;
-                    return promoteLegacyBinding(target, themeBinding);
+            return chatScoped.then(function (chatBinding) {
+                if (isDedicatedChatBinding(chatBinding)) return chatBinding;
+                if (target.kind === 'user' && temporaryUserOverride) {
+                    if (temporaryUserOverride.themeKey === requestedThemeKey && temporaryUserOverride.targetKey === target.key) {
+                        return temporaryUserOverride;
+                    }
+                    temporaryUserOverride = null;
+                }
+                var themed = requestedThemeKey
+                    ? store.getBinding(requestedThemeKey, target.key)
+                    : Promise.resolve(null);
+                return themed.then(function (themeBinding) {
+                    if (isDedicatedThemeBinding(themeBinding)) return themeBinding;
+                    return getDefaultBinding(target).then(function (binding) {
+                        if (binding) return binding;
+                        return promoteLegacyBinding(target, themeBinding);
+                    });
                 });
             });
         }
@@ -10247,12 +10275,12 @@
                 else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
             });
         }
-        function resolveRuntimeDesired(requestedThemeKey) {
+        function resolveRuntimeDesired(requestedThemeKey, requestedChatKey) {
             var info = targets();
             var targetList = [info.character, info.user].filter(Boolean);
             var foundBinding = false;
             return Promise.all(targetList.map(function (target) {
-                return getBindingForTarget(target, requestedThemeKey).then(function (binding) {
+                return getBindingForTarget(target, requestedThemeKey, requestedChatKey).then(function (binding) {
                     if (binding) {
                         foundBinding = true;
                         return getAsset(binding.avatarId).then(function (asset) {
@@ -10358,13 +10386,14 @@
         function reconcile() {
             var request = ++sequence;
             var requestedThemeKey = currentThemeKey();
+            var requestedChatKey = currentChatBindingKey();
             if (editor) {
                 if (editorPreviewSettled) syncEditorInstances();
                 else syncEditorRepresentative();
                 return Promise.resolve({ editing: true });
             }
-            return Promise.resolve(store.ready).then(function () { return resolveRuntimeDesired(requestedThemeKey); }).then(function (desired) {
-                if (request !== sequence || editor || requestedThemeKey !== currentThemeKey()) return { superseded: true };
+            return Promise.resolve(store.ready).then(function () { return resolveRuntimeDesired(requestedThemeKey, requestedChatKey); }).then(function (desired) {
+                if (request !== sequence || editor || requestedThemeKey !== currentThemeKey() || requestedChatKey !== currentChatBindingKey()) return { superseded: true };
                 hasRuntimeBinding = desired.hasBinding;
                 bindingPlans = desired.plans;
                 try { applyDesired(desired.items); observeChat(); }
@@ -10654,11 +10683,18 @@
             var kind = input.target && input.target.kind || input.kind;
             var cap = capability(kind);
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
-            var bindingMode = kind === 'user' && (input.bindingMode === 'theme' || input.bindingMode === 'temporary' || input.bindingMode === 'adaptive')
-                ? input.bindingMode
+            var requestedMode = clean(input.bindingMode);
+            var bindingMode = requestedMode === 'theme' || requestedMode === 'chat' ||
+                (kind === 'user' && (requestedMode === 'temporary' || requestedMode === 'adaptive'))
+                ? requestedMode
                 : 'global';
-            var requestedThemeKey = bindingMode === 'global' ? DEFAULT_BINDING_KEY : themeKey(input.themeName || getThemeName());
-            if (bindingMode !== 'global' && !requestedThemeKey) {
+            var requestedThemeKey = bindingMode === 'global'
+                ? DEFAULT_BINDING_KEY
+                : (bindingMode === 'chat' ? currentChatBindingKey() : themeKey(input.themeName || getThemeName()));
+            if (bindingMode === 'chat' && !requestedThemeKey) {
+                return Promise.reject(Object.assign(new Error('无法可靠识别当前聊天'), { code: 'CHAT_UNAVAILABLE' }));
+            }
+            if (bindingMode !== 'global' && bindingMode !== 'chat' && !requestedThemeKey) {
                 return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             }
             var editContextPromise;
@@ -10678,9 +10714,10 @@
                 });
             } else {
                 var previousPromise = bindingMode === 'temporary'
-                    ? getBindingForTarget(cap.target, requestedThemeKey)
+                    ? getBindingForTarget(cap.target, requestedThemeKey, currentChatBindingKey())
                     : store.getBinding(requestedThemeKey, cap.target.key).then(function (binding) {
                         if (bindingMode === 'theme' && !isDedicatedThemeBinding(binding)) return null;
+                        if (bindingMode === 'chat' && !isDedicatedChatBinding(binding)) return null;
                         return binding;
                     });
                 editContextPromise = previousPromise.then(function (binding) {
@@ -10903,9 +10940,14 @@
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
             if (!editor || editorClosing) return Promise.resolve(null);
-            if (editor.mode === 'library' && editor.bindingMode !== 'global' && editor.themeKey !== currentThemeKey()) {
+            var editorContextChanged = editor.mode === 'library' && (
+                (editor.bindingMode === 'chat' && editor.themeKey !== currentChatBindingKey()) ||
+                (editor.bindingMode !== 'global' && editor.bindingMode !== 'chat' && editor.themeKey !== currentThemeKey())
+            );
+            if (editorContextChanged) {
+                var changedScope = editor.bindingMode;
                 return cancelEdit('superseded').then(function () {
-                    throw Object.assign(new Error('当前美化已切换，头像修改未保存'), { code: 'superseded' });
+                    throw Object.assign(new Error(changedScope === 'chat' ? '当前聊天已切换，头像修改未保存' : '当前美化已切换，头像修改未保存'), { code: 'superseded' });
                 });
             }
             editorClosing = true;
@@ -10938,6 +10980,7 @@
                 avatarId: editor.avatarId,
                 view: normalizeView(editor.view),
             };
+            if (effectiveBindingMode === 'theme' || effectiveBindingMode === 'chat') binding.version = THEME_BINDING_VERSION;
             var diagnostics = clone(editor.diagnostics);
             if (effectiveBindingMode === 'temporary') {
                 var savedTemporary = Object.assign({ version: THEME_BINDING_VERSION, temporary: true }, binding);
@@ -10950,7 +10993,7 @@
                     return { saved: true, temporary: true, binding: clone(savedTemporary), diagnostics: diagnostics };
                 }, function (error) { editorClosing = false; throw error; });
             }
-            var saveBinding = effectiveBindingMode === 'theme'
+            var saveBinding = effectiveBindingMode === 'theme' && editor.target.kind === 'user'
                 ? putThemeUserBindingByKey(editor.themeKey, binding.avatarId, binding.view)
                 : store.putBinding(binding);
             return saveBinding.then(function (saved) {
@@ -11032,6 +11075,79 @@
             return putHostSourceIntent(cap.target.key).then(function () {
                 return deleteTargetBindings(cap.target.key);
             }).then(reconcile);
+        }
+        function getApplicationScopes(kind) {
+            kind = kind === 'user' ? 'user' : 'character';
+            var cap = capability(kind);
+            var info = targets();
+            var target = cap.target;
+            var themeScopeKey = currentThemeKey();
+            var chatScopeKey = info.chatBindingKey || '';
+            if (!target) return Promise.resolve({ kind: kind, target: null, available: false, reason: cap.reason || '目标不可用', scopes: {} });
+            return Promise.resolve(store.ready).then(function () {
+                return Promise.all([
+                    getDefaultBinding(target),
+                    themeScopeKey ? store.getBinding(themeScopeKey, target.key) : Promise.resolve(null),
+                    chatScopeKey ? store.getBinding(chatScopeKey, target.key) : Promise.resolve(null),
+                ]);
+            }).then(function (parts) {
+                return {
+                    kind: kind,
+                    target: clone(target),
+                    available: cap.available,
+                    reason: cap.reason || '',
+                    themeName: clean(getThemeName()),
+                    chatId: info.chatId,
+                    scopes: {
+                        original: { available: cap.available && typeof overwriteHostAvatar === 'function', binding: null },
+                        chat: { available: cap.available && Boolean(chatScopeKey), binding: isDedicatedChatBinding(parts[2]) ? clone(parts[2]) : null },
+                        global: { available: cap.available, binding: clone(parts[0]) },
+                        theme: { available: cap.available && Boolean(themeScopeKey), binding: isDedicatedThemeBinding(parts[1]) ? clone(parts[1]) : null },
+                    },
+                };
+            });
+        }
+        function clearApplicationScope(kind, scope) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
+            kind = kind === 'user' ? 'user' : 'character';
+            scope = clean(scope);
+            var cap = capability(kind);
+            if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
+            if (editor) return cancelEdit('binding-cleared').then(function () { return clearApplicationScope(kind, scope); });
+            var scopeKey = scope === 'chat' ? currentChatBindingKey() : (scope === 'theme' ? currentThemeKey() : DEFAULT_BINDING_KEY);
+            if ((scope === 'chat' || scope === 'theme') && !scopeKey) {
+                return Promise.reject(Object.assign(new Error(scope === 'chat' ? '无法可靠识别当前聊天' : '无法识别当前美化'), { code: scope === 'chat' ? 'CHAT_UNAVAILABLE' : 'THEME_UNAVAILABLE' }));
+            }
+            if (scope !== 'chat' && scope !== 'theme' && scope !== 'global') {
+                return Promise.reject(Object.assign(new Error('头像应用范围无效'), { code: 'AVATAR_SCOPE_INVALID' }));
+            }
+            if (scope === 'theme' && kind === 'user') return clearThemeUserBinding(getThemeName());
+            if (scope === 'global') promotedBindings.delete(cap.target.key);
+            sequence += 1;
+            return store.deleteBinding(scopeKey, cap.target.key).then(reconcile);
+        }
+        function overwriteOriginal(kind, avatarId) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
+            kind = kind === 'user' ? 'user' : 'character';
+            var cap = capability(kind);
+            if (!cap.available || !cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
+            if (typeof overwriteHostAvatar !== 'function') return Promise.reject(Object.assign(new Error('当前环境不支持覆盖原头像'), { code: 'HOST_AVATAR_WRITE_UNAVAILABLE' }));
+            if (editor) return cancelEdit('original-overwrite').then(function () { return overwriteOriginal(kind, avatarId); });
+            var context = contextSafe();
+            var target = clone(cap.target);
+            return getAsset(avatarId).then(function (avatarAsset) {
+                if (!avatarAsset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
+                return Promise.resolve(overwriteHostAvatar({ kind: kind, target: target, asset: clone(avatarAsset), context: context }));
+            }).then(function (result) {
+                nativeImageCache.clear();
+                sequence += 1;
+                var reload = context && typeof context.reloadCurrentChat === 'function'
+                    ? Promise.resolve().then(function () { return context.reloadCurrentChat(); })
+                    : Promise.resolve();
+                return reload.then(function () { return reconcile(); }).then(function () { return result || { ok: true }; });
+            });
         }
         function getThemeUserBinding(themeName) {
             var key = themeKey(themeName || getThemeName());
@@ -11254,6 +11370,9 @@
             scaleUp: function () { return setScale(editor ? editor.view.scale + SCALE_STEP : 1); },
             scaleDown: function () { return setScale(editor ? editor.view.scale - SCALE_STEP : 1); },
             clearBinding: clearBinding,
+            getApplicationScopes: getApplicationScopes,
+            clearApplicationScope: clearApplicationScope,
+            overwriteOriginal: overwriteOriginal,
             getThemeUserBinding: getThemeUserBinding,
             getThemeUserBindingSet: getThemeUserBindingSet,
             getGlobalUserBinding: getGlobalUserBinding,
@@ -11274,9 +11393,11 @@
         MAX_SCALE: MAX_SCALE,
         SCALE_STEP: SCALE_STEP,
         DEFAULT_BINDING_KEY: DEFAULT_BINDING_KEY,
+        CHAT_BINDING_PREFIX: CHAT_BINDING_PREFIX,
         THEME_USER_CANDIDATE_PREFIX: THEME_USER_CANDIDATE_PREFIX,
         themeUserCandidateTargetKey: themeUserCandidateTargetKey,
         themeKey: themeKey,
+        chatBindingKey: chatBindingKey,
         getContextInfo: getContextInfo,
         messageImages: messageImages,
         chooseRepresentative: chooseRepresentative,
@@ -11290,7 +11411,7 @@
 })(window);
 /* END MODULE 20/27: src/avatar-runtime.js */
 
-/* BEGIN MODULE 21/27: src/avatar-page.js | sha256:3083ae646d5790cb271f61e4db671294833f9ceece04d9f16c0012fdee33719a */
+/* BEGIN MODULE 21/27: src/avatar-page.js | sha256:b13f24c9552c79d1871478c9bd3c39b12917c5495d343fdee99a4a28e9d7f5ca */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -11359,12 +11480,14 @@
         function render() { if (!root) return; syncActiveAvatarIds(); var state = data(), list = matchingAssets(state), grid = root.querySelector('[data-avatar-grid]'), count = columns(); lastColumnCount = count; renderCategoryBar(state); renderBatch(); grid.innerHTML = nativeSlotHtml() + layoutHtml(state, list, count) + (!assets.length ? '<div class="tm-avatar-page-empty">点击底栏中间的＋添加头像</div>' : (!list.length ? '<div class="tm-avatar-page-empty">没有符合条件的头像</div>' : '')); root.querySelectorAll('[data-avatar-sort]').forEach(function (button) { button.classList.toggle('on', button.dataset.avatarSort === library.ensureState(state).sortMode); }); setupGridLoader(); setImporting(importing); bindRailInteractions(); }
         function refresh() { var token = ++refreshToken; return store.listAssets().then(function (items) { if (!mounted || token !== refreshToken) return; assets = items || []; render(); }).catch(function (error) { reportError('library refresh failed', error); if (mounted) setNotice('头像库读取失败', 'error'); throw error; }); }
         function importFiles(files) { if (mutationBlocked()) return Promise.reject(Object.assign(new Error('头像存储当前不可写'), { code: 'AVATAR_STORAGE_READ_ONLY' })); files = Array.prototype.slice.call(files || []); if (!files.length) return Promise.resolve([]); setImporting(true); return Promise.all(files.map(function (file) { return processor.processFile(file).then(function (asset) { return store.putAsset(asset).then(function (saved) { runtime.notifyAssetChanged(saved.id); return { ok: true, asset: saved }; }); }).catch(function (error) { reportError('import failed', error, file); return { ok: false, name: file.name || '未命名图片', error: error }; }); })).then(function (results) { var failed = results.filter(function (item) { return !item.ok; }), passed = results.filter(function (item) { return item.ok; }), orderSave = Promise.resolve(); if (passed.length) { var state = data(); library.assignImportOrders(state, passed.map(function (item) { return item.asset.id; })); orderSave = persist(state); } return orderSave.then(function () { return passed.length ? refresh() : null; }).then(function () { if (failed.length) setNotice(failed.map(function (item) { return item.name + '：' + friendlyImportError(item.error); }).join('；'), 'error'); else setNotice('已添加 ' + passed.length + ' 张头像', 'success'); if (passed.length) toast('✅ 已添加 ' + passed.length + ' 张头像'); return results; }); }).finally(function () { setImporting(false); }); }
-        function beginEdit(kind, avatarId, overlay) { if (mutationBlocked()) return; var caps = runtime.getCapabilities(), cap = kind === 'character' ? caps.character : caps.user; if (!caps.themeKey || !cap || !cap.available) { setNotice(!caps.themeKey ? '头像存储暂不可用' : cap && cap.reason || '当前目标不可用'); return; } if (overlay) closeSheet(overlay); if (closeManager() === false) return; global.setTimeout(function () { runtime.beginEdit({ kind: kind, avatarId: avatarId, bindingMode: kind === 'user' ? 'adaptive' : undefined }).catch(function (error) { toast(error.message || '无法启动头像调整', true); }); }, 32); }
+        function beginEdit(kind, avatarId, scope, overlay) { if (mutationBlocked()) return; var caps = runtime.getCapabilities(), cap = kind === 'character' ? caps.character : caps.user; if (!cap || !cap.available) { setNotice(cap && cap.reason || '当前目标不可用'); return; } if (overlay) closeSheet(overlay); if (closeManager() === false) return; global.setTimeout(function () { runtime.beginEdit({ kind: kind, avatarId: avatarId, bindingMode: scope }).catch(function (error) { toast(error.message || '无法启动头像调整', true); }); }, 32); }
         function beginNativeEdit(kind, overlay) { if (mutationBlocked()) return; var cap = runtime.getCapabilities()[kind]; if (!cap || !cap.available) { setNotice(cap && cap.reason || '原头像无法调整'); return; } if (overlay) closeSheet(overlay); closeManager(); global.setTimeout(function () { runtime.beginNativeEdit(kind).catch(function (error) { toast(error.message || '无法启动原头像调整', true); }); }, 32); }
         function dialogItem(action, icon, label, hint, disabled, weak) { return '<button type="button" class="tm-action-dialog-item' + (weak ? ' is-weak' : '') + '" data-avatar-dialog-action="' + action + '"' + (disabled ? ' disabled' : '') + '><i class="fa-solid ' + icon + '"></i><span><strong>' + esc(label) + '</strong>' + (hint ? '<small>' + esc(hint) + '</small>' : '') + '</span></button>'; }
+        function scopeRow(scope, icon, label, hint, state) { state = state || {}; var bound = Boolean(state.binding); return '<div class="tm-avatar-scope-row' + (bound ? ' is-bound' : '') + '"><button type="button" class="tm-action-dialog-item" data-avatar-scope-action="' + scope + '"' + (!state.available ? ' disabled' : '') + '><i class="fa-solid ' + icon + '"></i><span><strong>' + esc(label) + '</strong><small>' + esc(bound ? '当前已绑定 · 点按替换' : hint) + '</small></span></button>' + (bound ? '<button type="button" class="tm-avatar-scope-clear" data-avatar-scope-clear="' + scope + '" aria-label="解除' + esc(label) + '" title="解除绑定"><i class="fa-solid fa-link-slash"></i></button>' : '') + '</div>'; }
         function openNativeMenu() { var caps = runtime.getCapabilities(), character = caps.character || {}, user = caps.user || {}, overlay = createActionDialog('<div class="tm-action-dialog-title"><i class="fa-regular fa-circle-user"></i>调整原头像</div><div class="tm-action-dialog-list">' + dialogItem('native-user', 'fa-user', '调整 User 原头像', user.reason, !canMutate() || !user.available) + dialogItem('native-character', 'fa-address-card', '调整当前角色原头像', character.reason, !canMutate() || !character.available) + '</div>'); overlay.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-dialog-action]'); if (!button || button.disabled) return; beginNativeEdit(button.dataset.avatarDialogAction === 'native-user' ? 'user' : 'character', overlay); }); return Promise.resolve(overlay); }
+        function openScopeMenu(kind, id, previousOverlay) { var asset = assets.find(function (item) { return item.id === id; }); if (!asset) return Promise.reject(new Error('头像不存在')); return runtime.getApplicationScopes(kind).then(function (status) { if (previousOverlay) closeSheet(previousOverlay); var scopes = status.scopes || {}, isUser = kind === 'user'; var overlay = createActionDialog('<div class="tm-action-dialog-title"><i class="fa-solid ' + (isUser ? 'fa-user' : 'fa-address-card') + '"></i>' + (isUser ? '用于 User' : '用于当前角色') + '</div><div class="tm-action-dialog-list">' + scopeRow('original', 'fa-file-image', isUser ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', '直接替换 SillyTavern 原图片，不清除任何绑定', scopes.original) + scopeRow('chat', 'fa-comments', '绑定当前聊天窗口', status.chatId ? '仅在当前聊天中使用' : '当前聊天尚未完成载入', scopes.chat) + scopeRow('global', 'fa-globe', isUser ? '覆盖 User 全局头像' : '覆盖该角色全局头像', isUser ? '作为所有聊天与美化的默认头像' : '作为该角色所有聊天的默认头像', scopes.global) + scopeRow('theme', 'fa-palette', '绑定当前美化', status.themeName ? '当前美化：' + status.themeName : '当前没有可识别的美化', scopes.theme) + '</div>'); overlay.addEventListener('click', function (event) { var clear = event.target.closest('[data-avatar-scope-clear]'); if (clear) { event.preventDefault(); event.stopPropagation(); if (clear.disabled) return; var clearScope = clear.dataset.avatarScopeClear; clear.disabled = true; runtime.clearApplicationScope(kind, clearScope).then(function () { toast('已解除这个范围的头像绑定'); return refresh(); }).then(function () { return openScopeMenu(kind, id, overlay); }).catch(function (error) { clear.disabled = false; toast(error.message || '解除头像绑定失败', true); }); return; } var button = event.target.closest('[data-avatar-scope-action]'); if (!button || button.disabled) return; var scope = button.dataset.avatarScopeAction; if (scope === 'original') { var wording = isUser ? '当前人设原头像' : '当前角色卡卡面'; if (!confirmAction('确定用这张图片覆盖' + wording + '？\n现有聊天、美化和全局绑定不会被清除。')) return; button.disabled = true; closeSheet(overlay); if (closeManager() === false) return; runtime.overwriteOriginal(kind, id).then(function () { toast('已覆盖' + wording + '；现有绑定保持不变'); return refresh(); }).catch(function (error) { toast(error.message || '覆盖原头像失败', true); }); return; } beginEdit(kind, id, scope, overlay); }); return overlay; }); }
         function viewAsset(id) { if (typeof openImageLightbox !== 'function') return Promise.reject(new Error('大图查看器不可用')); return store.getAsset(id).then(function (asset) { if (!asset || !asset.imageData) throw new Error('头像主图不存在'); openImageLightbox([{ key: asset.id, label: asset.name, source: asset.imageData }], asset.id); return asset; }); }
-        function openAssetMenu(id) { var asset = assets.find(function (item) { return item.id === id; }); if (!asset) return Promise.reject(new Error('头像不存在')); var caps = runtime.getCapabilities(), character = caps.character || {}, user = caps.user || {}, overlay = createActionDialog('<div class="tm-action-dialog-title"><i class="fa-solid fa-user"></i>使用这张头像</div><div class="tm-action-dialog-list">' + dialogItem('apply-user', 'fa-user', '设为 User 头像', user.reason, !canMutate() || !user.available) + dialogItem('apply-character', 'fa-address-card', '设为当前角色头像', character.reason, !canMutate() || !character.available) + dialogItem('view', 'fa-expand', '查看完整大图', '', false) + '<div class="tm-action-dialog-divider"></div>' + dialogItem('manage', 'fa-sliders', '管理头像', '分类、标签、系列与删除', false, true) + '</div>'); overlay.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-dialog-action]'); if (!button || button.disabled) return; var action = button.dataset.avatarDialogAction; if (action === 'apply-user') beginEdit('user', id, overlay); else if (action === 'apply-character') beginEdit('character', id, overlay); else if (action === 'view') { closeSheet(overlay); viewAsset(id).catch(function (error) { setNotice(error.message, 'error'); }); } else if (action === 'manage') { closeSheet(overlay); openManageSheet(id); } }); return Promise.resolve(overlay); }
+        function openAssetMenu(id) { var asset = assets.find(function (item) { return item.id === id; }); if (!asset) return Promise.reject(new Error('头像不存在')); var caps = runtime.getCapabilities(), character = caps.character || {}, user = caps.user || {}, overlay = createActionDialog('<div class="tm-action-dialog-title"><i class="fa-solid fa-user"></i>使用这张头像</div><div class="tm-action-dialog-list">' + dialogItem('apply-user', 'fa-user', '设为 User 头像', user.reason, !canMutate() || !user.available) + dialogItem('apply-character', 'fa-address-card', '设为当前角色头像', character.reason, !canMutate() || !character.available) + dialogItem('view', 'fa-expand', '查看完整大图', '', false) + '<div class="tm-action-dialog-divider"></div>' + dialogItem('manage', 'fa-sliders', '管理头像', '分类、标签、系列与删除', false, true) + '</div>'); overlay.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-dialog-action]'); if (!button || button.disabled) return; var action = button.dataset.avatarDialogAction; if (action === 'apply-user' || action === 'apply-character') openScopeMenu(action === 'apply-user' ? 'user' : 'character', id, overlay).catch(function (error) { toast(error.message || '头像操作面板无法打开', true); }); else if (action === 'view') { closeSheet(overlay); viewAsset(id).catch(function (error) { setNotice(error.message, 'error'); }); } else if (action === 'manage') { closeSheet(overlay); openManageSheet(id); } }); return Promise.resolve(overlay); }
         function pickerSummary(icon, title, value, action) { return '<button type="button" class="tm-picker-trigger" data-avatar-manage="' + action + '"><span class="tm-picker-trigger-icon"><i class="fa-solid ' + icon + '"></i></span><span class="tm-picker-trigger-copy"><strong>' + esc(title) + '</strong><small>' + esc(value || '未设置') + '</small></span><i class="fa-solid fa-chevron-right tm-picker-trigger-chevron"></i></button>'; }
         function openManageSheet(id) { var asset = assets.find(function (item) { return item.id === id; }); if (!asset) return; var state = data(), meta = library.peekMeta(state, id), series = library.findSeries(state, id); store.getThumbnail(id).then(function (src) { var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>管理头像</div><div class="tm-avatar-manage-summary"><img class="tm-avatar-manage-thumb" src="' + esc(src) + '" alt=""><span><strong>头像资源</strong><small>只整理关系与标注，不修改图片</small></span></div>' + pickerSummary('fa-folder', '分类', meta.category || '无分类', 'category') + pickerSummary('fa-tags', '标签', meta.tags.join('、') || '无标签', 'tags') + pickerSummary('fa-layer-group', '系列', series ? series.name : '未加入系列', 'series') + '<div class="tm-divider"></div><button class="tm-btn tm-btn-danger" data-avatar-manage="delete" style="width:100%"><i class="fa-solid fa-trash"></i> 删除头像</button>'); sheet.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-manage]'); if (!button) return; var action = button.dataset.avatarManage; if (action === 'category') openCategoryPicker({ categories: library.ensureState(data()).categories, selected: library.peekMeta(data(), id).category, allowClear: true, title: '选择头像分类', onSelect: function (value) { var next = data(); library.ensureMeta(next, id).category = value; persist(next).then(function () { closeSheet(sheet); render(); openManageSheet(id); }); } }); else if (action === 'tags') openTagPicker({ knownTags: library.listTags(data()), selectedTags: library.peekMeta(data(), id).tags, allowClear: true, title: '管理头像标签', onApply: function (values) { var next = data(); library.ensureMeta(next, id).tags = values; persist(next).then(function () { closeSheet(sheet); render(); openManageSheet(id); }); } }); else if (action === 'series') { closeSheet(sheet); var owner = library.findSeries(data(), id); if (owner) openSeriesManageSheet(owner.id); else openJoinSeriesSheet(id); } else if (action === 'delete') deleteAvatar(id, sheet); }); }); }
         function deleteAvatar(id, sheet) { if (mutationBlocked() || !confirmAction('确定删除这张头像吗？使用它的绑定会同时清理。')) return; runtime.deleteAsset(id).then(function () { var state = data(); library.removeAssetReferences(state, id); return persist(state); }).then(function () { if (sheet) closeSheet(sheet); toast('已删除头像并清理相关绑定'); return refresh(); }).catch(function (error) { setNotice('删除失败：' + error.message, 'error'); }); }
@@ -11518,7 +11641,7 @@
             });
             return sheet;
         }
-        return { mount: mount, unmount: unmount, refresh: refresh, importFiles: importFiles, pickFiles: function () { if (!mounted || !fileInput || importing || mutationBlocked()) return false; fileInput.click(); return true; }, beginNativeEdit: beginNativeEdit, openNativeMenu: openNativeMenu, openAssetMenu: openAssetMenu, viewAsset: viewAsset, toggleSearch: toggleSearch, toggleSort: toggleSort, enterBatchMode: enterBatchMode, toggleBatchMode: toggleBatchMode, openCategoryManager: openCategoryManager, getNativeStatus: function (kind) { kind = kind === 'user' ? 'user' : 'character'; var cap = runtime.getCapabilities()[kind] || {}; return { available: !!cap.available, reason: cap.reason || '', label: cap.target && cap.target.label || '', targetKey: cap.target && cap.target.key || '' }; }, getState: function () { var state = data(); return { mounted: mounted, count: assets.length, importing: importing, batchMode: batchMode, categories: library.ensureState(state).categories.length, series: Object.keys(library.ensureState(state).series.groups).length }; } };
+        return { mount: mount, unmount: unmount, refresh: refresh, importFiles: importFiles, pickFiles: function () { if (!mounted || !fileInput || importing || mutationBlocked()) return false; fileInput.click(); return true; }, beginNativeEdit: beginNativeEdit, openNativeMenu: openNativeMenu, openAssetMenu: openAssetMenu, openScopeMenu: openScopeMenu, viewAsset: viewAsset, toggleSearch: toggleSearch, toggleSort: toggleSort, enterBatchMode: enterBatchMode, toggleBatchMode: toggleBatchMode, openCategoryManager: openCategoryManager, getNativeStatus: function (kind) { kind = kind === 'user' ? 'user' : 'character'; var cap = runtime.getCapabilities()[kind] || {}; return { available: !!cap.available, reason: cap.reason || '', label: cap.target && cap.target.label || '', targetKey: cap.target && cap.target.key || '' }; }, getState: function () { var state = data(); return { mounted: mounted, count: assets.length, importing: importing, batchMode: batchMode, categories: library.ensureState(state).categories.length, series: Object.keys(library.ensureState(state).series.groups).length }; } };
     };
     ns.avatarPage = { buildPageHtml: buildPageHtml, styleText: styleText };
 })(window);
@@ -11854,7 +11977,7 @@
 })(window);
 /* END MODULE 22/27: src/app-shell.js */
 
-/* BEGIN MODULE 23/27: src/styles.js | sha256:f14796f8f2e5dd57aab127923f4662ef688ac9f120aa7aca81f4ceaea48c3756 */
+/* BEGIN MODULE 23/27: src/styles.js | sha256:3636d9bf794c45e18bd50c8c91ed983f73f6d209658c6f522642070d2f7d0668 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -12028,6 +12151,7 @@
             '.tm-action-dialog-title{display:flex;align-items:center;gap:9px;margin:0 0 11px;font-size:.98em;font-weight:700}.tm-action-dialog-title>i{color:var(--SmartThemeQuoteColor,#7c6daf)}',
             '.tm-action-dialog-list{display:flex;flex-direction:column;gap:6px}.tm-action-dialog-item{width:100%;min-height:44px;box-sizing:border-box;display:grid;grid-template-columns:28px minmax(0,1fr);align-items:center;gap:8px;padding:9px 11px;border:1px solid rgba(127,127,127,.14);border-radius:var(--tm-control-radius,9px);background:rgba(127,127,127,.055);color:inherit;font:inherit;text-align:left;cursor:pointer}.tm-action-dialog-item:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.1)}.tm-action-dialog-item>i{width:22px;text-align:center;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.76}.tm-action-dialog-item>span{display:flex;min-width:0;flex-direction:column;gap:2px}.tm-action-dialog-item strong{font-size:.84em}.tm-action-dialog-item small{font-size:.69em;line-height:1.3;opacity:.5}.tm-action-dialog-item:disabled{opacity:.4;cursor:not-allowed}.tm-action-dialog-item:disabled:hover{border-color:rgba(127,127,127,.14);background:rgba(127,127,127,.055)}',
             '.tm-action-dialog-divider{height:1px;margin:5px 2px;background:rgba(127,127,127,.12)}.tm-action-dialog-item.is-weak{background:transparent;opacity:.72}.tm-action-dialog-item.is-danger>i,.tm-action-dialog-item.is-danger strong{color:#e57373}',
+            '.tm-avatar-scope-row{position:relative;display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch}.tm-avatar-scope-row.is-bound{grid-template-columns:minmax(0,1fr) 40px;gap:5px}.tm-avatar-scope-clear{display:grid;place-items:center;min-width:40px;border:1px solid rgba(127,127,127,.14);border-radius:var(--tm-control-radius,9px);background:rgba(127,127,127,.055);color:inherit;opacity:.62;cursor:pointer}.tm-avatar-scope-clear:hover{border-color:#d45c66;color:#d45c66;opacity:1}.tm-avatar-scope-clear:disabled{opacity:.28;cursor:not-allowed}.tm-avatar-scope-row.is-bound>.tm-action-dialog-item{border-color:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 46%,transparent)}',
             '.tm-sheet{position:absolute;bottom:0;left:0;right:0;max-height:88vh;max-height:88dvh;background:var(--tm-bg2,var(--SmartThemeBackgroundColor,#1a1a1e));color:var(--tm-text,var(--SmartThemeBodyColor,#eee));border-radius:var(--tm-panel-radius,18px) var(--tm-panel-radius,18px) 0 0;overflow-y:auto;animation:tm-sheet-up .25s ease;border:1px solid var(--tm-control-border,rgba(127,127,127,.15));border-bottom:none;box-shadow:var(--tm-panel-shadow,0 -12px 36px var(--tm-shadow,rgba(0,0,0,.28)));backdrop-filter:var(--tm-panel-blur,none);}',
             '.tm-sheet-overlay.tm-sheet-tall .tm-sheet{height:88vh;height:88dvh;max-height:88vh;max-height:88dvh;}',
             '.tm-sheet-overlay.tm-settings-sheet .tm-sheet-content{box-sizing:border-box;min-height:calc(88dvh - 18px);display:flex;flex-direction:column;}',
@@ -13074,7 +13198,7 @@
 })(window);
 /* END MODULE 26/27: src/ui-events.js */
 
-/* BEGIN MODULE 27/27: src/ui-main.js | sha256:978734f28392d5146366116360dda62ac272df54988035c8c0ef9f2f74f8c4a4 */
+/* BEGIN MODULE 27/27: src/ui-main.js | sha256:a53c658131495a59ec01d013ff47acbc679f406b10774de5afdf605eba492ff7 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -13166,6 +13290,65 @@
     var supportErrorText = '';
     var pendingOpenAfterReady = false;
     var pendingOpenAfterAvatarCancel = false;
+
+    function overwriteSillyTavernAvatar(input) {
+        input = input || {};
+        var context = input.context || {};
+        var asset = input.asset || {};
+        var kind = input.kind === 'user' ? 'user' : 'character';
+        if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(String(asset.imageData || ''))) {
+            return Promise.reject(Object.assign(new Error('头像主图数据无效'), { code: 'HOST_AVATAR_IMAGE_INVALID' }));
+        }
+        var modulePromise = kind === 'user' ? import('/script.js') : Promise.resolve(null);
+        return Promise.all([
+            modulePromise,
+            global.fetch(asset.imageData).then(function (response) {
+                if (!response.ok) throw new Error('avatar data decode failed');
+                return response.blob();
+            }),
+        ]).then(function (parts) {
+            var stModule = parts[0];
+            var blob = parts[1];
+            var targetName = kind === 'user'
+                ? String(stModule && stModule.user_avatar || '').trim()
+                : String(input.target && input.target.characterAvatar || '').trim();
+            if (!targetName) throw Object.assign(new Error(kind === 'user' ? '无法识别当前人设头像' : '无法识别当前角色卡'), { code: 'HOST_AVATAR_TARGET_UNAVAILABLE' });
+            var extension = /image\/jpeg/i.test(blob.type || asset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || asset.mimeType) ? '.webp' : '.png');
+            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || asset.mimeType || 'image/png' });
+            var form = new global.FormData();
+            form.append('avatar', file);
+            if (kind === 'user') form.append('overwrite_name', targetName);
+            else form.append('avatar_url', targetName);
+            var getHeaders = typeof context.getRequestHeaders === 'function'
+                ? context.getRequestHeaders
+                : stModule && stModule.getRequestHeaders;
+            if (typeof getHeaders !== 'function') throw Object.assign(new Error('SillyTavern 请求头接口不可用'), { code: 'HOST_AVATAR_HEADERS_UNAVAILABLE' });
+            return global.fetch(kind === 'user' ? '/api/avatars/upload' : '/api/characters/edit-avatar', {
+                method: 'POST',
+                headers: getHeaders({ omitContentType: true }),
+                cache: 'no-cache',
+                body: form,
+            }).then(function (response) {
+                if (!response.ok) throw Object.assign(new Error((kind === 'user' ? '人设头像' : '角色卡卡面') + '覆盖失败（HTTP ' + response.status + '）'), { code: 'HOST_AVATAR_WRITE_FAILED', status: response.status });
+                var thumbnailUrl = typeof context.getThumbnailUrl === 'function'
+                    ? context.getThumbnailUrl(kind === 'user' ? 'persona' : 'avatar', targetName)
+                    : '';
+                var refreshThumbnail = thumbnailUrl ? global.fetch(thumbnailUrl, { cache: 'reload' }).catch(function () {}) : Promise.resolve();
+                var getCharacters = typeof context.getCharacters === 'function'
+                    ? context.getCharacters
+                    : stModule && stModule.getCharacters;
+                var refreshCharacters = kind === 'character' && typeof getCharacters === 'function'
+                    ? Promise.resolve(getCharacters()).catch(function () {})
+                    : Promise.resolve();
+                return Promise.all([refreshThumbnail, refreshCharacters]).then(function () {
+                    return { ok: true, kind: kind, targetName: targetName };
+                });
+            });
+        }).catch(function (error) {
+            if (!error.code) error.code = 'HOST_AVATAR_WRITE_FAILED';
+            throw error;
+        });
+    }
     var darkMode = false;
 
     // 缓存主题列表
@@ -13391,6 +13574,7 @@
                     } catch (e) { return {}; }
                 },
                 getThemeName: getCurrentThemeName,
+                overwriteHostAvatar: overwriteSillyTavernAvatar,
                 onError: function (error) {
                     console.warn('[头像管理] runtime 失败:', error);
                     toast(error && error.message ? error.message : '头像运行时失败', true);

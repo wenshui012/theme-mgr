@@ -252,13 +252,19 @@ function runtimeFixture(options = {}) {
     [...chars, user].forEach((x) => chat.appendChild(x.mes));
     let theme = options.theme || 'A';
     const eventSource = { on() {}, removeListener() {} };
-    const context = options.context || { characters: [{ avatar: 'char.png', name: 'Char' }], characterId: 0, groupId: null, name1: 'User', eventSource, eventTypes: {} };
+    const context = options.context || {
+        characters: [{ avatar: 'char.png', name: 'Char' }], characterId: 0, groupId: null, name1: 'User',
+        chatId: 'Chat One', chatMetadata: { integrity: 'chat-uuid-1' },
+        getCurrentChatId() { return this.chatId; },
+        eventSource, eventTypes: {},
+    };
     const win = { document: doc, innerWidth: 800, innerHeight: 600, MutationObserver, setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), getComputedStyle: (el) => el.computed, confirm: () => true };
     const mods = loadModules(win); const bundle = memoryStore(options.seed); const runtimeStore = options.store || bundle.store; const runtime = mods.createAvatarRuntime({
         window: win, document: doc, store: runtimeStore, getContext: () => context, getThemeName: () => theme,
         canMutate: options.canMutate,
         canStart: options.canStart,
         loadNativeImage: async (nativeAsset) => ({ ...nativeAsset, imageData: 'data:image/png;base64,AA==' }),
+        overwriteHostAvatar: options.overwriteHostAvatar,
     });
     return { win, doc, chat, chars, user, context, store: bundle.store, runtime, mods, setTheme: (x) => { theme = x; } };
 }
@@ -935,13 +941,15 @@ test('67 theme-specific edit save fails closed after the current theme changes',
     assert.equal(f.runtime.getState().state, 'idle');
 });
 
-test('68 a theme-scoped record can never affect Character avatars', async () => {
-    const f = runtimeFixture({ seed: { assets: [asset('a')], bindings: [
-        { themeKey: 'theme-name:A', targetKey: 'character:char.png', avatarId: 'a', view: {} },
+test('68 a dedicated theme binding applies only to the current Character target', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a'), asset('other')], bindings: [
+        { version: 4, themeKey: 'theme-name:A', targetKey: 'character:char.png', avatarId: 'a', view: {} },
+        { version: 4, themeKey: 'theme-name:A', targetKey: 'character:other.png', avatarId: 'other', view: {} },
     ] } });
     await f.runtime.start();
-    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src') === 'raw-char.png'));
+    assert.ok(f.chars.every((entry) => /main-a/.test(entry.image.getAttribute('src'))));
     assert.equal(await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'character:char.png'), null);
+    assert.equal((await f.store.getBinding('theme-name:A', 'character:other.png')).avatarId, 'other');
 });
 
 test('69 adaptive User editing exposes the bind-after-adjust choice and saves global fallback when no theme binding exists', async () => {
@@ -1210,4 +1218,114 @@ test('86 UI reuses Theme Manager backend availability before starting Avatar run
     assert.doesNotMatch(source, /avatarStore = modules\.createAvatarStore\(\{\}\);/);
     assert.doesNotMatch(source, /toast\(error\.message \|\| '头像存储尚未安全就绪'/);
     assert.doesNotMatch(source, /头像存储尚未安全就绪/);
+});
+
+test('87 chat scope requires both a stable integrity key and a loaded chat id', () => {
+    const ready = modules.avatarRuntime.getContextInfo({
+        chatId: 'Chat One', chatMetadata: { integrity: 'chat/key 1' }, getCurrentChatId() { return this.chatId; },
+    });
+    assert.equal(ready.chatBindingKey, 'chat-integrity:chat%2Fkey%201');
+    assert.equal(modules.avatarRuntime.getContextInfo({ chatId: 'Chat One', chatMetadata: {} }).chatBindingKey, '');
+    assert.equal(modules.avatarRuntime.getContextInfo({ chatMetadata: { integrity: 'chat-key' } }).chatBindingKey, '');
+});
+
+test('88 avatar resolution follows chat then theme then global precedence', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('global'), asset('theme'), asset('chat')], bindings: [
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
+        { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'theme', view: {} },
+        { version: 4, themeKey: 'chat-integrity:chat-uuid-1', targetKey: 'user:global', avatarId: 'chat', view: {} },
+    ] } });
+    await f.runtime.start();
+    assert.match(f.user.image.getAttribute('src'), /main-chat/);
+    f.context.chatMetadata = { integrity: 'chat-uuid-2' };
+    await f.runtime.reconcile();
+    assert.match(f.user.image.getAttribute('src'), /main-theme/);
+    f.setTheme('B');
+    await f.runtime.reconcile();
+    assert.match(f.user.image.getAttribute('src'), /main-global/);
+});
+
+test('89 User and Character can save isolated bindings for the current chat', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('user-chat'), asset('character-chat')] } });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'user-chat', bindingMode: 'chat' });
+    await f.runtime.saveEdit();
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'character-chat', bindingMode: 'chat' });
+    await f.runtime.saveEdit();
+    const scopeKey = 'chat-integrity:chat-uuid-1';
+    assert.equal((await f.store.getBinding(scopeKey, 'user:global')).avatarId, 'user-chat');
+    assert.equal((await f.store.getBinding(scopeKey, 'character:char.png')).avatarId, 'character-chat');
+});
+
+test('90 Character can save a dedicated current-theme binding', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('character-theme')] } });
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'character-theme', bindingMode: 'theme' });
+    await f.runtime.saveEdit();
+    const saved = await f.store.getBinding('theme-name:A', 'character:char.png');
+    assert.equal(saved.avatarId, 'character-theme');
+    assert.equal(saved.version, 4);
+});
+
+test('91 clearing one application scope preserves every other binding', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('global'), asset('theme'), asset('chat'), asset('character')], bindings: [
+        { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
+        { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'theme', view: {} },
+        { version: 4, themeKey: 'chat-integrity:chat-uuid-1', targetKey: 'user:global', avatarId: 'chat', view: {} },
+        { version: 4, themeKey: 'chat-integrity:chat-uuid-1', targetKey: 'character:char.png', avatarId: 'character', view: {} },
+    ] } });
+    await f.runtime.clearApplicationScope('user', 'chat');
+    assert.equal(await f.store.getBinding('chat-integrity:chat-uuid-1', 'user:global'), null);
+    assert.equal((await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'user:global')).avatarId, 'global');
+    assert.equal((await f.store.getBinding('theme-name:A', 'user:global')).avatarId, 'theme');
+    assert.equal((await f.store.getBinding('chat-integrity:chat-uuid-1', 'character:char.png')).avatarId, 'character');
+});
+
+test('92 overwriting the host original preserves all existing bindings', async () => {
+    const calls = [];
+    let reloads = 0;
+    const f = runtimeFixture({
+        seed: { assets: [asset('replacement'), asset('global'), asset('theme'), asset('chat')], bindings: [
+            { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
+            { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'theme', view: {} },
+            { version: 4, themeKey: 'chat-integrity:chat-uuid-1', targetKey: 'user:global', avatarId: 'chat', view: {} },
+        ] },
+        overwriteHostAvatar: async (input) => { calls.push(input); return { ok: true }; },
+    });
+    f.context.reloadCurrentChat = async () => { reloads += 1; };
+    const before = JSON.stringify(await f.store.listBindings());
+    await f.runtime.overwriteOriginal('user', 'replacement');
+    const after = JSON.stringify(await f.store.listBindings());
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].kind, 'user');
+    assert.equal(calls[0].asset.id, 'replacement');
+    assert.equal(reloads, 1);
+    assert.equal(after, before);
+});
+
+test('93 chat-scoped save fails closed when the current chat changes', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('chat')] } });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'chat', bindingMode: 'chat' });
+    f.context.chatMetadata = { integrity: 'chat-uuid-2' };
+    await assert.rejects(f.runtime.saveEdit(), error => error.code === 'superseded');
+    assert.equal(await f.store.getBinding('chat-integrity:chat-uuid-1', 'user:global'), null);
+});
+
+test('94 Avatar Page exposes exactly four application scopes and an exact unbind action', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
+    const block = source.slice(source.indexOf('function openScopeMenu'), source.indexOf('function viewAsset'));
+    assert.equal((block.match(/scopeRow\('/g) || []).length, 4);
+    assert.match(block, /scopeRow\('original'/);
+    assert.match(block, /scopeRow\('chat'/);
+    assert.match(block, /scopeRow\('global'/);
+    assert.match(block, /scopeRow\('theme'/);
+    assert.match(block, /现有聊天、美化和全局绑定不会被清除/);
+    assert.match(block, /runtime\.clearApplicationScope\(kind, clearScope\)/);
+});
+
+test('95 host original overwrite uses SillyTavern avatar endpoints and overwrite fields', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    assert.match(source, /form\.append\('overwrite_name', targetName\)/);
+    assert.match(source, /\/api\/avatars\/upload/);
+    assert.match(source, /form\.append\('avatar_url', targetName\)/);
+    assert.match(source, /\/api\/characters\/edit-avatar/);
+    assert.match(source, /overwriteHostAvatar: overwriteSillyTavernAvatar/);
 });

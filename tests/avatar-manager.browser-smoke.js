@@ -184,11 +184,19 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 let userMenuAction = null;
                 for (let attempt = 0; attempt < 20 && !userMenuAction; attempt++) {
                     await delay(10);
-                    userMenuAction = document.querySelector('[data-avatar-menu-action="apply-user"]');
+                    userMenuAction = document.querySelector('[data-avatar-dialog-action="apply-user"]');
                 }
                 const menuOpened = Boolean(userMenuAction && userMenuAction.getAttribute('aria-disabled') !== 'true');
                 if (!userMenuAction) throw new Error('avatar three-dot menu did not finish opening');
                 userMenuAction.click();
+                let globalScopeAction = null;
+                for (let attempt = 0; attempt < 20 && !globalScopeAction; attempt++) {
+                    await delay(10);
+                    globalScopeAction = document.querySelector('[data-avatar-scope-action="global"]');
+                }
+                const scopePanelFour = document.querySelectorAll('[data-avatar-scope-action]').length === 4;
+                if (!globalScopeAction) throw new Error('avatar scope menu did not finish opening');
+                globalScopeAction.click();
                 let toolbarHost = null;
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
                 avatarElements.forEach((element, index) => { element.getBoundingClientRect = originalAvatarRects[index]; });
@@ -200,8 +208,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const viewportBottom = viewportTop + (visualViewport ? visualViewport.height : innerHeight);
                 const toolbarVisible = Boolean(toolbarRect && toolbarRect.width > 0 && toolbarRect.height > 0 && toolbarRect.top >= viewportTop && toolbarRect.bottom <= viewportBottom);
                 const toolbarIsolated = Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="save"]'));
-                const bindAfterAdjustControl = Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="bind-theme"]')) &&
-                    runtime.getState().bindingMode === 'adaptive' && runtime.getState().unboundSaveMode === 'global';
+                const scopedGlobalEditor = runtime.getState().bindingMode === 'global' &&
+                    !Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="bind-theme"]'));
                 const userImages = [...document.querySelectorAll('.mes[is_user="true"] .avatar img')];
                 const highQualityApplied = userImages.every((image) => image.src === persisted.imageData);
                 const userBoxBeforeSliders = userImages.map((image) => image.getBoundingClientRect().toJSON());
@@ -378,8 +386,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const themeBAsset = coloredAsset('theme-user-b', '#2040b0');
                 const temporaryAsset = coloredAsset('theme-user-temp', '#20a050');
                 await store.putAsset(themeAAsset); await store.putAsset(themeBAsset); await store.putAsset(temporaryAsset);
-                await store.putBinding({ themeKey:'theme-name:A', targetKey:'user:global', avatarId:themeAAsset.id, view:{x:.1} });
-                await store.putBinding({ themeKey:'theme-name:B', targetKey:'user:global', avatarId:themeBAsset.id, view:{y:.1} });
+                await store.putBinding({ version:4, themeKey:'theme-name:A', targetKey:'user:global', avatarId:themeAAsset.id, view:{x:.1} });
+                await store.putBinding({ version:4, themeKey:'theme-name:B', targetKey:'user:global', avatarId:themeBAsset.id, view:{y:.1} });
                 const characterBeforeThemeBindings = characterImages.map((image) => ({ src:image.src, crop:image.style.getPropertyValue('object-view-box') }));
                 document.querySelector('#themes').value='A'; document.querySelector('#themes').dispatchEvent(new Event('change',{bubbles:true})); await runtime.reconcile();
                 const appliedA = userImages.every((image) => image.src === themeAAsset.imageData);
@@ -394,11 +402,19 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const seamlessNewMessage = freshUserMessage.querySelector('img').src === themeAAsset.imageData;
                 freshUserMessage.remove();
                 const boundAssetMenu = await pageController.openAssetMenu(avatarId);
-                boundAssetMenu.querySelector('[data-avatar-menu-action="apply-user"]').click();
+                boundAssetMenu.querySelector('[data-avatar-dialog-action="apply-user"]').click();
+                let themeScopeAction = null;
+                for (let attempt = 0; attempt < 20 && !themeScopeAction; attempt++) {
+                    await delay(10);
+                    themeScopeAction = document.querySelector('[data-avatar-scope-action="theme"]');
+                }
+                const boundScopePanel = document.querySelectorAll('[data-avatar-scope-action]').length === 4 &&
+                    Boolean(document.querySelector('[data-avatar-scope-clear="theme"]'));
+                if (!themeScopeAction) throw new Error('bound avatar scope menu did not finish opening');
+                themeScopeAction.click();
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
-                const adaptiveToolbar = document.querySelector('#tm-avatar-editor-toolbar')?.shadowRoot;
-                const bindChoiceAfterAdjust = runtime.getState().bindingMode === 'adaptive' && runtime.getState().unboundSaveMode === 'temporary' &&
-                    Boolean(adaptiveToolbar && adaptiveToolbar.querySelector('[data-action="bind-theme"]'));
+                const scopedThemeEditor = runtime.getState().bindingMode === 'theme' &&
+                    !Boolean(document.querySelector('#tm-avatar-editor-toolbar')?.shadowRoot?.querySelector('[data-action="bind-theme"]'));
                 const adaptivePreviewReplacesBound = userImages.every((image) => image.src === persisted.imageData);
                 userImages.forEach((image) => { image.src = themeAAsset.imageData; });
                 await Promise.resolve();
@@ -509,7 +525,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, gridStable, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
-                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, bindAfterAdjustControl, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, bindChoiceAfterAdjust, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, nativeInputHandlingMs, nativeResponsiveInputs,
+                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, scopePanelFour, scopedGlobalEditor, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, boundScopePanel, scopedThemeEditor, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, nativeInputHandlingMs, nativeResponsiveInputs,
                     nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
                     hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
@@ -517,7 +533,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','bindAfterAdjustControl','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','bindChoiceAfterAdjust','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','scopedGlobalEditor','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);
