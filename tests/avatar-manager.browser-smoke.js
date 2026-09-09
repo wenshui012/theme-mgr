@@ -3,7 +3,7 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '..');
-const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'ui-sheets.js', 'avatar-runtime.js', 'avatar-page.js', 'styles.js'];
+const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'ui-sheets.js', 'avatar-runtime.js', 'avatar-library.js', 'avatar-page.js', 'styles.js'];
 const viewports = [
     { label: 'desktop', width: 1280, height: 800 },
     { label: 'mobile-360', width: 360, height: 720, isMobile: true, hasTouch: true },
@@ -106,6 +106,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     store, processor, runtime, imageLoader: loaderApi,
                     getRoot: () => document.querySelector('[data-tm-page="avatars"]'),
                     createSheet: sheets.createSheet,
+                    createActionDialog: sheets.createActionDialog,
                     closeSheet: sheets.closeSheet,
                     openImageLightbox: sheets.openImageLightbox,
                     closeManager: () => { managerClosed++; }, toast() {}, confirm: () => true,
@@ -134,7 +135,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 await delay(30);
                 const gridUsesThumb = gridImage && gridImage.src === persisted.thumbData && gridImage.src !== persisted.imageData;
                 const imageOnlyCard = Boolean(document.querySelector('.tm-avatar-page-card .tm-avatar-page-thumb')) &&
-                    !document.querySelector('.tm-avatar-page-name') && Boolean(document.querySelector('[data-avatar-action="menu"]'));
+                    !document.querySelector('.tm-avatar-page-name') && !document.querySelector('[data-avatar-action="menu"]');
                 const fullLibraryPickerRemoved = typeof pageController.openPicker === 'undefined';
 
                 const stressIds = [];
@@ -157,7 +158,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 await pageController.refresh();
                 await frame();
 
-                document.querySelector('[data-avatar-action="view"]').click();
+                await pageController.viewAsset(avatarId);
                 for (let attempt = 0; attempt < 20 && !document.querySelector('.tm-lightbox'); attempt++) await delay(10);
                 const previewImage = document.querySelector('.tm-lightbox .tm-lb-img');
                 const fullPreview = Boolean(previewImage && previewImage.src === persisted.imageData);
@@ -180,14 +181,10 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     element.getBoundingClientRect = () => ({x:20,y:innerHeight+1000,left:20,top:innerHeight+1000,right:92,bottom:innerHeight+1072,width:72,height:72,toJSON(){return this;}});
                     element.scrollIntoView = () => { offscreenScrolls++; };
                 });
-                document.querySelector('[data-avatar-action="menu"]').click();
-                let userMenuAction = null;
-                for (let attempt = 0; attempt < 20 && !userMenuAction; attempt++) {
-                    await delay(10);
-                    userMenuAction = document.querySelector('[data-avatar-dialog-action="apply-user"]');
-                }
+                const firstAssetMenu = await pageController.openAssetMenu(avatarId);
+                const userMenuAction = firstAssetMenu.querySelector('[data-avatar-dialog-action="apply-user"]');
                 const menuOpened = Boolean(userMenuAction && userMenuAction.getAttribute('aria-disabled') !== 'true');
-                if (!userMenuAction) throw new Error('avatar three-dot menu did not finish opening');
+                if (!userMenuAction) throw new Error('avatar action menu did not finish opening');
                 userMenuAction.click();
                 let globalScopeAction = null;
                 for (let attempt = 0; attempt < 20 && !globalScopeAction; attempt++) {
@@ -201,7 +198,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
                 avatarElements.forEach((element, index) => { element.getBoundingClientRect = originalAvatarRects[index]; });
                 await frame();
-                const directUser = runtime.getState().state === 'editing' && managerClosed === 1 && offscreenScrolls === 1;
+                const directUser = runtime.getState().state === 'editing' && managerClosed === 1 && offscreenScrolls === 0;
                 toolbarHost = document.querySelector('#tm-avatar-editor-toolbar');
                 const toolbarRect = toolbarHost && toolbarHost.getBoundingClientRect();
                 const viewportTop = visualViewport ? visualViewport.offsetTop : 0;
@@ -297,7 +294,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const transformB = characterImages[0].style.getPropertyValue('object-view-box');
                 const themesIsolated = transformA === transformB && characterImages.every((image) => image.src.startsWith('data:image/svg+xml'));
 
-                pageController.beginNativeEdit();
+                pageController.beginNativeEdit('character');
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
                 const nativeEditorOpened = runtime.getState().state === 'editing' && runtime.getState().mode === 'native';
                 const nativeSourcesBeforeInput = characterImages.map((image) => image.src);
@@ -341,9 +338,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const nativeShapePreserved = nativeShapeDuringEdit && getComputedStyle(characterImages[0]).clipPath === 'ellipse(44% 36%)';
 
                 const nativeMenu = await pageController.openNativeMenu();
-                const nativeMenuCombined = Boolean(nativeMenu.querySelector('[data-avatar-menu-action="adjust-native-character"]') &&
-                    nativeMenu.querySelector('[data-avatar-menu-action="reset-native-character"]') &&
-                    nativeMenu.querySelector('[data-avatar-menu-action="adjust-native-user"]'));
+                const nativeMenuCombined = Boolean(nativeMenu.querySelector('[data-avatar-dialog-action="native-character"]') &&
+                    nativeMenu.querySelector('[data-avatar-dialog-action="native-user"]'));
                 sheets.closeSheet(nativeMenu);
                 pageController.beginNativeEdit('user');
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
@@ -477,22 +473,22 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 await store.deleteAsset(themeAAsset.id); await store.deleteAsset(themeBAsset.id); await store.deleteAsset(temporaryAsset.id);
                 await runtime.clearBinding('user');
                 const restoredUser = userImages.every((image) => image.src.includes('R0lGOD'));
-                const resetNativeSheet = await pageController.openNativeMenu();
-                resetNativeSheet.querySelector('[data-avatar-menu-action="reset-native-character"]').click();
+                await runtime.clearNativeView('character');
                 let nativeCharacterRestored = false;
                 for (let attempt = 0; attempt < 50 && !nativeCharacterRestored; attempt++) {
                     await delay(10);
                     nativeCharacterRestored = !(await store.getNativeView('character:char.png')) && characterImages.every((image,index) =>
                         image.getAttribute('src') === originalCharacterSources[index].src && image.getAttribute('srcset') === originalCharacterSources[index].srcset);
                 }
-                document.querySelector('[data-avatar-action="menu"]').click();
-                let deleteMenuAction = null;
-                for (let attempt = 0; attempt < 20 && !deleteMenuAction; attempt++) {
+                const deleteAssetMenu = await pageController.openAssetMenu(avatarId);
+                deleteAssetMenu.querySelector('[data-avatar-dialog-action="manage"]').click();
+                let deleteManageAction = null;
+                for (let attempt = 0; attempt < 20 && !deleteManageAction; attempt++) {
                     await delay(10);
-                    deleteMenuAction = document.querySelector('[data-avatar-menu-action="delete"]');
+                    deleteManageAction = document.querySelector('[data-avatar-manage="delete"]');
                 }
-                if (!deleteMenuAction) throw new Error('avatar delete action was not moved into the three-dot menu');
-                deleteMenuAction.click();
+                if (!deleteManageAction) throw new Error('avatar delete action did not open from the manage sheet');
+                deleteManageAction.click();
                 for (let attempt = 0; attempt < 50; attempt++) {
                     if (!(await store.getAsset(avatarId)) && pageController.getState().count === 0) break;
                     await delay(10);
