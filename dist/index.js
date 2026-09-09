@@ -8344,7 +8344,7 @@
 })(window);
 /* END MODULE 16/27: src/avatar-storage.js */
 
-/* BEGIN MODULE 17/27: src/avatar-sync.js | sha256:d46e07a4c912cb921b401427dc9197e45950a05d884ac84ecab5244cebe8c034 */
+/* BEGIN MODULE 17/27: src/avatar-sync.js | sha256:e96c24b55e056489edcfe032add342bf3d729ddbc37e151549c372492b9f972d */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var SERVER_BASE = '/api/plugins/theme-manager';
@@ -8770,6 +8770,7 @@
         var remote = options.remote || createRemoteApi(options);
         var inspectDataUrl = options.inspectDataUrl || defaultInspectDataUrl;
         var onStateChange = options.onStateChange || function () {};
+        var isBackendAvailable = typeof options.isBackendAvailable === 'function' ? options.isBackendAvailable : null;
         var state = { phase: 'idle', authoritative: null, writable: false, offline: false, local: 'unknown', remote: 'unknown', reason: '', error: null };
         var initialization = null;
         var activeStore = null;
@@ -8795,7 +8796,13 @@
             if (error.details) summary.details = clone(error.details);
             return summary;
         }
+        function sharedBackendAvailable() {
+            if (!isBackendAvailable) return true;
+            try { return isBackendAvailable() === true; }
+            catch (_) { return false; }
+        }
         function block(reason, localStatus, remoteStatus, phase, underlyingError) {
+            var localFailure = /^local-/.test(reason || '') || reason === 'control-error' || reason === 'offline-cache-invalid';
             publish({
                 phase: phase || 'blocked',
                 authoritative: null,
@@ -8808,7 +8815,9 @@
             });
             throw makeError(
                 phase === 'conflict' ? 'AVATAR_STORAGE_CONFLICT' : 'AVATAR_STORAGE_BLOCKED',
-                phase === 'conflict' ? '本地和后端头像数据存在冲突，已停止自动接管' : '头像存储尚未安全就绪',
+                phase === 'conflict'
+                    ? '本地和后端头像数据存在冲突，已停止自动接管'
+                    : localFailure ? '头像本地存储初始化失败' : '头像后端同步未能安全完成',
                 clone(state)
             );
         }
@@ -8819,6 +8828,19 @@
             activeSnapshot = storageApi.normalizeSnapshot(snapshot);
             activeStore = storeForSnapshot(activeSnapshot);
             return activeSnapshot;
+        }
+        function useLocal(local, remoteStatus, reason, error) {
+            setActiveSnapshot(local.snapshot);
+            activeStore = localStore;
+            return publish({
+                phase: 'local-ready',
+                authoritative: 'local',
+                writable: true,
+                offline: false,
+                remote: remoteStatus || 'unavailable',
+                reason: reason || 'shared-backend-unavailable',
+                error: errorSummary(error),
+            });
         }
         function classifyLocal() {
             return Promise.resolve(localStore.ready).then(function () { return localStore.readSnapshot(); }).then(function (snapshot) {
@@ -8938,6 +8960,7 @@
             });
         }
         function initializeImpl() {
+            var remoteWriteStarted = false;
             publish({ phase: 'probing', authoritative: null, writable: false, offline: false, reason: '', error: null });
             return Promise.all([classifyLocal(), readControl()]).then(function (parts) {
                 var local = parts[0];
@@ -8947,19 +8970,35 @@
                 if (controlResult.status !== 'present' && (local.status === 'invalid' || local.status === 'error')) {
                     return block('local-' + local.status, local.status, 'unknown', undefined, local.error);
                 }
+                if (!sharedBackendAvailable()) {
+                    if (controlResult.status === 'present') return loadOfflineCache(controlResult.control, local.status);
+                    return useLocal(local, 'unavailable', 'shared-backend-unavailable');
+                }
                 return Promise.resolve(remote.probeCapability()).then(function (capability) {
                     if (!capability || capability.status === 'unsupported') {
-                        if (controlResult.status === 'present') return block('remote-capability-lost', local.status, 'unsupported');
-                        setActiveSnapshot(local.snapshot);
-                        activeStore = localStore;
-                        return publish({ phase: 'local-ready', authoritative: 'local', writable: true, offline: false, remote: 'unsupported', reason: capability && capability.reason || 'unsupported', error: null });
+                        if (controlResult.status === 'present') {
+                            if (isBackendAvailable) return loadOfflineCache(controlResult.control, local.status);
+                            return block('remote-capability-lost', local.status, 'unsupported');
+                        }
+                        return useLocal(local, 'unsupported', capability && capability.reason || 'unsupported');
                     }
-                    if (capability.status !== 'supported') return block('capability-invalid', local.status, 'invalid');
+                    if (capability.status !== 'supported') {
+                        if (controlResult.status === 'present' && isBackendAvailable) return loadOfflineCache(controlResult.control, local.status);
+                        if (isBackendAvailable) return useLocal(local, 'invalid', 'capability-invalid');
+                        return block('capability-invalid', local.status, 'invalid');
+                    }
                     return Promise.resolve(remote.readState()).then(function (remoteState) {
-                        if (!remoteState || remoteState.status === 'invalid') return block('remote-invalid', local.status, 'invalid');
+                        if (!remoteState || remoteState.status === 'invalid') {
+                            if (controlResult.status === 'present' && isBackendAvailable) return loadOfflineCache(controlResult.control, local.status);
+                            if (isBackendAvailable) return useLocal(local, 'invalid', 'remote-invalid', remoteState && remoteState.error);
+                            return block('remote-invalid', local.status, 'invalid');
+                        }
                         if (remoteState.status === 'empty') {
                             if (controlResult.status === 'present') return block('remote-became-empty', local.status, 'empty', 'conflict');
-                            if (local.status === 'present') return migrateLocal(local);
+                            if (local.status === 'present') {
+                                remoteWriteStarted = true;
+                                return migrateLocal(local);
+                            }
                             setActiveSnapshot(emptySnapshot());
                             datasetId = makeDatasetId();
                             revision = 0;
@@ -8967,7 +9006,11 @@
                             remoteRefs = new Map();
                             return publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'empty', reason: 'cas-initialize-on-first-write', error: null });
                         }
-                        if (remoteState.status !== 'present') return block('remote-state-invalid', local.status, 'invalid');
+                        if (remoteState.status !== 'present') {
+                            if (controlResult.status === 'present' && isBackendAvailable) return loadOfflineCache(controlResult.control, local.status);
+                            if (isBackendAvailable) return useLocal(local, 'invalid', 'remote-state-invalid');
+                            return block('remote-state-invalid', local.status, 'invalid');
+                        }
                         if (controlResult.status !== 'present' && local.status === 'present') return block('both-present', local.status, 'present', 'conflict');
                         if (controlResult.status === 'present' && controlResult.control.datasetId !== remoteState.datasetId) {
                             return block('dataset-id-conflict', local.status, 'present', 'conflict');
@@ -8981,8 +9024,11 @@
                     if (error && error.code === 'AVATAR_REVISION_CONFLICT') {
                         return block('revision-conflict', local.status, 'present', 'conflict', error);
                     }
-                    if (controlResult.status === 'present' && error && (error.code === 'AVATAR_BACKEND_ERROR' || error.code === 'AVATAR_HTTP_ERROR')) {
+                    if (controlResult.status === 'present' && error && (error.code === 'AVATAR_BACKEND_ERROR' || error.code === 'AVATAR_HTTP_ERROR' || error.code === 'AVATAR_BACKEND_INVALID')) {
                         return loadOfflineCache(controlResult.control, local.status);
+                    }
+                    if (!remoteWriteStarted && isBackendAvailable && error && error.details && (error.details.stage === 'capability' || error.details.stage === 'state' || error.details.stage === 'download')) {
+                        return useLocal(local, error.code === 'AVATAR_BACKEND_INVALID' ? 'invalid' : 'error', 'backend-unavailable', error);
                     }
                     return block(error && error.code || 'backend-error', local.status, error && error.code === 'AVATAR_BACKEND_INVALID' ? 'invalid' : 'error', undefined, error);
                 });
@@ -9551,7 +9597,7 @@
 })(window);
 /* END MODULE 19/27: src/avatar-library.js */
 
-/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:a8429d2846114b0fca20a225fe472df680fb84d505a48353a2d4948ad799c0ee */
+/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:253ef91a1e0d8f2375e158d4118a7253a4c8a2073218e4f8675ebfc08214e175 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -9916,7 +9962,7 @@
 
         function requireMutable() {
             if (canMutate()) return null;
-            return Object.assign(new Error('头像存储当前只读或尚未安全就绪'), { code: 'AVATAR_STORAGE_READ_ONLY' });
+            return Object.assign(new Error('头像存储当前只读'), { code: 'AVATAR_STORAGE_READ_ONLY' });
         }
 
         function contextSafe() {
@@ -10386,7 +10432,7 @@
         }
         function start() {
             if (started) return Promise.resolve(false);
-            if (!canStart()) return Promise.reject(Object.assign(new Error('头像存储尚未安全就绪'), { code: 'AVATAR_STORAGE_NOT_READY' }));
+            if (!canStart()) return Promise.reject(Object.assign(new Error('头像本地存储不可用'), { code: 'AVATAR_STORAGE_NOT_READY' }));
             started = true;
             var context = contextSafe();
             var source = context.eventSource;
@@ -11250,7 +11296,7 @@
 })(window);
 /* END MODULE 20/27: src/avatar-runtime.js */
 
-/* BEGIN MODULE 21/27: src/avatar-page.js | sha256:77869f001e913dae723d5beb18dc1922c505554546238242c166df731ef541b7 */
+/* BEGIN MODULE 21/27: src/avatar-page.js | sha256:d4ded9ab041389acabea619b0c46d63387036360f485a0ca4e105d495558bb82 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -11299,7 +11345,7 @@
         function removeStyle() { var style = doc.getElementById(STYLE_ID); if (style && style.parentNode) style.parentNode.removeChild(style); }
         function friendlyImportError(error) { var code = error && error.code || ''; if (/READ_FAILED/.test(code)) return '图片读取失败'; if (/DECODE_FAILED/.test(code)) return '图片解码失败'; if (code === 'AVATAR_FORMAT_UNSUPPORTED') return '图片格式暂不支持'; if (code === 'AVATAR_STORAGE_QUOTA_EXCEEDED') return '存储空间不足'; if (/^(?:AVATAR_IDB|AVATAR_STORAGE)/.test(code)) return '本地存储失败'; return '未能保存头像'; }
         function setImporting(value) { importing = Boolean(value); onImportingChange(importing); if (root && importing) setNotice('正在添加头像…', 'loading'); }
-        function mutationBlocked() { if (canMutate()) return false; setNotice('头像存储当前只读或尚未安全就绪', 'error'); return true; }
+        function mutationBlocked() { if (canMutate()) return false; setNotice('头像存储当前只读', 'error'); return true; }
         function nativeSlotHtml() { return '<button type="button" class="tm-avatar-native-slot" data-avatar-action="native" aria-label="调整原头像"><i class="fa-regular fa-circle-user" aria-hidden="true"></i></button>'; }
         function activeRank(id) { var index = activeAvatarIds.indexOf(id); return index === -1 ? Number.MAX_SAFE_INTEGER : index; }
         function syncActiveAvatarIds() { var current = runtime && typeof runtime.getActiveAvatarIds === 'function' ? runtime.getActiveAvatarIds() : {}; activeAvatarIds = [current && current.user, current && current.character].filter(function (id, index, list) { return id && list.indexOf(id) === index; }); }
@@ -12958,7 +13004,7 @@
 })(window);
 /* END MODULE 26/27: src/ui-events.js */
 
-/* BEGIN MODULE 27/27: src/ui-main.js | sha256:a6c63ffa4811519226ad12d5c57517d722d9c88a1362622de8ec4f24d3f5d9a4 */
+/* BEGIN MODULE 27/27: src/ui-main.js | sha256:6343b87a199c5f3dca959ebb5cabf701c61616581b26e0c202e46b99ba47e545 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -13249,6 +13295,7 @@
             avatarCoordinator = modules.createAvatarStorageCoordinator({
                 localStore: localAvatarStore,
                 getPostHeaders: getPostHeaders,
+                isBackendAvailable: getServerMode,
                 onStateChange: function (avatarState) {
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = !avatarCoordinator || !avatarCoordinator.canMutate();
@@ -20307,8 +20354,8 @@
                     if (!avatarCoordinator.isRuntimeReady()) return;
                     return avatarRuntime.start();
                 }).catch(function (error) {
-                    console.warn('[头像管理] 安全接管未就绪:', error);
-                    toast(error.message || '头像存储尚未安全就绪', true);
+                    console.warn('[头像管理] 本地存储初始化失败或数据冲突:', error);
+                    toast(error.message || '头像本地存储初始化失败', true);
                 });
             }
             updateBtn();

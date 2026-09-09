@@ -362,7 +362,7 @@
 
         function requireMutable() {
             if (canMutate()) return null;
-            return Object.assign(new Error('头像存储当前只读或尚未安全就绪'), { code: 'AVATAR_STORAGE_READ_ONLY' });
+            return Object.assign(new Error('头像存储当前只读'), { code: 'AVATAR_STORAGE_READ_ONLY' });
         }
 
         function contextSafe() {
@@ -832,7 +832,7 @@
         }
         function start() {
             if (started) return Promise.resolve(false);
-            if (!canStart()) return Promise.reject(Object.assign(new Error('头像存储尚未安全就绪'), { code: 'AVATAR_STORAGE_NOT_READY' }));
+            if (!canStart()) return Promise.reject(Object.assign(new Error('头像本地存储不可用'), { code: 'AVATAR_STORAGE_NOT_READY' }));
             started = true;
             var context = contextSafe();
             var source = context.eventSource;

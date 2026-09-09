@@ -288,6 +288,7 @@
             avatarCoordinator = modules.createAvatarStorageCoordinator({
                 localStore: localAvatarStore,
                 getPostHeaders: getPostHeaders,
+                isBackendAvailable: getServerMode,
                 onStateChange: function (avatarState) {
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = !avatarCoordinator || !avatarCoordinator.canMutate();
@@ -7346,8 +7347,8 @@
                     if (!avatarCoordinator.isRuntimeReady()) return;
                     return avatarRuntime.start();
                 }).catch(function (error) {
-                    console.warn('[头像管理] 安全接管未就绪:', error);
-                    toast(error.message || '头像存储尚未安全就绪', true);
+                    console.warn('[头像管理] 本地存储初始化失败或数据冲突:', error);
+                    toast(error.message || '头像本地存储初始化失败', true);
                 });
             }
             updateBtn();

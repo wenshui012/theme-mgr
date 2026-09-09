@@ -1159,12 +1159,16 @@ test('85 Avatar Page does not open import while storage is not writable', async 
     await assert.rejects(f.page.importFiles([{ name: 'blocked.jpg', type: 'image/jpeg' }]), error => error.code === 'AVATAR_STORAGE_READ_ONLY');
     assert.equal(f.page.pickFiles(), false);
     assert.equal(processed, 0);
-    assert.match(f.pageRoot.notice.innerHTML, /只读|尚未安全就绪/);
+    assert.match(f.pageRoot.notice.innerHTML, /只读/);
+    assert.doesNotMatch(f.pageRoot.notice.innerHTML, /尚未安全就绪/);
 });
 
-test('86 UI startup waits for coordinator readiness before starting Avatar runtime', () => {
+test('86 UI reuses Theme Manager backend availability before starting Avatar runtime', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    assert.match(source, /isBackendAvailable: getServerMode/);
     assert.match(source, /avatarCoordinator\.initialize\(\)\.then\(function \(\) \{\s*if \(!avatarCoordinator\.isRuntimeReady\(\)\) return;\s*return avatarRuntime\.start\(\);/);
     assert.match(source, /avatarStore = avatarCoordinator\.store/);
     assert.doesNotMatch(source, /avatarStore = modules\.createAvatarStore\(\{\}\);/);
+    assert.doesNotMatch(source, /toast\(error\.message \|\| '头像存储尚未安全就绪'/);
+    assert.doesNotMatch(source, /头像存储尚未安全就绪/);
 });

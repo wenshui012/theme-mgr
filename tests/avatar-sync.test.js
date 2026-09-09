@@ -136,16 +136,90 @@ function createRemote(initial, options = {}) {
     };
 }
 
-function coordinator({ local, cache, control, remote }) {
+function coordinator({ local, cache, control, remote, isBackendAvailable }) {
     return modules.createAvatarStorageCoordinator({
         localStore: local || memoryStore(),
         cacheStore: cache || memoryStore(),
         controlStore: control || modules.avatarSync.createMemoryControlStore(),
         remote,
+        isBackendAvailable,
         inspectDataUrl: inspect,
         avatarStorage: modules.avatarStorage,
     });
 }
+
+test('shared annotation backend mode keeps Avatar local-ready without a second backend probe', async () => {
+    const local = memoryStore({ assets: [asset()] });
+    const remote = createRemote({ status: 'empty' });
+    let controlReads = 0;
+    const control = {
+        ready: Promise.resolve(true),
+        get() { controlReads += 1; return Promise.resolve(null); },
+        put() { return Promise.reject(new Error('control must not be written in local mode')); },
+    };
+    const sync = coordinator({ local, control, remote, isBackendAvailable: () => false });
+    const state = await sync.initialize();
+    assert.equal(state.phase, 'local-ready');
+    assert.equal(state.authoritative, 'local');
+    assert.equal(state.writable, true);
+    assert.equal(controlReads, 1);
+    assert.deepEqual(remote.calls, []);
+    await sync.store.putAsset(asset('local-only'));
+    assert.ok(await local.getAsset('local-only'));
+});
+
+test('shared local mode keeps an existing remote takeover on its verified cache without probing the backend', async () => {
+    const local = memoryStore({ assets: [asset()] });
+    const cache = memoryStore();
+    const control = modules.avatarSync.createMemoryControlStore();
+    const online = coordinator({ local, cache, control, remote: createRemote({ status: 'empty' }) });
+    await online.initialize();
+
+    const unavailableRemote = createRemote({ status: 'empty' });
+    const offline = coordinator({ local, cache, control, remote: unavailableRemote, isBackendAvailable: () => false });
+    const state = await offline.initialize();
+    assert.equal(state.phase, 'remote-ready');
+    assert.equal(state.offline, true);
+    assert.equal(state.writable, false);
+    assert.equal((await offline.store.listAssets()).length, 1);
+    assert.deepEqual(unavailableRemote.calls, []);
+});
+
+test('a real Avatar local-store initialization failure still blocks local mode', async () => {
+    const localError = modules.avatarStorage.makeError('AVATAR_IDB_READ_FAILED', 'local read failed');
+    const local = { ready: Promise.resolve(true), readSnapshot: () => Promise.reject(localError) };
+    const remote = createRemote({ status: 'empty' });
+    const sync = coordinator({ local, remote, isBackendAvailable: () => false });
+    await assert.rejects(sync.initialize(), error => {
+        assert.equal(error.code, 'AVATAR_STORAGE_BLOCKED');
+        assert.equal(error.details.reason, 'local-error');
+        return true;
+    });
+    assert.deepEqual(remote.calls, []);
+});
+
+test('Avatar capability and state probe failures fall back to local after the shared backend probe succeeded', async () => {
+    const cases = [
+        {
+            expectedCalls: ['capability'],
+            options: { capabilityError: modules.avatarSync.makeError('AVATAR_BACKEND_INVALID', 'bad capability', { stage: 'capability' }) },
+        },
+        {
+            expectedCalls: ['capability', 'read-state'],
+            options: { readError: modules.avatarSync.makeError('AVATAR_BACKEND_ERROR', 'state offline', { stage: 'state' }) },
+        },
+    ];
+    for (const item of cases) {
+        const local = memoryStore({ assets: [asset()] });
+        const remote = createRemote({ status: 'empty' }, item.options);
+        const sync = coordinator({ local, remote, isBackendAvailable: () => true });
+        const state = await sync.initialize();
+        assert.equal(state.phase, 'local-ready');
+        assert.equal(state.authoritative, 'local');
+        assert.equal(state.writable, true);
+        assert.deepEqual(remote.calls, item.expectedCalls);
+    }
+});
 
 test('remote upload and manifest commit await asynchronous post headers', async () => {
     const calls = [];
@@ -473,9 +547,9 @@ test('failed post-commit readback preserves local data and never writes the auth
     const before = await local.readSnapshot();
     const control = modules.avatarSync.createMemoryControlStore();
     const remote = createRemote({ status: 'empty' }, {
-        readErrorAfter: { count: 1, error: modules.avatarSync.makeError('AVATAR_BACKEND_ERROR', 'readback failed') },
+        readErrorAfter: { count: 1, error: modules.avatarSync.makeError('AVATAR_BACKEND_ERROR', 'readback failed', { stage: 'state' }) },
     });
-    const sync = coordinator({ local, control, remote });
+    const sync = coordinator({ local, control, remote, isBackendAvailable: () => true });
     await assert.rejects(sync.initialize(), error => error.code === 'AVATAR_STORAGE_BLOCKED');
     assert.deepEqual(await local.readSnapshot(), before);
     assert.equal(await control.get(), null);

@@ -46,7 +46,7 @@
         function removeStyle() { var style = doc.getElementById(STYLE_ID); if (style && style.parentNode) style.parentNode.removeChild(style); }
         function friendlyImportError(error) { var code = error && error.code || ''; if (/READ_FAILED/.test(code)) return '图片读取失败'; if (/DECODE_FAILED/.test(code)) return '图片解码失败'; if (code === 'AVATAR_FORMAT_UNSUPPORTED') return '图片格式暂不支持'; if (code === 'AVATAR_STORAGE_QUOTA_EXCEEDED') return '存储空间不足'; if (/^(?:AVATAR_IDB|AVATAR_STORAGE)/.test(code)) return '本地存储失败'; return '未能保存头像'; }
         function setImporting(value) { importing = Boolean(value); onImportingChange(importing); if (root && importing) setNotice('正在添加头像…', 'loading'); }
-        function mutationBlocked() { if (canMutate()) return false; setNotice('头像存储当前只读或尚未安全就绪', 'error'); return true; }
+        function mutationBlocked() { if (canMutate()) return false; setNotice('头像存储当前只读', 'error'); return true; }
         function nativeSlotHtml() { return '<button type="button" class="tm-avatar-native-slot" data-avatar-action="native" aria-label="调整原头像"><i class="fa-regular fa-circle-user" aria-hidden="true"></i></button>'; }
         function activeRank(id) { var index = activeAvatarIds.indexOf(id); return index === -1 ? Number.MAX_SAFE_INTEGER : index; }
         function syncActiveAvatarIds() { var current = runtime && typeof runtime.getActiveAvatarIds === 'function' ? runtime.getActiveAvatarIds() : {}; activeAvatarIds = [current && current.user, current && current.character].filter(function (id, index, list) { return id && list.indexOf(id) === index; }); }
