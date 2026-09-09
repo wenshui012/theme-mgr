@@ -219,6 +219,7 @@ class Element extends Events {
     animate(frames) { const a = new Animation(frames); this.animations.push(a); return a; }
     focus() {}
     click() { this.dispatchEvent({ type: 'click' }); }
+    scrollIntoView() { this.scrollIntoViewCalls = (this.scrollIntoViewCalls || 0) + 1; }
     setPointerCapture() {}
     releasePointerCapture() {}
     get isConnected() { let node = this; while (node) { if (node._root) return true; node = node.parentElement; } return false; }
@@ -397,12 +398,15 @@ test('44 avatar grid starts with the original-avatar slot and cards stay image-o
     assert.match(f.lastDialog(), /管理头像/);
     assert.match(f.lastDialog(), /is-weak/);
 });
-test('45 Avatar bottom bar owns add and batch actions in the requested five-button order', () => {
+test('45 Avatar bottom bar uses the lightweight four-entry layout and nested global-avatar actions', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     assert.match(source, /id="tm-avatar-add"/);
-    assert.match(source, /id="tm-avatar-restore-user"/);
-    assert.match(source, /id="tm-avatar-restore-character"/);
-    assert.match(source, /id="tm-avatar-restore-user"[\s\S]*id="tm-avatar-restore-character"[\s\S]*id="tm-avatar-add"[\s\S]*id="tm-avatar-batch-toggle"[\s\S]*id="tm-bottom-settings"/);
+    assert.match(source, /id="tm-avatar-global"/);
+    assert.match(source, /fa-eraser/);
+    assert.match(source, /id="tm-avatar-global"[\s\S]*id="tm-avatar-batch-toggle"[\s\S]*id="tm-avatar-add"[\s\S]*id="tm-bottom-settings"/);
+    assert.match(source, /清除 User 全局头像/);
+    assert.match(source, /清除 Char 全局头像/);
+    assert.doesNotMatch(source, /id="tm-avatar-restore-user"|id="tm-avatar-restore-character"/);
     assert.doesNotMatch(source, /tm-icon-btn tm-avatars-only" id="tm-avatar-add"/);
     assert.doesNotMatch(source, /fa-user-rotate/);
     assert.doesNotMatch(source, /tm-avatar-enter-batch/);
@@ -412,6 +416,20 @@ test('45 Avatar bottom bar owns add and batch actions in the requested five-butt
     assert.match(source, /avatarPageController\.toggleBatchMode\(\)/);
     assert.match(source, /defaultPage: lastAppPage/);
     assert.match(source, /lastAppPage = appShellController\.getActivePage\(\)/);
+});
+
+test('batch avatar selection updates only the clicked card and count while delete stays local to affected cards', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
+    const clickHandler = source.slice(source.indexOf('function handleClick'), source.indexOf('function handleKeydown'));
+    const selectionBranch = clickHandler.slice(clickHandler.lastIndexOf('if (batchMode)'), clickHandler.indexOf('} else openAssetMenu'));
+    const deleteHandler = source.slice(source.indexOf('function deleteBatchSelection'), source.indexOf('function openJoinSeriesSheet'));
+    assert.match(source, /data-avatar-batch="delete"/);
+    assert.match(source, /确定删除已选的 ' \+ count \+ ' 张头像吗/);
+    assert.match(clickHandler, /syncBatchCard\(card\); updateBatchCount\(\);/);
+    assert.doesNotMatch(selectionBranch, /render\(\)/);
+    assert.match(deleteHandler, /ids\.reduce/);
+    assert.match(deleteHandler, /removeDeletedCards\(deleted\)/);
+    assert.doesNotMatch(deleteHandler, /refresh\(\)|store\.listAssets/);
 });
 
 test('active User and Character avatars are promoted after the fixed original-avatar slot', async () => {
@@ -489,8 +507,23 @@ test('46 editor toolbar uses a host-level important layout and Shadow DOM isolat
     assert.match(source, /data-action="flip-y"/);
     assert.match(source, /--SmartThemeQuoteColor/);
     assert.match(source, /scheduleEditorSync/);
+    assert.match(source, /doc\.body\.appendChild\(toolbarHost\)/);
+    assert.doesNotMatch(source, /scrollIntoView|documentElement\.style|doc\.body\.style/);
     assert.match(source, /requestAnimationFrame/);
     assert.match(source, /ensureSourceCache/);
+});
+
+test('offscreen avatar editing never scrolls the SillyTavern host and removes the fixed toolbar on close', async () => {
+    const f = runtimeFixture({
+        seed: { assets: [asset()] },
+        charRect: { x: 30, y: 900, width: 100, height: 100 },
+        charRect2: { x: 30, y: 1040, width: 50, height: 50 },
+    });
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'a' });
+    assert.ok(f.doc.getElementById('tm-avatar-editor-toolbar'));
+    assert.equal(f.chars.reduce((sum, entry) => sum + (entry.avatar.scrollIntoViewCalls || 0), 0), 0);
+    await f.runtime.cancelEdit();
+    assert.equal(f.doc.getElementById('tm-avatar-editor-toolbar'), null);
 });
 test('47 editing either target preserves the other target binding', async () => {
     const f = runtimeFixture({ seed: { assets: [asset('a'), asset('b')], bindings: [

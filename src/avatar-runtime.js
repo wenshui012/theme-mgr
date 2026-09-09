@@ -1112,9 +1112,6 @@
                         ensureSourceCache(editorPreviewAsset(asset));
                     }
                 }, 0);
-                if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
-                    try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
-                }
                 observeChat();
                 ensureEditorUi();
                 try {
@@ -1154,9 +1151,6 @@
                     diagnostics: null,
                 };
                 editorPreviewSettled = true;
-                if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
-                    try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
-                }
                 observeChat();
                 ensureEditorUi();
                 try {

@@ -9597,7 +9597,7 @@
 })(window);
 /* END MODULE 19/27: src/avatar-library.js */
 
-/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:253ef91a1e0d8f2375e158d4118a7253a4c8a2073218e4f8675ebfc08214e175 */
+/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:bbc1a13b8ed9bab93c2a97f7c0aeaf96a851a9d03a65bb32c03ba20e862129ff */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -10712,9 +10712,6 @@
                         ensureSourceCache(editorPreviewAsset(asset));
                     }
                 }, 0);
-                if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
-                    try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
-                }
                 observeChat();
                 ensureEditorUi();
                 try {
@@ -10754,9 +10751,6 @@
                     diagnostics: null,
                 };
                 editorPreviewSettled = true;
-                if (!cap.visible && editor.representative.avatar && typeof editor.representative.avatar.scrollIntoView === 'function') {
-                    try { editor.representative.avatar.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
-                }
                 observeChat();
                 ensureEditorUi();
                 try {
@@ -11296,7 +11290,7 @@
 })(window);
 /* END MODULE 20/27: src/avatar-runtime.js */
 
-/* BEGIN MODULE 21/27: src/avatar-page.js | sha256:d4ded9ab041389acabea619b0c46d63387036360f485a0ca4e105d495558bb82 */
+/* BEGIN MODULE 21/27: src/avatar-page.js | sha256:3083ae646d5790cb271f61e4db671294833f9ceece04d9f16c0012fdee33719a */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -11336,7 +11330,7 @@
         var loadUiData = options.loadUiData || function () { return {}; }, saveUiData = options.saveUiData || function () {}, onImportingChange = options.onImportingChange || function () {}, onBatchModeChange = options.onBatchModeChange || function () {}, toast = options.toast || function () {};
         var confirmAction = options.confirm || global.confirm, logger = options.console || global.console || { error: function () {} };
         var mounted = false, root = null, fileInput = null, gridLoader = null, resizeObserver = null, assets = [], refreshToken = 0, importing = false;
-        var searchOpen = false, sortOpen = false, query = '', category = '__all__', batchMode = false, batchSelected = new Set(), expandedSeriesId = '', railTimers = new Map(), lastColumnCount = 0, activeAvatarIds = [];
+        var searchOpen = false, sortOpen = false, query = '', category = '__all__', batchMode = false, batchSelected = new Set(), batchDeleting = false, expandedSeriesId = '', railTimers = new Map(), lastColumnCount = 0, activeAvatarIds = [];
         function data() { var value = loadUiData(); library.ensureState(value); return value; }
         function reportError(stage, error, file) { if (logger && typeof logger.error === 'function') logger.error('[Theme Manager][Avatar] ' + stage, { file: file && file.name, error: error, cause: error && error.cause }); }
         function setNotice(message, kind) { if (!root) return; var notice = root.querySelector('[data-avatar-notice]'); notice.innerHTML = kind === 'loading' && message ? '<i class="fa-solid fa-spinner"></i>' + esc(message) : esc(message || ''); if (kind) notice.setAttribute('data-kind', kind); else notice.removeAttribute('data-kind'); notice.hidden = !message; }
@@ -11356,7 +11350,11 @@
         function layoutHtml(state, list, count) { var byId = Object.create(null), emitted = new Set(), chunks = []; list.forEach(function (item) { byId[item.id] = item; }); list.forEach(function (asset) { if (emitted.has(asset.id)) return; var group = library.findSeries(state, asset.id), members = group ? group.members.map(function (id) { return byId[id]; }).filter(Boolean) : []; if (!group || members.length < 2) { emitted.add(asset.id); chunks.push(cardHtml(asset)); return; } members.forEach(function (item) { emitted.add(item.id); }); members.sort(function (a, b) { var priority = activeRank(a.id) - activeRank(b.id); return priority || group.members.indexOf(a.id) - group.members.indexOf(b.id); }); if (members.length <= count) { chunks.push('<section class="tm-avatar-series-inline" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-size:' + members.length + '">' + members.map(cardHtml).join('') + '</section>'); return; } var expanded = expandedSeriesId === group.id; chunks.push('<section class="tm-avatar-series-block' + (expanded ? ' is-expanded' : '') + '" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-cols:' + count + '"><div class="tm-avatar-series-track">' + members.map(cardHtml).join('') + '</div><div class="tm-avatar-series-controls"><button type="button" class="tm-avatar-series-control" data-avatar-series-manage="' + esc(group.id) + '" title="管理系列" aria-label="管理系列"><i class="fa-solid fa-sliders"></i></button><button type="button" class="tm-avatar-series-control" data-avatar-series-toggle="' + esc(group.id) + '" title="' + (expanded ? '收起系列' : '展开系列') + '" aria-label="' + (expanded ? '收起系列' : '展开系列') + '"><i class="fa-solid ' + (expanded ? 'fa-compress' : 'fa-expand') + '"></i></button></div></section>'); }); return chunks.join(''); }
         function setupGridLoader() { if (gridLoader) gridLoader.disconnect(); var grid = root.querySelector('[data-avatar-grid]'); gridLoader = imageLoaderApi.createImageLoader({ root: grid, rootMargin: '320px 0px', resolveSource: function (id) { return store.getThumbnail(id); } }); gridLoader.observe(grid.querySelectorAll('.tm-avatar-page-thumb')); }
         function renderCategoryBar(state) { var bar = root.querySelector('[data-avatar-catbar]'), categories = library.ensureState(state).categories; bar.innerHTML = [{ key: '__all__', label: '全部' }, { key: '__uncategorized__', label: '未分类' }].concat(categories.map(function (name) { return { key: name, label: name }; })).map(function (item) { return '<button class="tm-catbtn' + (category === item.key ? ' on' : '') + '" data-avatar-category="' + esc(item.key) + '">' + esc(item.label) + '</button>'; }).join(''); }
-        function renderBatch() { var area = root.querySelector('[data-avatar-batch-area]'); root.classList.toggle('is-batch', batchMode); onBatchModeChange(batchMode); if (!batchMode) { area.innerHTML = ''; area.style.display = 'none'; return; } area.style.display = ''; area.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">已选 <b>' + batchSelected.size + '</b> 个</span><div class="tm-batch-divider"></div><div class="tm-batch-acts"><button class="tm-batch-btn" data-avatar-batch="all">全选</button><button class="tm-batch-btn" data-avatar-batch="none">取消</button><button class="tm-batch-btn" data-avatar-batch="category"><i class="fa-solid fa-folder"></i> 分类</button><button class="tm-batch-btn" data-avatar-batch="tags"><i class="fa-solid fa-tag"></i> 标签</button><button class="tm-batch-btn" data-avatar-batch="series"><i class="fa-solid fa-layer-group"></i> 系列</button><button class="tm-batch-btn" data-avatar-batch="exit">完成</button></div></div>'; }
+        function updateBatchCount() { if (!root) return; var count = root.querySelector('[data-avatar-batch-count]'); if (count) count.textContent = String(batchSelected.size); var button = root.querySelector('[data-avatar-batch="delete"]'); if (button) button.disabled = batchDeleting || batchSelected.size === 0; }
+        function syncBatchCard(card) { if (!card) return; var selected = batchSelected.has(card.dataset.avatarId); card.classList.toggle('batch-sel', selected); var icon = card.querySelector('.tm-avatar-card-check i'); if (icon) { icon.classList.toggle('fa-check', selected); icon.classList.toggle('fa-plus', !selected); } }
+        function syncRenderedBatchCards() { if (!root) return; root.querySelectorAll('.tm-avatar-page-card').forEach(syncBatchCard); updateBatchCount(); }
+        function renderBatch() { var area = root.querySelector('[data-avatar-batch-area]'); root.classList.toggle('is-batch', batchMode); onBatchModeChange(batchMode); if (!batchMode) { area.innerHTML = ''; area.style.display = 'none'; return; } area.style.display = ''; if (!area.querySelector('[data-avatar-batch-count]')) area.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">已选 <b data-avatar-batch-count>0</b> 个</span><div class="tm-batch-divider"></div><div class="tm-batch-acts"><button class="tm-batch-btn" data-avatar-batch="all">全选</button><button class="tm-batch-btn" data-avatar-batch="none">取消</button><button class="tm-batch-btn" data-avatar-batch="category"><i class="fa-solid fa-folder"></i> 分类</button><button class="tm-batch-btn" data-avatar-batch="tags"><i class="fa-solid fa-tag"></i> 标签</button><button class="tm-batch-btn" data-avatar-batch="series"><i class="fa-solid fa-layer-group"></i> 系列</button><button class="tm-batch-btn danger" data-avatar-batch="delete"><i class="fa-solid fa-trash"></i> 删除</button><button class="tm-batch-btn" data-avatar-batch="exit">完成</button></div></div>'; updateBatchCount(); }
+        function setBatchMode(enabled) { batchMode = enabled === true; batchSelected.clear(); batchDeleting = false; renderBatch(); syncRenderedBatchCards(); return batchMode; }
         function bindRailInteractions() { root.querySelectorAll('.tm-avatar-series-block').forEach(function (block) { var id = block.dataset.avatarSeriesId; function show() { block.classList.add('is-interacting'); if (railTimers.has(id)) global.clearTimeout(railTimers.get(id)); railTimers.set(id, global.setTimeout(function () { block.classList.remove('is-interacting'); railTimers.delete(id); }, 1700)); } block.addEventListener('pointerdown', show, { passive: true }); block.addEventListener('scroll', show, { passive: true }); block.addEventListener('focusin', show); }); }
         function render() { if (!root) return; syncActiveAvatarIds(); var state = data(), list = matchingAssets(state), grid = root.querySelector('[data-avatar-grid]'), count = columns(); lastColumnCount = count; renderCategoryBar(state); renderBatch(); grid.innerHTML = nativeSlotHtml() + layoutHtml(state, list, count) + (!assets.length ? '<div class="tm-avatar-page-empty">点击底栏中间的＋添加头像</div>' : (!list.length ? '<div class="tm-avatar-page-empty">没有符合条件的头像</div>' : '')); root.querySelectorAll('[data-avatar-sort]').forEach(function (button) { button.classList.toggle('on', button.dataset.avatarSort === library.ensureState(state).sortMode); }); setupGridLoader(); setImporting(importing); bindRailInteractions(); }
         function refresh() { var token = ++refreshToken; return store.listAssets().then(function (items) { if (!mounted || token !== refreshToken) return; assets = items || []; render(); }).catch(function (error) { reportError('library refresh failed', error); if (mounted) setNotice('头像库读取失败', 'error'); throw error; }); }
@@ -11370,6 +11368,77 @@
         function pickerSummary(icon, title, value, action) { return '<button type="button" class="tm-picker-trigger" data-avatar-manage="' + action + '"><span class="tm-picker-trigger-icon"><i class="fa-solid ' + icon + '"></i></span><span class="tm-picker-trigger-copy"><strong>' + esc(title) + '</strong><small>' + esc(value || '未设置') + '</small></span><i class="fa-solid fa-chevron-right tm-picker-trigger-chevron"></i></button>'; }
         function openManageSheet(id) { var asset = assets.find(function (item) { return item.id === id; }); if (!asset) return; var state = data(), meta = library.peekMeta(state, id), series = library.findSeries(state, id); store.getThumbnail(id).then(function (src) { var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>管理头像</div><div class="tm-avatar-manage-summary"><img class="tm-avatar-manage-thumb" src="' + esc(src) + '" alt=""><span><strong>头像资源</strong><small>只整理关系与标注，不修改图片</small></span></div>' + pickerSummary('fa-folder', '分类', meta.category || '无分类', 'category') + pickerSummary('fa-tags', '标签', meta.tags.join('、') || '无标签', 'tags') + pickerSummary('fa-layer-group', '系列', series ? series.name : '未加入系列', 'series') + '<div class="tm-divider"></div><button class="tm-btn tm-btn-danger" data-avatar-manage="delete" style="width:100%"><i class="fa-solid fa-trash"></i> 删除头像</button>'); sheet.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-manage]'); if (!button) return; var action = button.dataset.avatarManage; if (action === 'category') openCategoryPicker({ categories: library.ensureState(data()).categories, selected: library.peekMeta(data(), id).category, allowClear: true, title: '选择头像分类', onSelect: function (value) { var next = data(); library.ensureMeta(next, id).category = value; persist(next).then(function () { closeSheet(sheet); render(); openManageSheet(id); }); } }); else if (action === 'tags') openTagPicker({ knownTags: library.listTags(data()), selectedTags: library.peekMeta(data(), id).tags, allowClear: true, title: '管理头像标签', onApply: function (values) { var next = data(); library.ensureMeta(next, id).tags = values; persist(next).then(function () { closeSheet(sheet); render(); openManageSheet(id); }); } }); else if (action === 'series') { closeSheet(sheet); var owner = library.findSeries(data(), id); if (owner) openSeriesManageSheet(owner.id); else openJoinSeriesSheet(id); } else if (action === 'delete') deleteAvatar(id, sheet); }); }); }
         function deleteAvatar(id, sheet) { if (mutationBlocked() || !confirmAction('确定删除这张头像吗？使用它的绑定会同时清理。')) return; runtime.deleteAsset(id).then(function () { var state = data(); library.removeAssetReferences(state, id); return persist(state); }).then(function () { if (sheet) closeSheet(sheet); toast('已删除头像并清理相关绑定'); return refresh(); }).catch(function (error) { setNotice('删除失败：' + error.message, 'error'); }); }
+        function normalizeSeriesContainer(container) {
+            if (!container || !container.parentNode) return;
+            var cards = Array.prototype.slice.call(container.querySelectorAll('.tm-avatar-page-card'));
+            if (cards.length < 2) {
+                if (cards[0]) container.parentNode.insertBefore(cards[0], container);
+                container.parentNode.removeChild(container);
+                return;
+            }
+            if (container.classList.contains('tm-avatar-series-inline')) {
+                container.style.setProperty('--tm-avatar-series-size', cards.length);
+                return;
+            }
+            if (cards.length > lastColumnCount) return;
+            while (container.firstChild) container.removeChild(container.firstChild);
+            container.className = 'tm-avatar-series-inline';
+            container.removeAttribute('style');
+            container.style.setProperty('--tm-avatar-series-size', cards.length);
+            cards.forEach(function (card) { container.appendChild(card); });
+        }
+        function syncEmptyGridMessage() {
+            if (!root) return;
+            var grid = root.querySelector('[data-avatar-grid]'), empty = grid.querySelector('.tm-avatar-page-empty'), hasCards = !!grid.querySelector('.tm-avatar-page-card');
+            if (hasCards) { if (empty && empty.parentNode) empty.parentNode.removeChild(empty); return; }
+            if (!empty) { empty = doc.createElement('div'); empty.className = 'tm-avatar-page-empty'; grid.appendChild(empty); }
+            empty.textContent = assets.length ? '没有符合条件的头像' : '点击底栏中间的＋添加头像';
+        }
+        function removeDeletedCards(ids) {
+            if (!root || !ids.length) return;
+            var deleted = new Set(ids), containers = new Set();
+            root.querySelectorAll('.tm-avatar-page-card').forEach(function (card) {
+                if (!deleted.has(card.dataset.avatarId)) return;
+                var container = card.closest('[data-avatar-series-id]');
+                if (container) containers.add(container);
+                var image = card.querySelector('.tm-avatar-page-thumb');
+                if (gridLoader && image && typeof gridLoader.unobserve === 'function') gridLoader.unobserve(image);
+                if (card.parentNode) card.parentNode.removeChild(card);
+            });
+            containers.forEach(normalizeSeriesContainer);
+            assets = assets.filter(function (asset) { return !deleted.has(asset.id); });
+            ids.forEach(function (id) { batchSelected.delete(id); });
+            syncEmptyGridMessage();
+            updateBatchCount();
+        }
+        function deleteBatchSelection() {
+            if (batchDeleting || mutationBlocked()) return;
+            var ids = Array.from(batchSelected), count = ids.length;
+            if (!count) { toast('请先选择头像', true); return; }
+            if (!confirmAction('确定删除已选的 ' + count + ' 张头像吗？使用它们的绑定会同时清理，删除后无法撤销。')) return;
+            batchDeleting = true;
+            updateBatchCount();
+            var deleted = [], failed = [];
+            var queue = ids.reduce(function (promise, id) {
+                return promise.then(function () {
+                    return runtime.deleteAsset(id).then(function () { deleted.push(id); }, function (error) { failed.push({ id: id, error: error }); });
+                });
+            }, Promise.resolve());
+            queue.then(function () {
+                if (!deleted.length) return false;
+                var state = data();
+                deleted.forEach(function (id) { library.removeAssetReferences(state, id); });
+                return persist(state);
+            }).then(function () {
+                removeDeletedCards(deleted);
+                if (failed.length) setNotice('已删除 ' + deleted.length + ' 张，另有 ' + failed.length + ' 张删除失败', 'error');
+                else if (deleted.length) { setNotice('', ''); toast('已删除 ' + deleted.length + ' 张头像'); }
+                else setNotice('所选头像均删除失败，请重试', 'error');
+            }).catch(function (error) {
+                removeDeletedCards(deleted);
+                setNotice('批量删除未完整完成：' + (error.message || '整理信息保存失败'), 'error');
+            }).finally(function () { batchDeleting = false; updateBatchCount(); });
+        }
         function openJoinSeriesSheet(id) { var groups = Object.values(library.ensureState(data()).series.groups); if (!groups.length) { toast('请先通过批量整理创建系列', true); return; } var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>加入系列</div>' + groups.map(function (group) { return '<button class="tm-picker-row" data-avatar-join-series="' + esc(group.id) + '"><span><i class="fa-solid fa-layer-group"></i><strong>' + esc(group.name) + '</strong></span><i class="fa-solid fa-plus"></i></button>'; }).join('')); sheet.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-join-series]'); if (!button) return; var state = data(), result = library.addMember(state, button.dataset.avatarJoinSeries, id); if (!result.ok) { toast('无法加入该系列', true); return; } persist(state, '已加入系列').then(function () { closeSheet(sheet); render(); }); }); }
         function openSeriesManageSheet(seriesId) {
             var state = data(), group = library.ensureState(state).series.groups[seriesId];
@@ -11405,15 +11474,15 @@
         function createSeriesFromSelection() { var state = data(), sorted = assets.slice().sort(function (a, b) { return library.compareAssets(state, a, b, library.ensureState(state).sortMode); }), ids = sorted.filter(function (asset) { return batchSelected.has(asset.id); }).map(function (asset) { return asset.id; }); if (ids.length < 2) { toast('请至少选择两张头像', true); return; } if (ids.some(function (id) { return !!library.findSeries(state, id); })) { toast('所选头像中已有系列成员，请先移出原系列', true); return; } var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>创建头像系列</div><div class="tm-field"><label>系列名称</label><input type="text" data-avatar-new-series maxlength="80" placeholder="例如：情侣头像"></div><div class="tm-hint">成员顺序按当前显示顺序保存，之后可在系列管理中调整。</div><div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" data-avatar-series-cancel>取消</button><button class="tm-btn tm-btn-safe" data-avatar-series-create>创建系列</button></div>'); sheet.querySelector('[data-avatar-series-cancel]').addEventListener('click', function () { closeSheet(sheet); }); sheet.querySelector('[data-avatar-series-create]').addEventListener('click', function () { var name = sheet.querySelector('[data-avatar-new-series]').value.trim(), next = data(), result = library.createSeries(next, name, ids); if (!result.ok) { toast(name ? '无法创建系列' : '请输入系列名称', true); return; } persist(next, '已创建系列').then(function () { closeSheet(sheet); batchSelected.clear(); batchMode = false; render(); }); }); }
         function applyBatchCategory() { if (!batchSelected.size) { toast('请先选择头像', true); return; } openCategoryPicker({ categories: library.ensureState(data()).categories, allowClear: true, title: '批量设置分类', onSelect: function (value) { var state = data(); batchSelected.forEach(function (id) { library.ensureMeta(state, id).category = value; }); persist(state, '已批量更新分类').then(render); } }); }
         function applyBatchTags() { if (!batchSelected.size) { toast('请先选择头像', true); return; } openTagPicker({ knownTags: library.listTags(data()), requireSelection: true, title: '批量添加标签', onApply: function (values) { var state = data(); batchSelected.forEach(function (id) { var meta = library.ensureMeta(state, id); meta.tags = Array.from(new Set(meta.tags.concat(values))); }); persist(state, '已批量添加标签').then(render); } }); }
-        function handleClick(event) { var native = event.target.closest('[data-avatar-action="native"]'); if (native) { openNativeMenu(); return; } var manage = event.target.closest('[data-avatar-series-manage]'); if (manage) { event.stopPropagation(); openSeriesManageSheet(manage.dataset.avatarSeriesManage); return; } var toggle = event.target.closest('[data-avatar-series-toggle]'); if (toggle) { event.stopPropagation(); expandedSeriesId = expandedSeriesId === toggle.dataset.avatarSeriesToggle ? '' : toggle.dataset.avatarSeriesToggle; render(); return; } var cat = event.target.closest('[data-avatar-category]'); if (cat) { category = cat.dataset.avatarCategory; render(); return; } var sort = event.target.closest('[data-avatar-sort]'); if (sort) { var state = data(); library.ensureState(state).sortMode = sort.dataset.avatarSort; persist(state).then(render); return; } var batch = event.target.closest('[data-avatar-batch]'); if (batch) { var action = batch.dataset.avatarBatch; if (action === 'all') assets.forEach(function (asset) { batchSelected.add(asset.id); }); else if (action === 'none') batchSelected.clear(); else if (action === 'exit') { batchMode = false; batchSelected.clear(); } else if (action === 'category') { applyBatchCategory(); return; } else if (action === 'tags') { applyBatchTags(); return; } else if (action === 'series') { createSeriesFromSelection(); return; } render(); return; } var card = event.target.closest('.tm-avatar-page-card'); if (!card || !root.contains(card)) return; var id = card.dataset.avatarId; if (batchMode) { if (batchSelected.has(id)) batchSelected.delete(id); else batchSelected.add(id); render(); } else openAssetMenu(id).catch(function (error) { setNotice(error.message || '头像操作无法打开', 'error'); }); }
+        function handleClick(event) { var native = event.target.closest('[data-avatar-action="native"]'); if (native) { openNativeMenu(); return; } var manage = event.target.closest('[data-avatar-series-manage]'); if (manage) { event.stopPropagation(); openSeriesManageSheet(manage.dataset.avatarSeriesManage); return; } var toggle = event.target.closest('[data-avatar-series-toggle]'); if (toggle) { event.stopPropagation(); expandedSeriesId = expandedSeriesId === toggle.dataset.avatarSeriesToggle ? '' : toggle.dataset.avatarSeriesToggle; render(); return; } var cat = event.target.closest('[data-avatar-category]'); if (cat) { category = cat.dataset.avatarCategory; render(); return; } var sort = event.target.closest('[data-avatar-sort]'); if (sort) { var state = data(); library.ensureState(state).sortMode = sort.dataset.avatarSort; persist(state).then(render); return; } var batch = event.target.closest('[data-avatar-batch]'); if (batch) { var action = batch.dataset.avatarBatch; if (batchDeleting) return; if (action === 'all') assets.forEach(function (asset) { batchSelected.add(asset.id); }); else if (action === 'none') batchSelected.clear(); else if (action === 'exit') { setBatchMode(false); return; } else if (action === 'category') { applyBatchCategory(); return; } else if (action === 'tags') { applyBatchTags(); return; } else if (action === 'series') { createSeriesFromSelection(); return; } else if (action === 'delete') { deleteBatchSelection(); return; } syncRenderedBatchCards(); return; } var card = event.target.closest('.tm-avatar-page-card'); if (!card || !root.contains(card)) return; var id = card.dataset.avatarId; if (batchMode) { if (batchDeleting) return; if (batchSelected.has(id)) batchSelected.delete(id); else batchSelected.add(id); syncBatchCard(card); updateBatchCount(); } else openAssetMenu(id).catch(function (error) { setNotice(error.message || '头像操作无法打开', 'error'); }); }
         function handleKeydown(event) { if (event.key !== 'Enter' && event.key !== ' ') return; var target = event.target.closest('.tm-avatar-page-card,.tm-avatar-native-slot'); if (!target) return; event.preventDefault(); target.click(); }
         function handleFileChange(event) { var input = event.currentTarget || fileInput, files = imageToolsApi.snapshotInputFiles(input); if (!files.length) return; var pending = importFiles(files); input.value = ''; pending.catch(function (error) { reportError('file input import rejected', error); }); }
         function mount() { if (mounted) return refresh(); root = getRoot(); if (!root) return Promise.reject(new Error('头像管理页面不存在')); mounted = true; ensureStyle(); fileInput = root.querySelector('[data-avatar-file]'); root.addEventListener('click', handleClick); root.addEventListener('keydown', handleKeydown); fileInput.addEventListener('change', handleFileChange); var search = root.querySelector('[data-avatar-search]'); search.addEventListener('input', function () { query = search.value.trim(); render(); }); root.querySelector('[data-avatar-search-clear]').addEventListener('click', function () { query = ''; search.value = ''; render(); search.focus(); }); if (global.ResizeObserver) { resizeObserver = new global.ResizeObserver(function () { var next = columns(); if (next !== lastColumnCount) render(); }); resizeObserver.observe(root.querySelector('[data-avatar-grid]')); } return refresh(); }
         function unmount() { if (!mounted) return; mounted = false; refreshToken++; if (gridLoader) gridLoader.disconnect(); if (resizeObserver) resizeObserver.disconnect(); railTimers.forEach(function (timer) { global.clearTimeout(timer); }); railTimers.clear(); root.removeEventListener('click', handleClick); root.removeEventListener('keydown', handleKeydown); fileInput.removeEventListener('change', handleFileChange); fileInput = null; root = null; removeStyle(); }
         function toggleSearch() { if (!root) return false; searchOpen = !searchOpen; var bar = root.querySelector('[data-avatar-search-bar]'); bar.classList.toggle('open', searchOpen); if (searchOpen) root.querySelector('[data-avatar-search]').focus(); else { query = ''; root.querySelector('[data-avatar-search]').value = ''; render(); } return searchOpen; }
         function toggleSort() { if (!root) return false; sortOpen = !sortOpen; root.querySelector('[data-avatar-sortbar]').classList.toggle('open', sortOpen); return sortOpen; }
-        function enterBatchMode() { if (!root) return false; batchMode = true; batchSelected.clear(); render(); return true; }
-        function toggleBatchMode() { if (!root) return false; batchMode = !batchMode; batchSelected.clear(); render(); return batchMode; }
+        function enterBatchMode() { if (!root) return false; return setBatchMode(true); }
+        function toggleBatchMode() { if (!root) return false; return setBatchMode(!batchMode); }
         function openCategoryRenameSheet(name, parentSheet) {
             var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-pen"></i>重命名分类</div><div class="tm-field"><label>分类名称</label><input type="text" data-avatar-category-rename maxlength="80" value="' + esc(name) + '"></div><div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" data-avatar-category-rename-cancel>取消</button><button class="tm-btn tm-btn-safe" data-avatar-category-rename-save>保存</button></div>');
             sheet.querySelector('[data-avatar-category-rename-cancel]').addEventListener('click', function () { closeSheet(sheet); });
@@ -11785,7 +11854,7 @@
 })(window);
 /* END MODULE 22/27: src/app-shell.js */
 
-/* BEGIN MODULE 23/27: src/styles.js | sha256:894a58a49f78ba552881c4f1d6d478b14160e88531b1ea380290d4a1ad1f52d5 */
+/* BEGIN MODULE 23/27: src/styles.js | sha256:be219413f3f8c9de6176c32b9f732a479100d67024a1bd746341776de957d8f8 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -11845,11 +11914,13 @@
             '.tm-overlay[data-tm-active-page="backgrounds"] .tm-library-only{display:none !important;}',
             '.tm-overlay[data-tm-active-page="backgrounds"] .tm-bottombar{justify-content:flex-end;}',
             '#tm-bottom-settings{margin-left:auto;}',
-            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottombar{justify-content:space-between;gap:8px;padding-left:max(14px,env(safe-area-inset-left,14px));padding-right:max(14px,env(safe-area-inset-right,14px));}',
-            '.tm-overlay[data-tm-active-page="avatars"] #tm-bottom-settings{margin-left:0;}',
-            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn{width:40px;height:40px;border-radius:50% !important;font-size:1em;}',
-            '.tm-overlay[data-tm-active-page="avatars"] .tm-avatar-add-primary{width:52px;height:44px;border:0 !important;border-radius:0 !important;background:transparent !important;box-shadow:none !important;font-size:1.55em;opacity:.82;}',
-            '.tm-overlay[data-tm-active-page="avatars"] .tm-avatar-add-primary:hover{background:transparent !important;opacity:1;transform:scale(1.08);}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottombar{display:grid !important;grid-template-columns:40px 40px minmax(52px,1fr) 40px 40px;align-items:center;column-gap:6px;padding-left:max(14px,env(safe-area-inset-left,14px));padding-right:max(14px,env(safe-area-inset-right,14px));}',
+            '.tm-overlay[data-tm-active-page="avatars"] #tm-bottom-settings{grid-column:5;margin-left:0;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn{width:40px;height:40px;border:0 !important;border-radius:10px !important;background:transparent !important;box-shadow:none !important;font-size:1em;opacity:.62;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn:hover,.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn.on{background:var(--tm-control-hover,rgba(127,127,127,.1)) !important;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:1;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn:disabled{opacity:.26;cursor:default;pointer-events:none;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-avatar-add-primary{grid-column:3;justify-self:center;width:52px;height:44px;border:1px solid color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 48%,transparent) !important;border-radius:14px !important;background:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 16%,transparent) !important;color:var(--SmartThemeQuoteColor,#7c6daf) !important;box-shadow:0 5px 16px color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 18%,transparent) !important;font-size:1.45em;opacity:1;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-avatar-add-primary:hover{background:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 24%,transparent) !important;transform:translateY(-1px);}',
             '.tm-auto-hide-head .tm-head{cursor:pointer;}',
             '.tm-auto-hide-head .tm-head-title-switcher,.tm-auto-hide-head .tm-head-actions{transition:opacity .18s ease,transform .18s ease,visibility .18s;}',
             '.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-title-switcher,.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-actions{opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-4px);}',
@@ -13004,7 +13075,7 @@
 })(window);
 /* END MODULE 26/27: src/ui-events.js */
 
-/* BEGIN MODULE 27/27: src/ui-main.js | sha256:6343b87a199c5f3dca959ebb5cabf701c61616581b26e0c202e46b99ba47e545 */
+/* BEGIN MODULE 27/27: src/ui-main.js | sha256:39669c5356b13a86a1788401c44be90a5665aee8a51c9bd675dcc780396e1ad1 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16800,11 +16871,10 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-user" title="恢复 User 原头像" aria-label="恢复 User 原头像"><i class="fa-solid fa-user"></i></button>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-character" title="恢复当前角色原头像" aria-label="恢复当前角色原头像"><i class="fa-solid fa-address-card"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="全局头像" aria-label="全局头像"><i class="fa-solid fa-eraser"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-avatar-add-primary tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
             (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选整理" aria-label="多选整理"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
@@ -16860,6 +16930,7 @@
         ov.querySelector('#tm-avatar-batch-toggle').addEventListener('click', function () {
             if (avatarPageController) avatarPageController.toggleBatchMode();
         });
+        ov.querySelector('#tm-avatar-global').addEventListener('click', openAvatarGlobalMenu);
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
             if (dd.followThemeAppearance === true) {
@@ -16947,16 +17018,6 @@
             renderGrid();
         });
         ov.querySelector('#tm-bottom-settings').addEventListener('click', function () { openSettingsSheet(); });
-        ov.querySelector('#tm-avatar-restore-user').addEventListener('click', function () {
-            if (!avatarRuntime || this.disabled || !confirm('恢复使用 User 原头像？当前美化专属头像与全局 User 头像都会停止使用；其他美化的专属头像保持不变。')) return;
-            var themeName = getCurrentThemeName();
-            var clearTheme = themeName ? avatarRuntime.clearThemeUserBinding(themeName) : Promise.resolve();
-            clearTheme.then(function () { return avatarRuntime.clearBinding('user'); }).then(function () { toast('已恢复 User 原头像'); if (avatarPageController) return avatarPageController.refresh(); }).catch(function (error) { toast(error.message || '恢复 User 原头像失败', true); });
-        });
-        ov.querySelector('#tm-avatar-restore-character').addEventListener('click', function () {
-            if (!avatarRuntime || this.disabled || !confirm('恢复使用当前角色原头像？')) return;
-            avatarRuntime.clearBinding('character').then(function () { toast('已恢复当前角色原头像'); if (avatarPageController) return avatarPageController.refresh(); }).catch(function (error) { toast(error.message || '恢复角色原头像失败', true); });
-        });
         ov.querySelector('#tm-bottom-status').addEventListener('click', function () {
             var curTheme = getCurrentThemeName();
             if (!curTheme) return;
@@ -18465,10 +18526,43 @@
         if (!avatarPageController) return;
         var character = avatarPageController.getNativeStatus('character');
         var user = avatarPageController.getNativeStatus('user');
-        var characterButton = document.getElementById('tm-avatar-restore-character');
-        var userButton = document.getElementById('tm-avatar-restore-user');
-        if (characterButton) { characterButton.disabled = !character.targetKey; characterButton.title = character.targetKey ? '恢复当前角色原头像：' + (character.label || '当前角色') : (character.reason || '当前没有选择角色'); }
-        if (userButton) { userButton.disabled = !user.targetKey; userButton.title = user.targetKey ? '恢复 User 原头像' : (user.reason || '当前 User 不可用'); }
+        var button = document.getElementById('tm-avatar-global');
+        if (button) {
+            button.disabled = !user.targetKey && !character.targetKey;
+            button.title = button.disabled ? (user.reason || character.reason || '全局头像当前不可用') : '全局头像';
+        }
+    }
+
+    function openAvatarGlobalMenu() {
+        if (!avatarRuntime || !avatarPageController || !uiSheetsApi) return;
+        var user = avatarPageController.getNativeStatus('user');
+        var character = avatarPageController.getNativeStatus('character');
+        function item(action, icon, label, hint, disabled) {
+            return '<button type="button" class="tm-action-dialog-item" data-avatar-global-action="' + action + '"' + (disabled ? ' disabled' : '') + '><i class="fa-solid ' + icon + '"></i><span><strong>' + esc(label) + '</strong>' + (hint ? '<small>' + esc(hint) + '</small>' : '') + '</span></button>';
+        }
+        var menu = uiSheetsApi.createActionDialog('<div class="tm-action-dialog-title"><i class="fa-solid fa-eraser"></i>全局头像</div><div class="tm-action-dialog-list">' +
+            item('user', 'fa-user', '清除 User 全局头像', user.targetKey ? '恢复当前 User 原头像' : (user.reason || '当前 User 不可用'), !user.targetKey) +
+            item('character', 'fa-address-card', '清除 Char 全局头像', character.targetKey ? '恢复' + (character.label || '当前角色') + '原头像' : (character.reason || '当前没有选择角色'), !character.targetKey) +
+            '</div>');
+        menu.addEventListener('click', function (event) {
+            var actionButton = event.target.closest('[data-avatar-global-action]');
+            if (!actionButton || actionButton.disabled) return;
+            var kind = actionButton.dataset.avatarGlobalAction;
+            var message = kind === 'user'
+                ? '清除 User 全局头像并恢复使用原头像？当前美化专属头像也会停止使用；其他美化保持不变。'
+                : '清除 Char 全局头像并恢复使用当前角色原头像？';
+            if (!confirm(message)) return;
+            closeSheet(menu);
+            var operation;
+            if (kind === 'user') {
+                var themeName = getCurrentThemeName();
+                operation = (themeName ? avatarRuntime.clearThemeUserBinding(themeName) : Promise.resolve()).then(function () { return avatarRuntime.clearBinding('user'); });
+            } else operation = avatarRuntime.clearBinding('character');
+            operation.then(function () {
+                toast(kind === 'user' ? '已清除 User 全局头像' : '已清除 Char 全局头像');
+                return avatarPageController.refresh();
+            }).catch(function (error) { toast(error.message || '清除全局头像失败', true); });
+        });
     }
 
     // ── 角色 / 聊天绑定 ──────────────────────────────────────

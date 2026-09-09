@@ -3793,11 +3793,10 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-user" title="恢复 User 原头像" aria-label="恢复 User 原头像"><i class="fa-solid fa-user"></i></button>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-restore-character" title="恢复当前角色原头像" aria-label="恢复当前角色原头像"><i class="fa-solid fa-address-card"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="全局头像" aria-label="全局头像"><i class="fa-solid fa-eraser"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-avatar-add-primary tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
             (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选整理" aria-label="多选整理"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
@@ -3853,6 +3852,7 @@
         ov.querySelector('#tm-avatar-batch-toggle').addEventListener('click', function () {
             if (avatarPageController) avatarPageController.toggleBatchMode();
         });
+        ov.querySelector('#tm-avatar-global').addEventListener('click', openAvatarGlobalMenu);
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
             if (dd.followThemeAppearance === true) {
@@ -3940,16 +3940,6 @@
             renderGrid();
         });
         ov.querySelector('#tm-bottom-settings').addEventListener('click', function () { openSettingsSheet(); });
-        ov.querySelector('#tm-avatar-restore-user').addEventListener('click', function () {
-            if (!avatarRuntime || this.disabled || !confirm('恢复使用 User 原头像？当前美化专属头像与全局 User 头像都会停止使用；其他美化的专属头像保持不变。')) return;
-            var themeName = getCurrentThemeName();
-            var clearTheme = themeName ? avatarRuntime.clearThemeUserBinding(themeName) : Promise.resolve();
-            clearTheme.then(function () { return avatarRuntime.clearBinding('user'); }).then(function () { toast('已恢复 User 原头像'); if (avatarPageController) return avatarPageController.refresh(); }).catch(function (error) { toast(error.message || '恢复 User 原头像失败', true); });
-        });
-        ov.querySelector('#tm-avatar-restore-character').addEventListener('click', function () {
-            if (!avatarRuntime || this.disabled || !confirm('恢复使用当前角色原头像？')) return;
-            avatarRuntime.clearBinding('character').then(function () { toast('已恢复当前角色原头像'); if (avatarPageController) return avatarPageController.refresh(); }).catch(function (error) { toast(error.message || '恢复角色原头像失败', true); });
-        });
         ov.querySelector('#tm-bottom-status').addEventListener('click', function () {
             var curTheme = getCurrentThemeName();
             if (!curTheme) return;
@@ -5458,10 +5448,43 @@
         if (!avatarPageController) return;
         var character = avatarPageController.getNativeStatus('character');
         var user = avatarPageController.getNativeStatus('user');
-        var characterButton = document.getElementById('tm-avatar-restore-character');
-        var userButton = document.getElementById('tm-avatar-restore-user');
-        if (characterButton) { characterButton.disabled = !character.targetKey; characterButton.title = character.targetKey ? '恢复当前角色原头像：' + (character.label || '当前角色') : (character.reason || '当前没有选择角色'); }
-        if (userButton) { userButton.disabled = !user.targetKey; userButton.title = user.targetKey ? '恢复 User 原头像' : (user.reason || '当前 User 不可用'); }
+        var button = document.getElementById('tm-avatar-global');
+        if (button) {
+            button.disabled = !user.targetKey && !character.targetKey;
+            button.title = button.disabled ? (user.reason || character.reason || '全局头像当前不可用') : '全局头像';
+        }
+    }
+
+    function openAvatarGlobalMenu() {
+        if (!avatarRuntime || !avatarPageController || !uiSheetsApi) return;
+        var user = avatarPageController.getNativeStatus('user');
+        var character = avatarPageController.getNativeStatus('character');
+        function item(action, icon, label, hint, disabled) {
+            return '<button type="button" class="tm-action-dialog-item" data-avatar-global-action="' + action + '"' + (disabled ? ' disabled' : '') + '><i class="fa-solid ' + icon + '"></i><span><strong>' + esc(label) + '</strong>' + (hint ? '<small>' + esc(hint) + '</small>' : '') + '</span></button>';
+        }
+        var menu = uiSheetsApi.createActionDialog('<div class="tm-action-dialog-title"><i class="fa-solid fa-eraser"></i>全局头像</div><div class="tm-action-dialog-list">' +
+            item('user', 'fa-user', '清除 User 全局头像', user.targetKey ? '恢复当前 User 原头像' : (user.reason || '当前 User 不可用'), !user.targetKey) +
+            item('character', 'fa-address-card', '清除 Char 全局头像', character.targetKey ? '恢复' + (character.label || '当前角色') + '原头像' : (character.reason || '当前没有选择角色'), !character.targetKey) +
+            '</div>');
+        menu.addEventListener('click', function (event) {
+            var actionButton = event.target.closest('[data-avatar-global-action]');
+            if (!actionButton || actionButton.disabled) return;
+            var kind = actionButton.dataset.avatarGlobalAction;
+            var message = kind === 'user'
+                ? '清除 User 全局头像并恢复使用原头像？当前美化专属头像也会停止使用；其他美化保持不变。'
+                : '清除 Char 全局头像并恢复使用当前角色原头像？';
+            if (!confirm(message)) return;
+            closeSheet(menu);
+            var operation;
+            if (kind === 'user') {
+                var themeName = getCurrentThemeName();
+                operation = (themeName ? avatarRuntime.clearThemeUserBinding(themeName) : Promise.resolve()).then(function () { return avatarRuntime.clearBinding('user'); });
+            } else operation = avatarRuntime.clearBinding('character');
+            operation.then(function () {
+                toast(kind === 'user' ? '已清除 User 全局头像' : '已清除 Char 全局头像');
+                return avatarPageController.refresh();
+            }).catch(function (error) { toast(error.message || '清除全局头像失败', true); });
+        });
     }
 
     // ── 角色 / 聊天绑定 ──────────────────────────────────────
