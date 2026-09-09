@@ -400,6 +400,7 @@ test('44 avatar grid starts with the original-avatar slot and cards stay image-o
 });
 test('45 Avatar bottom bar uses the lightweight four-entry layout and nested global-avatar actions', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    const styles = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.js'), 'utf8');
     assert.match(source, /id="tm-avatar-add"/);
     assert.match(source, /id="tm-avatar-global"/);
     assert.match(source, /fa-eraser/);
@@ -408,6 +409,9 @@ test('45 Avatar bottom bar uses the lightweight four-entry layout and nested glo
     assert.match(source, /清除 Char 全局头像/);
     assert.doesNotMatch(source, /id="tm-avatar-restore-user"|id="tm-avatar-restore-character"/);
     assert.doesNotMatch(source, /tm-icon-btn tm-avatars-only" id="tm-avatar-add"/);
+    assert.doesNotMatch(source, /tm-avatar-add-primary/);
+    assert.match(styles, /data-tm-active-page="avatars"\]\s+\.tm-bottombar\{justify-content:center;gap:6px;\}/);
+    assert.doesNotMatch(styles, /tm-avatar-add-primary|grid-template-columns:40px 40px minmax\(52px,1fr\)/);
     assert.doesNotMatch(source, /fa-user-rotate/);
     assert.doesNotMatch(source, /tm-avatar-enter-batch/);
     assert.doesNotMatch(source, /id="tm-avatar-bottom-status"/);

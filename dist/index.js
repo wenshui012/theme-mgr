@@ -11854,7 +11854,7 @@
 })(window);
 /* END MODULE 22/27: src/app-shell.js */
 
-/* BEGIN MODULE 23/27: src/styles.js | sha256:be219413f3f8c9de6176c32b9f732a479100d67024a1bd746341776de957d8f8 */
+/* BEGIN MODULE 23/27: src/styles.js | sha256:4f18667bdd47426ded149ebb5a3f7f28dc72c0c93883eb3be38b4e20058e98b0 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -11914,13 +11914,12 @@
             '.tm-overlay[data-tm-active-page="backgrounds"] .tm-library-only{display:none !important;}',
             '.tm-overlay[data-tm-active-page="backgrounds"] .tm-bottombar{justify-content:flex-end;}',
             '#tm-bottom-settings{margin-left:auto;}',
-            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottombar{display:grid !important;grid-template-columns:40px 40px minmax(52px,1fr) 40px 40px;align-items:center;column-gap:6px;padding-left:max(14px,env(safe-area-inset-left,14px));padding-right:max(14px,env(safe-area-inset-right,14px));}',
-            '.tm-overlay[data-tm-active-page="avatars"] #tm-bottom-settings{grid-column:5;margin-left:0;}',
-            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn{width:40px;height:40px;border:0 !important;border-radius:10px !important;background:transparent !important;box-shadow:none !important;font-size:1em;opacity:.62;}',
-            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn:hover,.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn.on{background:var(--tm-control-hover,rgba(127,127,127,.1)) !important;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:1;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottombar{justify-content:center;gap:6px;}',
+            '.tm-overlay[data-tm-active-page="avatars"] #tm-bottom-settings{margin-left:0;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn{border:0 !important;background:transparent !important;box-shadow:none !important;opacity:.62;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn:hover{background:transparent !important;border-color:transparent !important;color:inherit;opacity:1;}',
+            '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn.on{background:var(--tm-control-hover,rgba(127,127,127,.12)) !important;border-color:transparent !important;color:inherit;opacity:1;}',
             '.tm-overlay[data-tm-active-page="avatars"] .tm-bottom-btn:disabled{opacity:.26;cursor:default;pointer-events:none;}',
-            '.tm-overlay[data-tm-active-page="avatars"] .tm-avatar-add-primary{grid-column:3;justify-self:center;width:52px;height:44px;border:1px solid color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 48%,transparent) !important;border-radius:14px !important;background:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 16%,transparent) !important;color:var(--SmartThemeQuoteColor,#7c6daf) !important;box-shadow:0 5px 16px color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 18%,transparent) !important;font-size:1.45em;opacity:1;}',
-            '.tm-overlay[data-tm-active-page="avatars"] .tm-avatar-add-primary:hover{background:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 24%,transparent) !important;transform:translateY(-1px);}',
             '.tm-auto-hide-head .tm-head{cursor:pointer;}',
             '.tm-auto-hide-head .tm-head-title-switcher,.tm-auto-hide-head .tm-head-actions{transition:opacity .18s ease,transform .18s ease,visibility .18s;}',
             '.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-title-switcher,.tm-auto-hide-head:not(.tm-head-revealed) .tm-head-actions{opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-4px);}',
@@ -13075,7 +13074,7 @@
 })(window);
 /* END MODULE 26/27: src/ui-events.js */
 
-/* BEGIN MODULE 27/27: src/ui-main.js | sha256:39669c5356b13a86a1788401c44be90a5665aee8a51c9bd675dcc780396e1ad1 */
+/* BEGIN MODULE 27/27: src/ui-main.js | sha256:978734f28392d5146366116360dda62ac272df54988035c8c0ef9f2f74f8c4a4 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16873,7 +16872,7 @@
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="全局头像" aria-label="全局头像"><i class="fa-solid fa-eraser"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
-            '<button class="tm-bottom-btn tm-avatar-add-primary tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
             (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +

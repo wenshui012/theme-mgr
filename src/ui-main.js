@@ -3795,7 +3795,7 @@
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="全局头像" aria-label="全局头像"><i class="fa-solid fa-eraser"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
-            '<button class="tm-bottom-btn tm-avatar-add-primary tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
             (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
