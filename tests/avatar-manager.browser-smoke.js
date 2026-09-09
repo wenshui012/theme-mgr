@@ -83,7 +83,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const store = modules.createAvatarStore({ dbName });
                 const processor = modules.createAvatarImageProcessor({});
                 let hostChatReloads = 0;
-                const context = { characters: [{ avatar: 'char.png', name: 'Character' }], characterId: 0, groupId: null, name1: 'User', eventSource: { on() {}, removeListener() {} }, eventTypes: {}, reloadCurrentChat: async () => { hostChatReloads += 1; } };
+                const context = { characters: [{ avatar: 'char.png', name: 'Character' }], characterId: 0, groupId: null, name1: 'User', chatId:'Chat One', chatMetadata:{ integrity:'chat-smoke-1' }, getCurrentChatId(){ return this.chatId; }, eventSource: { on() {}, removeListener() {} }, eventTypes: {}, reloadCurrentChat: async () => { hostChatReloads += 1; } };
                 const runtime = modules.createAvatarRuntime({ store, getContext: () => context, getThemeName: () => document.querySelector('#themes').value });
                 await runtime.start();
                 const themePreviewSource = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
@@ -186,14 +186,6 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const menuOpened = Boolean(userMenuAction && userMenuAction.getAttribute('aria-disabled') !== 'true');
                 if (!userMenuAction) throw new Error('avatar action menu did not finish opening');
                 userMenuAction.click();
-                let globalScopeAction = null;
-                for (let attempt = 0; attempt < 20 && !globalScopeAction; attempt++) {
-                    await delay(10);
-                    globalScopeAction = document.querySelector('[data-avatar-scope-action="global"]');
-                }
-                const scopePanelFour = document.querySelectorAll('[data-avatar-scope-action]').length === 4;
-                if (!globalScopeAction) throw new Error('avatar scope menu did not finish opening');
-                globalScopeAction.click();
                 let toolbarHost = null;
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
                 avatarElements.forEach((element, index) => { element.getBoundingClientRect = originalAvatarRects[index]; });
@@ -205,7 +197,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const viewportBottom = viewportTop + (visualViewport ? visualViewport.height : innerHeight);
                 const toolbarVisible = Boolean(toolbarRect && toolbarRect.width > 0 && toolbarRect.height > 0 && toolbarRect.top >= viewportTop && toolbarRect.bottom <= viewportBottom);
                 const toolbarIsolated = Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="save"]'));
-                const scopedGlobalEditor = runtime.getState().bindingMode === 'global' &&
+                const scopedGlobalEditor = runtime.getState().bindingMode === 'deferred' &&
+                    Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="clear-bindings"]')) &&
                     !Boolean(toolbarHost && toolbarHost.shadowRoot && toolbarHost.shadowRoot.querySelector('[data-action="bind-theme"]'));
                 const userImages = [...document.querySelectorAll('.mes[is_user="true"] .avatar img')];
                 const highQualityApplied = userImages.every((image) => image.src === persisted.imageData);
@@ -251,8 +244,26 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const dragged = runtime.getState();
                 runtime.reset();
                 const reset = runtime.getState().view;
+                sliderRoot.querySelector('[data-action="save"]').click();
+                for (let attempt = 0; attempt < 30 && sliderRoot.querySelectorAll('[data-action^="save-"]').length !== 4; attempt++) await delay(10);
+                const scopePanelFour = sliderRoot.querySelectorAll('[data-action^="save-"]').length === 4 &&
+                    Boolean(sliderRoot.querySelector('[data-action="save-chat"]:not([disabled])')) &&
+                    Boolean(sliderRoot.querySelector('.tm-avatar-editor-priority')?.textContent.includes('当前聊天 ＞ 当前美化 ＞ 全局 ＞ SillyTavern 原头像'));
+                sliderRoot.querySelector('[data-action="clear-bindings"]').click();
+                for (let attempt = 0; attempt < 30 && sliderRoot.querySelectorAll('.tm-avatar-editor-scope-option[data-action^="clear-"]').length !== 3; attempt++) await delay(10);
+                const unbindPanelThree = sliderRoot.querySelectorAll('.tm-avatar-editor-scope-option[data-action^="clear-"]').length === 3;
                 await runtime.cancelEdit();
                 const cancelledToRaw = userImages.every((image) => image.src.includes('R0lGOD'));
+
+                const saveAssetMenu = await pageController.openAssetMenu(avatarId);
+                saveAssetMenu.querySelector('[data-avatar-dialog-action="apply-user"]').click();
+                for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
+                const saveToolbarRoot = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot;
+                saveToolbarRoot.querySelector('[data-action="save"]').click();
+                for (let attempt = 0; attempt < 30 && !saveToolbarRoot.querySelector('[data-action="save-global"]'); attempt++) await delay(10);
+                saveToolbarRoot.querySelector('[data-action="save-global"]').click();
+                for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'idle'; attempt++) await delay(10);
+                const toolbarScopeSaved = (await store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'user:global'))?.avatarId === avatarId;
 
                 await runtime.beginEdit({ kind:'character', avatarId });
                 const characterImages = [...document.querySelectorAll('.mes[is_user="false"] .avatar img')];
@@ -399,18 +410,17 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 freshUserMessage.remove();
                 const boundAssetMenu = await pageController.openAssetMenu(avatarId);
                 boundAssetMenu.querySelector('[data-avatar-dialog-action="apply-user"]').click();
-                let themeScopeAction = null;
-                for (let attempt = 0; attempt < 20 && !themeScopeAction; attempt++) {
-                    await delay(10);
-                    themeScopeAction = document.querySelector('[data-avatar-scope-action="theme"]');
-                }
-                const boundScopePanel = document.querySelectorAll('[data-avatar-scope-action]').length === 4 &&
-                    Boolean(document.querySelector('[data-avatar-scope-clear="theme"]'));
-                if (!themeScopeAction) throw new Error('bound avatar scope menu did not finish opening');
-                themeScopeAction.click();
                 for (let attempt = 0; attempt < 50 && runtime.getState().state !== 'editing'; attempt++) await delay(10);
-                const scopedThemeEditor = runtime.getState().bindingMode === 'theme' &&
-                    !Boolean(document.querySelector('#tm-avatar-editor-toolbar')?.shadowRoot?.querySelector('[data-action="bind-theme"]'));
+                const boundToolbarRoot = document.querySelector('#tm-avatar-editor-toolbar')?.shadowRoot;
+                boundToolbarRoot.querySelector('[data-action="save"]').click();
+                for (let attempt = 0; attempt < 30 && boundToolbarRoot.querySelectorAll('[data-action^="save-"]').length !== 4; attempt++) await delay(10);
+                const boundSavePanel = boundToolbarRoot.querySelectorAll('[data-action^="save-"]').length === 4;
+                boundToolbarRoot.querySelector('[data-action="clear-bindings"]').click();
+                for (let attempt = 0; attempt < 30 && boundToolbarRoot.querySelectorAll('.tm-avatar-editor-scope-option[data-action^="clear-"]').length !== 3; attempt++) await delay(10);
+                const boundScopePanel = boundSavePanel && boundToolbarRoot.querySelectorAll('.tm-avatar-editor-scope-option[data-action^="clear-"]').length === 3 &&
+                    Boolean(boundToolbarRoot.querySelector('[data-action="clear-theme"]:not([disabled])'));
+                const scopedThemeEditor = runtime.getState().bindingMode === 'deferred' &&
+                    !Boolean(boundToolbarRoot.querySelector('[data-action="bind-theme"]'));
                 const adaptivePreviewReplacesBound = userImages.every((image) => image.src === persisted.imageData);
                 userImages.forEach((image) => { image.src = themeAAsset.imageData; });
                 await Promise.resolve();
@@ -498,7 +508,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const bindingUi = document.createElement('div');
                 bindingUi.className = 'tm-light';
                 bindingUi.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;overflow:hidden;background:#fff';
-                bindingUi.innerHTML = '<button class="tm-theme-bind-card"><span class="tm-theme-bind-icon"></span><span class="tm-theme-bind-copy"><strong>User 头像绑定</strong><small>4 个头像 · 当前：portrait</small></span><i class="tm-theme-bind-chevron"></i></button><div class="tm-sheet"><div class="tm-sheet-content"><div class="tm-user-avatar-bind-actions tm-user-avatar-bind-sheet-actions"><button class="tm-btn">调整当前头像</button><button class="tm-btn">全部解除</button></div><div class="tm-user-avatar-bind-pool">' + Array.from({length:4},(_,index)=>'<div class="tm-user-avatar-bind-item"><button class="tm-user-avatar-bind-choice"><span class="tm-user-avatar-bind-thumb"></span><span class="tm-user-avatar-bind-copy"><strong>portrait '+index+'</strong><small>点按切换</small></span></button></div>').join('') + '</div></div></div>';
+                bindingUi.innerHTML = '<button class="tm-theme-bind-card"><span class="tm-theme-bind-icon"></span><span class="tm-theme-bind-copy"><strong>头像绑定</strong><small>User 4 个 · 当前角色 2 个</small></span><i class="tm-theme-bind-chevron"></i></button><div class="tm-sheet"><div class="tm-sheet-content"><div class="tm-avatar-bind-targets"><button class="on">User</button><button>Character</button></div><div class="tm-user-avatar-bind-actions tm-user-avatar-bind-sheet-actions"><button class="tm-btn">调整当前头像</button><button class="tm-btn">全部解除</button></div><div class="tm-user-avatar-bind-pool">' + Array.from({length:4},(_,index)=>'<div class="tm-user-avatar-bind-item"><button class="tm-user-avatar-bind-choice"><span class="tm-user-avatar-bind-thumb"></span><span class="tm-user-avatar-bind-copy"><strong>portrait '+index+'</strong><small>点按切换</small></span></button></div>').join('') + '</div></div></div>';
                 document.body.appendChild(bindingUi);
                 const bindingOverview = bindingUi.querySelector('.tm-theme-bind-card');
                 const bindingActions = bindingUi.querySelector('.tm-user-avatar-bind-sheet-actions');
@@ -514,14 +524,14 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 return {
                     label, A_empty:empty, B_added:imported[0].ok, C_reload:reloadCount===1, D_menu:menuOpened&&imageOnlyCard,
                     E_userApply:directUser&&highQualityApplied, F_characterApply:saveResult.saved,
-                    G_managerClose:managerClosed===4, H_drag:Math.abs(dragged.view.x-.25)<.001&&Math.abs(dragged.view.y-.125)<.001,
+                    G_managerClose:managerClosed===5, H_drag:Math.abs(dragged.view.x-.25)<.001&&Math.abs(dragged.view.y-.125)<.001,
                     I_scale:dragged.view.scale===1.05, J_cancel:cancelledToRaw, K_save:Boolean(persistedBindingAfterSave&&persistedBindingAfterSave.avatarId===avatarId),
                     L_rerender:rerenderApplied, M_themeSwitch:themesIsolated, N_circle:visualsPreserved,
                     O_clip:visualsPreserved, P_mask:visualsPreserved, Q_transform:visualsPreserved,
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, gridStable, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
-                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, scopePanelFour, scopedGlobalEditor, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, boundScopePanel, scopedThemeEditor, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, nativeInputHandlingMs, nativeResponsiveInputs,
+                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, scopePanelFour, unbindPanelThree, toolbarScopeSaved, scopedGlobalEditor, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, boundScopePanel, scopedThemeEditor, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, nativeInputHandlingMs, nativeResponsiveInputs,
                     nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
                     hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
@@ -529,7 +539,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','scopedGlobalEditor','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','unbindPanelThree','toolbarScopeSaved','scopedGlobalEditor','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

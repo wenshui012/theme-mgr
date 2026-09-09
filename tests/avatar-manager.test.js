@@ -398,8 +398,8 @@ test('44 avatar grid starts with the original-avatar slot and cards stay image-o
     assert.doesNotMatch(modules.avatarPage.styleText(), /\.tm-avatar-page-menu\{/);
     await f.page.openAssetMenu('1000116691');
     assert.match(f.lastDialog(), /使用这张头像/);
-    assert.match(f.lastDialog(), /设为 User 头像/);
-    assert.match(f.lastDialog(), /设为当前角色头像/);
+    assert.match(f.lastDialog(), /调整为 User 头像/);
+    assert.match(f.lastDialog(), /调整为当前角色头像/);
     assert.match(f.lastDialog(), /查看完整大图/);
     assert.match(f.lastDialog(), /管理头像/);
     assert.match(f.lastDialog(), /is-weak/);
@@ -906,18 +906,20 @@ test('64 avatar grids use definite square items without implicit-row compression
     assert.match(css, /tm-avatar-page-thumb\{[^}]*position:absolute[^}]*inset:0/);
 });
 
-test('65 the theme editor only manages already-bound User avatars and never opens the full library', () => {
+test('65 the theme editor manages bound User and Character avatars without opening the full library', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
-    assert.match(source, /User 头像绑定/);
+    assert.match(source, /<label>头像绑定<\/label>/);
     assert.doesNotMatch(source, /avatarPageController\.openPicker/);
-    assert.match(source, /getThemeUserBindingSet/);
-    assert.match(source, /setThemeUserBinding/);
-    assert.match(source, /removeThemeUserBinding/);
+    assert.match(source, /getThemeAvatarBindingSet/);
+    assert.match(source, /setThemeAvatarBinding/);
+    assert.match(source, /removeThemeAvatarBinding/);
     assert.match(source, /avatarStore\.getAssetMetadata/);
     assert.doesNotMatch(source, /avatarStore\.listAssets/);
     assert.match(source, /IntersectionObserver: null[\s\S]*avatarStore\.getThumbnail/);
     assert.match(source, /bindingMode: 'theme'/);
-    assert.match(source, /clearThemeUserBinding/);
+    assert.match(source, /clearThemeAvatarBinding/);
+    assert.match(source, /data-avatar-bind-kind="user"/);
+    assert.match(source, /data-avatar-bind-kind="character"/);
 });
 
 test('66 clearing the global User avatar preserves a v4 theme-specific binding', async () => {
@@ -1047,6 +1049,56 @@ test('theme binding replacement preserves the previous active in one local bindi
     assert.equal(bindingSet.candidates.find(binding => binding.avatarId === 'a').view.scale, 1.25);
 });
 
+test('Character theme bindings keep multiple adjusted candidates and switch or remove them independently', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('char-a'), asset('char-b'), asset('user-a')] } });
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'char-a', bindingMode: 'theme', themeName: 'A' });
+    f.runtime.setScale(1.2);
+    await f.runtime.saveEdit();
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'char-b', bindingMode: 'theme', themeName: 'A' });
+    f.runtime.setScale(1.55);
+    await f.runtime.saveEdit();
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'user-a', bindingMode: 'theme', themeName: 'A' });
+    await f.runtime.saveEdit();
+
+    let bindingSet = await f.runtime.getThemeAvatarBindingSet('A', 'character');
+    assert.equal(bindingSet.active.avatarId, 'char-b');
+    assert.equal(bindingSet.candidates.length, 2);
+    assert.equal(bindingSet.candidates.find(binding => binding.avatarId === 'char-a').view.scale, 1.2);
+    assert.equal(bindingSet.candidates.find(binding => binding.avatarId === 'char-b').view.scale, 1.55);
+    assert.ok(bindingSet.candidates.every(binding => binding.targetKey.startsWith('theme-avatar-candidate:')));
+    assert.ok(bindingSet.candidates.every(binding => !binding.targetKey.startsWith('character:')));
+
+    await f.runtime.setThemeAvatarBinding('A', 'character', 'char-a');
+    bindingSet = await f.runtime.getThemeAvatarBindingSet('A', 'character');
+    assert.equal(bindingSet.active.avatarId, 'char-a');
+    await f.runtime.removeThemeAvatarBinding('A', 'character', 'char-a');
+    bindingSet = await f.runtime.getThemeAvatarBindingSet('A', 'character');
+    assert.equal(bindingSet.active.avatarId, 'char-b');
+    assert.equal(bindingSet.candidates.length, 1);
+
+    await f.runtime.clearThemeAvatarBinding('A', 'character');
+    bindingSet = await f.runtime.getThemeAvatarBindingSet('A', 'character');
+    assert.equal(bindingSet.active, null);
+    assert.equal(bindingSet.candidates.length, 0);
+    assert.equal((await f.runtime.getThemeAvatarBindingSet('A', 'user')).active.avatarId, 'user-a');
+});
+
+test('Character theme replacement is committed as one atomic binding batch', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('char-a'), asset('char-b')], bindings: [
+        { version: 4, themeKey: 'theme-name:A', targetKey: 'character:char.png', avatarId: 'char-a', view: { scale: 1.25 } },
+    ] } });
+    const originalBatch = f.store.mutateBindings;
+    const batches = [];
+    f.store.mutateBindings = function (operations) { batches.push(operations); return originalBatch.call(this, operations); };
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'char-b', bindingMode: 'theme', themeName: 'A' });
+    await f.runtime.saveEdit();
+    const bindingSet = await f.runtime.getThemeAvatarBindingSet('A', 'character');
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].length, 3);
+    assert.equal(bindingSet.active.avatarId, 'char-b');
+    assert.deepEqual(new Set(bindingSet.candidates.map(binding => binding.avatarId)), new Set(['char-a', 'char-b']));
+});
+
 test('73 newly inserted message avatars receive cached bindings synchronously from the observer callback', async () => {
     const f = runtimeFixture({ seed: { assets: [asset('a')], bindings: [
         { themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'a', view: {} },
@@ -1120,12 +1172,12 @@ test('78 runtime observes host avatar source rewrites without broad attribute wa
     assert.match(source, /attributeFilter:\s*\['is_user', 'is_system', 'src', 'srcset'\]/);
 });
 
-test('79 theme editor keeps User avatar bindings collapsed and places sheet actions above the bound pool', () => {
+test('79 theme editor keeps unified avatar bindings collapsed and places target tabs above the bound pool', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
-    assert.match(source, /id=\"tm-user-avatar-bind-overview\"/);
-    assert.match(source, /function openUserAvatarBindingsSheet\(/);
-    assert.match(source, /tm-user-avatar-bind-sheet-actions[\s\S]*tm-user-avatar-bind-sheet-body/);
-    assert.doesNotMatch(source, /<div class=\"tm-field\"><label>User 头像绑定<\/label><div class=\"tm-user-avatar-bind\"/);
+    assert.match(source, /id=\"tm-avatar-bind-overview\"/);
+    assert.match(source, /function openAvatarBindingsSheet\(/);
+    assert.match(source, /tm-avatar-bind-targets[\s\S]*id="tm-avatar-bind-actions"[\s\S]*id="tm-avatar-bind-sheet-body"/);
+    assert.doesNotMatch(source, /<div class=\"tm-field\"><label>头像绑定<\/label><div class=\"tm-user-avatar-bind\"/);
 });
 
 test('80 complete User recovery clears every User override while preserving assets and Character state', async () => {
@@ -1309,16 +1361,80 @@ test('93 chat-scoped save fails closed when the current chat changes', async () 
     assert.equal(await f.store.getBinding('chat-integrity:chat-uuid-1', 'user:global'), null);
 });
 
-test('94 Avatar Page exposes exactly four application scopes and an exact unbind action', () => {
-    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
-    const block = source.slice(source.indexOf('function openScopeMenu'), source.indexOf('function viewAsset'));
-    assert.equal((block.match(/scopeRow\('/g) || []).length, 4);
-    assert.match(block, /scopeRow\('original'/);
-    assert.match(block, /scopeRow\('chat'/);
-    assert.match(block, /scopeRow\('global'/);
-    assert.match(block, /scopeRow\('theme'/);
-    assert.match(block, /现有聊天、美化和全局绑定不会被清除/);
-    assert.match(block, /runtime\.clearApplicationScope\(kind, clearScope\)/);
+test('deferred adjustment requires an explicit save scope and preserves the editor when none is chosen', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('a')] } });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'a', bindingMode: 'deferred' });
+    await assert.rejects(f.runtime.saveEdit(), error => error.code === 'AVATAR_SCOPE_REQUIRED');
+    assert.equal(f.runtime.getState().state, 'editing');
+    assert.equal(f.runtime.getState().bindingMode, 'deferred');
+    await f.runtime.cancelEdit();
+});
+
+test('deferred adjustment saves chat theme and global bindings only to the selected scope', async () => {
+    const cases = [
+        ['chat', 'chat-integrity:chat-uuid-1'],
+        ['theme', 'theme-name:A'],
+        ['global', modules.avatarRuntime.DEFAULT_BINDING_KEY],
+    ];
+    for (const [scope, key] of cases) {
+        const f = runtimeFixture({ seed: { assets: [asset(scope)] } });
+        await f.runtime.beginEdit({ kind: 'user', avatarId: scope, bindingMode: 'deferred' });
+        f.runtime.setScale(1.3);
+        await f.runtime.saveEdit(scope);
+        const binding = await f.store.getBinding(key, 'user:global');
+        assert.equal(binding.avatarId, scope);
+        assert.equal(binding.view.scale, 1.3);
+    }
+});
+
+test('deferred global save never clears higher-priority chat or theme bindings', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('new-global'), asset('theme'), asset('chat')], bindings: [
+        { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'theme', view: {} },
+        { version: 4, themeKey: 'chat-integrity:chat-uuid-1', targetKey: 'user:global', avatarId: 'chat', view: {} },
+    ] } });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'new-global', bindingMode: 'deferred' });
+    await f.runtime.saveEdit('global');
+    assert.equal((await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'user:global')).avatarId, 'new-global');
+    assert.equal((await f.store.getBinding('theme-name:A', 'user:global')).avatarId, 'theme');
+    assert.equal((await f.store.getBinding('chat-integrity:chat-uuid-1', 'user:global')).avatarId, 'chat');
+});
+
+test('deferred original overwrite sends the raw library asset and leaves every binding unchanged', async () => {
+    const calls = [];
+    const f = runtimeFixture({
+        seed: { assets: [asset('replacement'), asset('global'), asset('theme')], bindings: [
+            { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
+            { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'theme', view: {} },
+        ] },
+        overwriteHostAvatar: async input => { calls.push(input); return { ok: true }; },
+    });
+    const before = JSON.stringify(await f.store.listBindings());
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'replacement', bindingMode: 'deferred' });
+    f.runtime.setScale(1.8);
+    await f.runtime.saveEdit('original');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].asset.id, 'replacement');
+    assert.equal(calls[0].asset.imageData, asset('replacement').imageData);
+    assert.equal(Object.prototype.hasOwnProperty.call(calls[0].asset, 'view'), false);
+    assert.equal(JSON.stringify(await f.store.listBindings()), before);
+});
+
+test('94 Avatar adjustment opens directly and its toolbar owns four save scopes plus three exact unbind scopes', () => {
+    const pageSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
+    const runtimeSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-runtime.js'), 'utf8');
+    assert.equal((pageSource.match(/bindingMode: 'deferred'/g) || []).length, 1);
+    assert.doesNotMatch(pageSource, /openScopeMenu|data-avatar-scope-action/);
+    const panelBlock = runtimeSource.slice(runtimeSource.indexOf('function renderScopePanel'), runtimeSource.indexOf('function openScopePanel'));
+    assert.equal((panelBlock.match(/scopeOptionHtml\('save-/g) || []).length, 4);
+    assert.equal((panelBlock.match(/scopeOptionHtml\('clear-/g) || []).length, 3);
+    assert.match(panelBlock, /save-original/);
+    assert.match(panelBlock, /save-chat/);
+    assert.match(panelBlock, /save-theme/);
+    assert.match(panelBlock, /save-global/);
+    assert.match(panelBlock, /当前聊天 ＞ 当前美化 ＞ 全局 ＞ SillyTavern 原头像/);
+    assert.match(panelBlock, /保存到低权重范围不会清除高权重绑定/);
+    assert.match(runtimeSource, /data-action="clear-bindings"[^>]*>⌫ 解绑/);
+    assert.match(runtimeSource, /clearApplicationScope\(clearKind, clearScope\)/);
 });
 
 test('95 host original overwrite uses SillyTavern avatar endpoints and overwrite fields', () => {

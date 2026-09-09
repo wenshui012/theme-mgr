@@ -18,11 +18,22 @@
     var THEME_BINDING_VERSION = 4;
     var USER_TARGET_KEY = 'user:global';
     var THEME_USER_CANDIDATE_PREFIX = USER_TARGET_KEY + ':theme-avatar:';
+    var THEME_CHARACTER_CANDIDATE_PREFIX = 'theme-avatar-candidate:';
     var CHAT_BINDING_PREFIX = 'chat-integrity:';
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
+    function escapeHtml(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
     function themeUserCandidateTargetKey(avatarId) { return THEME_USER_CANDIDATE_PREFIX + encodeURIComponent(clean(avatarId)); }
+    function themeAvatarCandidatePrefix(targetKey) {
+        targetKey = clean(targetKey);
+        return targetKey === USER_TARGET_KEY
+            ? THEME_USER_CANDIDATE_PREFIX
+            : THEME_CHARACTER_CANDIDATE_PREFIX + encodeURIComponent(targetKey) + ':';
+    }
+    function themeAvatarCandidateTargetKey(targetKey, avatarId) {
+        return themeAvatarCandidatePrefix(targetKey) + encodeURIComponent(clean(avatarId));
+    }
     function round(value, precision) {
         var factor = Math.pow(10, precision == null ? 5 : precision);
         return Math.round(Number(value) * factor) / factor;
@@ -357,6 +368,7 @@
         var editorSyncAll = false;
         var editorControlActive = false;
         var editorPreviewSettled = true;
+        var scopePanelToken = 0;
         var activePointer = null;
         var dragOrigin = null;
         var temporaryUserOverride = null;
@@ -983,9 +995,9 @@
             var toolbarStyle = doc.createElement('style');
             toolbarStyle.textContent = [
                 ':host{--tm-avatar-accent:var(--SmartThemeQuoteColor,#7c6daf);--tm-avatar-text:var(--SmartThemeBodyColor,#eee);--tm-avatar-bg:var(--SmartThemeBlurTintColor,var(--SmartThemeBackgroundColor,#16161a))}',
-                '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
+                '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
                 '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 44px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:.76}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}',
-                'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-bind{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}.tm-avatar-editor-bind span{font-weight:650}.tm-avatar-editor-bind small{font-size:10px;opacity:.62;text-align:right}.tm-avatar-editor-bind.is-active{border-color:var(--tm-avatar-accent);background:color-mix(in srgb,var(--tm-avatar-accent) 18%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(5,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
+                'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}button:disabled{cursor:default;opacity:.38}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-bind{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}.tm-avatar-editor-bind span{font-weight:650}.tm-avatar-editor-bind small{font-size:10px;opacity:.62;text-align:right}.tm-avatar-editor-bind.is-active{border-color:var(--tm-avatar-accent);background:color-mix(in srgb,var(--tm-avatar-accent) 18%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-scope-panel[hidden]{display:none}.tm-avatar-editor-scope-panel{display:flex;flex-direction:column;gap:5px;padding:7px;border:1px solid color-mix(in srgb,var(--tm-avatar-accent) 34%,transparent);border-radius:10px;background:rgba(127,127,127,.08)}.tm-avatar-editor-scope-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:1px 2px 4px;font-weight:700}.tm-avatar-editor-scope-title small{font-size:10px;font-weight:500;opacity:.64}.tm-avatar-editor-priority{padding:0 2px 4px;font-size:10px;line-height:1.35;opacity:.68}.tm-avatar-editor-scope-option{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:38px;text-align:left;white-space:normal}.tm-avatar-editor-scope-option span{display:flex;min-width:0;flex-direction:column;gap:2px}.tm-avatar-editor-scope-option strong{font-size:12px}.tm-avatar-editor-scope-option small{font-size:10px;opacity:.64}.tm-avatar-editor-scope-option em{font-size:9px;font-style:normal;opacity:.72}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(6,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
                 '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:8px;font-size:12px}.tm-avatar-editor-controls{gap:3px}.tm-avatar-editor-row{grid-template-columns:30px 30px minmax(92px,1fr) 40px 30px;gap:4px;min-height:32px}button{min-height:30px;padding:4px 6px}.tm-avatar-editor-footer{gap:4px}}',
             ].join('');
             toolbarRoot.appendChild(toolbarStyle);
@@ -1000,7 +1012,7 @@
                 '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input type="range" min="-180" max="180" step="1" value="0" data-view="rotate" aria-label="倾斜角度"><output class="tm-avatar-editor-value" data-view-output="rotate">0°</output><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
                 '</div>' + (editor.mode === 'library' && editor.target.kind === 'user' && editor.bindingMode === 'adaptive'
                     ? '<button type="button" class="tm-avatar-editor-bind" data-action="bind-theme" aria-pressed="false"><span>绑定到当前美化</span><small data-bind-theme-hint></small></button>'
-                    : '') + '<div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">↔ 水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">↕ 垂直</button><button type="button" data-action="reset">重置</button><button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
+                    : '') + '<div class="tm-avatar-editor-scope-panel" data-scope-panel hidden></div><div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">↔ 水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">↕ 垂直</button><button type="button" data-action="reset">重置</button>' + (editor.mode === 'library' ? '<button type="button" data-action="clear-bindings" title="解除头像绑定">⌫ 解绑</button>' : '') + '<button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">' + (editor.bindingMode === 'deferred' ? '保存…' : '保存') + '</button></div>';
             toolbar.addEventListener('click', onToolbarClick);
             toolbar.addEventListener('input', onToolbarInput);
             toolbar.addEventListener('change', onToolbarCommit);
@@ -1038,6 +1050,68 @@
                     : (editor.unboundSaveMode === 'temporary' ? '未绑定：仅临时替换' : '未绑定：保存为全局头像');
             }
         }
+        function scopeOptionHtml(action, label, hint, state, requireBinding) {
+            state = state || {};
+            var bound = Boolean(state.binding);
+            var enabled = state.available !== false && (!requireBinding || bound);
+            return '<button type="button" class="tm-avatar-editor-scope-option" data-action="' + action + '"' + (enabled ? '' : ' disabled') + '><span><strong>' + escapeHtml(label) + '</strong><small>' + escapeHtml(hint) + '</small></span><em>' + (bound ? '已绑定' : (requireBinding ? '未绑定' : '')) + '</em></button>';
+        }
+        function closeScopePanel() {
+            scopePanelToken += 1;
+            if (!toolbar) return;
+            var panel = toolbar.querySelector('[data-scope-panel]');
+            if (panel) { panel.hidden = true; panel.innerHTML = ''; delete panel.dataset.mode; }
+            ['save', 'clear-bindings'].forEach(function (action) {
+                var button = toolbar.querySelector('[data-action="' + action + '"]');
+                if (button) button.setAttribute('aria-expanded', 'false');
+            });
+            positionEditorToolbar();
+        }
+        function renderScopePanel(mode, status) {
+            if (!toolbar || !editor) return;
+            var panel = toolbar.querySelector('[data-scope-panel]');
+            if (!panel) return;
+            var scopes = status && status.scopes || {};
+            if (mode === 'save') {
+                panel.innerHTML = '<div class="tm-avatar-editor-scope-title"><span>保存头像</span><small>选择应用范围</small></div>' +
+                    '<div class="tm-avatar-editor-priority">显示优先级：当前聊天 ＞ 当前美化 ＞ 全局 ＞ SillyTavern 原头像。保存到低权重范围不会清除高权重绑定。</div>' +
+                    scopeOptionHtml('save-chat', '绑定当前聊天', '最高优先级，仅当前聊天使用', scopes.chat, false) +
+                    scopeOptionHtml('save-theme', '绑定当前美化', '高于全局；保存头像及当前调整数据', scopes.theme, false) +
+                    scopeOptionHtml('save-global', editor.target.kind === 'user' ? '覆盖 User 全局头像' : '覆盖该角色全局头像', '作为没有聊天或美化绑定时的默认头像', scopes.global, false) +
+                    scopeOptionHtml('save-original', editor.target.kind === 'user' ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', '不清除绑定；当前调整参数不会写进原图', scopes.original, false);
+            } else {
+                panel.innerHTML = '<div class="tm-avatar-editor-scope-title"><span>解除头像绑定</span><small>只清除所选范围</small></div>' +
+                    '<div class="tm-avatar-editor-priority">清除后立即退出调整，并按聊天 ＞ 美化 ＞ 全局 ＞ 原头像回退。</div>' +
+                    scopeOptionHtml('clear-chat', '清除当前聊天绑定', '只影响当前聊天', scopes.chat, true) +
+                    scopeOptionHtml('clear-theme', '清除当前美化绑定', '只影响当前美化和当前目标', scopes.theme, true) +
+                    scopeOptionHtml('clear-global', editor.target.kind === 'user' ? '清除 User 全局头像' : '清除该角色全局头像', '不会清除聊天或美化绑定', scopes.global, true);
+            }
+            positionEditorToolbar();
+        }
+        function openScopePanel(mode) {
+            if (!toolbar || !editor || editor.mode !== 'library') return Promise.resolve(false);
+            var panel = toolbar.querySelector('[data-scope-panel]');
+            if (!panel) return Promise.resolve(false);
+            if (!panel.hidden && panel.dataset.mode === mode) { closeScopePanel(); return Promise.resolve(false); }
+            var token = ++scopePanelToken;
+            panel.hidden = false;
+            panel.dataset.mode = mode;
+            panel.innerHTML = '<div class="tm-avatar-editor-priority">正在读取头像绑定…</div>';
+            ['save', 'clear-bindings'].forEach(function (action) {
+                var button = toolbar.querySelector('[data-action="' + action + '"]');
+                if (button) button.setAttribute('aria-expanded', action === (mode === 'save' ? 'save' : 'clear-bindings') ? 'true' : 'false');
+            });
+            positionEditorToolbar();
+            return getApplicationScopes(editor.target.kind).then(function (status) {
+                if (token !== scopePanelToken || !editor || !panel.parentNode || panel.dataset.mode !== mode) return false;
+                renderScopePanel(mode, status);
+                return true;
+            }).catch(function (error) {
+                if (token === scopePanelToken && panel.parentNode) panel.innerHTML = '<div class="tm-avatar-editor-priority">头像绑定读取失败</div>';
+                onError(error);
+                return false;
+            });
+        }
         function bindRepresentative() {
             if (!editor || !editor.representative) return;
             var image = editor.representative.image;
@@ -1057,6 +1131,7 @@
             if (editor.representative.avatar && (!record || !record.avatarClass)) editor.representative.avatar.classList.remove(AVATAR_CLASS);
         }
         function finishEditorUi() {
+            scopePanelToken += 1;
             unbindRepresentative();
             unbindToolbarViewport();
             cancelEditorSettle();
@@ -1084,17 +1159,18 @@
             var cap = capability(kind);
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
             var requestedMode = clean(input.bindingMode);
-            var bindingMode = requestedMode === 'theme' || requestedMode === 'chat' ||
+            var bindingMode = requestedMode === 'deferred' || requestedMode === 'theme' || requestedMode === 'chat' ||
                 (kind === 'user' && (requestedMode === 'temporary' || requestedMode === 'adaptive'))
                 ? requestedMode
                 : 'global';
+            var requestedChatKey = currentChatBindingKey();
             var requestedThemeKey = bindingMode === 'global'
                 ? DEFAULT_BINDING_KEY
-                : (bindingMode === 'chat' ? currentChatBindingKey() : themeKey(input.themeName || getThemeName()));
+                : (bindingMode === 'chat' ? requestedChatKey : themeKey(input.themeName || getThemeName()));
             if (bindingMode === 'chat' && !requestedThemeKey) {
                 return Promise.reject(Object.assign(new Error('无法可靠识别当前聊天'), { code: 'CHAT_UNAVAILABLE' }));
             }
-            if (bindingMode !== 'global' && bindingMode !== 'chat' && !requestedThemeKey) {
+            if (bindingMode !== 'global' && bindingMode !== 'chat' && bindingMode !== 'deferred' && !requestedThemeKey) {
                 return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             }
             var editContextPromise;
@@ -1113,7 +1189,7 @@
                     };
                 });
             } else {
-                var previousPromise = bindingMode === 'temporary'
+                var previousPromise = bindingMode === 'temporary' || bindingMode === 'deferred'
                     ? getBindingForTarget(cap.target, requestedThemeKey, currentChatBindingKey())
                     : store.getBinding(requestedThemeKey, cap.target.key).then(function (binding) {
                         if (bindingMode === 'theme' && !isDedicatedThemeBinding(binding)) return null;
@@ -1132,6 +1208,7 @@
                     mode: 'library',
                     bindingMode: bindingMode,
                     themeKey: requestedThemeKey,
+                    chatKey: requestedChatKey,
                     target: cap.target,
                     avatarId: asset.id,
                     asset: asset,
@@ -1336,16 +1413,28 @@
             sequence += 1;
             return reconcile().then(function () { editorClosing = false; return result; }, function (error) { editorClosing = false; throw error; });
         }
-        function saveEdit() {
+        function saveEdit(requestedScope) {
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
             if (!editor || editorClosing) return Promise.resolve(null);
+            var effectiveBindingMode = editor.bindingMode === 'adaptive'
+                ? (editor.bindToTheme ? 'theme' : editor.unboundSaveMode)
+                : (editor.bindingMode === 'deferred' ? clean(requestedScope) : editor.bindingMode);
+            if (editor.bindingMode === 'deferred' && ['original', 'chat', 'theme', 'global'].indexOf(effectiveBindingMode) === -1) {
+                return Promise.reject(Object.assign(new Error('请选择头像保存范围'), { code: 'AVATAR_SCOPE_REQUIRED' }));
+            }
+            if (effectiveBindingMode === 'chat' && !editor.chatKey) {
+                return Promise.reject(Object.assign(new Error('无法可靠识别当前聊天'), { code: 'CHAT_UNAVAILABLE' }));
+            }
+            if (effectiveBindingMode === 'theme' && !editor.themeKey) {
+                return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            }
             var editorContextChanged = editor.mode === 'library' && (
-                (editor.bindingMode === 'chat' && editor.themeKey !== currentChatBindingKey()) ||
-                (editor.bindingMode !== 'global' && editor.bindingMode !== 'chat' && editor.themeKey !== currentThemeKey())
+                (effectiveBindingMode === 'chat' && editor.chatKey !== currentChatBindingKey()) ||
+                (effectiveBindingMode === 'theme' && editor.themeKey !== currentThemeKey())
             );
             if (editorContextChanged) {
-                var changedScope = editor.bindingMode;
+                var changedScope = effectiveBindingMode;
                 return cancelEdit('superseded').then(function () {
                     throw Object.assign(new Error(changedScope === 'chat' ? '当前聊天已切换，头像修改未保存' : '当前美化已切换，头像修改未保存'), { code: 'superseded' });
                 });
@@ -1371,11 +1460,25 @@
                     });
                 }).catch(function (error) { editorClosing = false; throw error; });
             }
-            var effectiveBindingMode = editor.bindingMode === 'adaptive'
-                ? (editor.bindToTheme ? 'theme' : editor.unboundSaveMode)
-                : editor.bindingMode;
+            if (effectiveBindingMode === 'original') {
+                var originalEditor = editor;
+                var originalContext = contextSafe();
+                return writeHostOriginal(originalEditor.target.kind, originalEditor.target, originalEditor.asset, originalContext).then(function (result) {
+                    finishEditorUi();
+                    editor = null;
+                    nativeImageCache.clear();
+                    sequence += 1;
+                    var reload = originalContext && typeof originalContext.reloadCurrentChat === 'function'
+                        ? Promise.resolve().then(function () { return originalContext.reloadCurrentChat(); })
+                        : Promise.resolve();
+                    return reload.then(reconcile).then(function () {
+                        editorClosing = false;
+                        return { saved: true, original: true, result: result || { ok: true } };
+                    });
+                }).catch(function (error) { editorClosing = false; throw error; });
+            }
             var binding = {
-                themeKey: effectiveBindingMode === 'global' ? DEFAULT_BINDING_KEY : editor.themeKey,
+                themeKey: effectiveBindingMode === 'global' ? DEFAULT_BINDING_KEY : (effectiveBindingMode === 'chat' ? editor.chatKey : editor.themeKey),
                 targetKey: editor.target.key,
                 avatarId: editor.avatarId,
                 view: normalizeView(editor.view),
@@ -1393,8 +1496,8 @@
                     return { saved: true, temporary: true, binding: clone(savedTemporary), diagnostics: diagnostics };
                 }, function (error) { editorClosing = false; throw error; });
             }
-            var saveBinding = effectiveBindingMode === 'theme' && editor.target.kind === 'user'
-                ? putThemeUserBindingByKey(editor.themeKey, binding.avatarId, binding.view)
+            var saveBinding = effectiveBindingMode === 'theme'
+                ? putThemeAvatarBindingByKey(editor.themeKey, editor.target, binding.avatarId, binding.view)
                 : store.putBinding(binding);
             return saveBinding.then(function (saved) {
                 if (binding.themeKey === DEFAULT_BINDING_KEY) promotedBindings.set(binding.targetKey, saved);
@@ -1436,7 +1539,24 @@
             else if (action === 'bind-theme') toggleThemeBinding();
             else if (action === 'reset') resetEdit();
             else if (action === 'cancel') cancelEdit();
-            else if (action === 'save') saveEdit().catch(onError);
+            else if (action === 'clear-bindings') openScopePanel('clear');
+            else if (action === 'save') {
+                if (editor && editor.bindingMode === 'deferred') openScopePanel('save');
+                else saveEdit().catch(onError);
+            } else if (action.indexOf('save-') === 0) {
+                var saveScope = action.slice(5);
+                if (saveScope === 'original' && typeof win.confirm === 'function') {
+                    var originalLabel = editor && editor.target.kind === 'user' ? '当前人设原头像' : '当前角色卡卡面';
+                    if (!win.confirm('确定用这张图片覆盖' + originalLabel + '？\n现有聊天、美化和全局绑定不会被清除；当前调整参数不会写进原图。')) return;
+                }
+                button.disabled = true;
+                saveEdit(saveScope).catch(function (error) { button.disabled = false; onError(error); });
+            } else if (action.indexOf('clear-') === 0 && editor) {
+                var clearKind = editor.target.kind;
+                var clearScope = action.slice(6);
+                button.disabled = true;
+                clearApplicationScope(clearKind, clearScope).catch(function (error) { button.disabled = false; onError(error); });
+            }
         }
         function onToolbarInput(event) {
             if (!editor) return;
@@ -1522,10 +1642,14 @@
             if (scope !== 'chat' && scope !== 'theme' && scope !== 'global') {
                 return Promise.reject(Object.assign(new Error('头像应用范围无效'), { code: 'AVATAR_SCOPE_INVALID' }));
             }
-            if (scope === 'theme' && kind === 'user') return clearThemeUserBinding(getThemeName());
+            if (scope === 'theme') return clearThemeAvatarBinding(getThemeName(), kind);
             if (scope === 'global') promotedBindings.delete(cap.target.key);
             sequence += 1;
             return store.deleteBinding(scopeKey, cap.target.key).then(reconcile);
+        }
+        function writeHostOriginal(kind, target, avatarAsset, context) {
+            if (typeof overwriteHostAvatar !== 'function') return Promise.reject(Object.assign(new Error('当前环境不支持覆盖原头像'), { code: 'HOST_AVATAR_WRITE_UNAVAILABLE' }));
+            return Promise.resolve(overwriteHostAvatar({ kind: kind, target: clone(target), asset: clone(avatarAsset), context: context }));
         }
         function overwriteOriginal(kind, avatarId) {
             var mutationError = requireMutable();
@@ -1539,7 +1663,7 @@
             var target = clone(cap.target);
             return getAsset(avatarId).then(function (avatarAsset) {
                 if (!avatarAsset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
-                return Promise.resolve(overwriteHostAvatar({ kind: kind, target: target, asset: clone(avatarAsset), context: context }));
+                return writeHostOriginal(kind, target, avatarAsset, context);
             }).then(function (result) {
                 nativeImageCache.clear();
                 sequence += 1;
@@ -1559,18 +1683,20 @@
         function getGlobalUserBinding() {
             return Promise.resolve(store.ready).then(function () { return getDefaultBinding(targets().user); });
         }
-        function getThemeUserBindingSet(themeName) {
+        function getThemeAvatarBindingSetByTarget(themeName, target) {
             var key = themeKey(themeName || getThemeName());
-            if (!key) return Promise.resolve({ themeKey: '', active: null, candidates: [] });
+            var targetKey = target && clean(target.key);
+            if (!key || !targetKey) return Promise.resolve({ themeKey: key, target: clone(target), active: null, candidates: [] });
+            var candidatePrefix = themeAvatarCandidatePrefix(targetKey);
             return Promise.resolve(store.ready).then(function () {
-                return Promise.all([store.getBinding(key, USER_TARGET_KEY), store.listBindings()]);
+                return Promise.all([store.getBinding(key, targetKey), store.listBindings()]);
             }).then(function (parts) {
                 var active = isDedicatedThemeBinding(parts[0]) ? parts[0] : null;
                 var candidates = (parts[1] || []).filter(function (binding) {
-                    return binding.themeKey === key && binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0 && isDedicatedThemeBinding(binding);
+                    return binding.themeKey === key && binding.targetKey.indexOf(candidatePrefix) === 0 && isDedicatedThemeBinding(binding);
                 });
                 if (active && !candidates.some(function (binding) { return binding.avatarId === active.avatarId; })) {
-                    candidates.unshift(Object.assign({}, active, { targetKey: themeUserCandidateTargetKey(active.avatarId) }));
+                    candidates.unshift(Object.assign({}, active, { targetKey: themeAvatarCandidateTargetKey(targetKey, active.avatarId) }));
                 }
                 candidates.sort(function (a, b) {
                     if (active && a.avatarId === active.avatarId) return -1;
@@ -1579,6 +1705,7 @@
                 });
                 return {
                     themeKey: key,
+                    target: clone(target),
                     active: clone(active),
                     candidates: candidates.map(function (binding) {
                         return Object.assign(clone(binding), { active: Boolean(active && active.avatarId === binding.avatarId) });
@@ -1586,18 +1713,28 @@
                 };
             });
         }
-        function putThemeUserBindingByKey(key, avatarId, view) {
+        function getThemeAvatarBindingSet(themeName, kind) {
+            kind = kind === 'character' ? 'character' : 'user';
+            var cap = capability(kind);
+            if (!cap.target) return Promise.resolve({ themeKey: themeKey(themeName || getThemeName()), kind: kind, target: null, available: false, reason: cap.reason || '目标不可用', active: null, candidates: [] });
+            return getThemeAvatarBindingSetByTarget(themeName, cap.target).then(function (bindingSet) {
+                return Object.assign(bindingSet, { kind: kind, available: cap.available, reason: cap.reason || '' });
+            });
+        }
+        function putThemeAvatarBindingByKey(key, target, avatarId, view) {
+            var targetKey = target && clean(target.key);
             if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            if (!targetKey) return Promise.reject(Object.assign(new Error('无法识别头像目标'), { code: 'TARGET_UNAVAILABLE' }));
             var normalizedView = normalizeView(view);
-            var candidate = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: themeUserCandidateTargetKey(avatarId), avatarId: avatarId, view: normalizedView };
-            var active = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: avatarId, view: normalizedView };
-            return store.getBinding(key, USER_TARGET_KEY).then(function (previous) {
+            var candidate = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: themeAvatarCandidateTargetKey(targetKey, avatarId), avatarId: avatarId, view: normalizedView };
+            var active = { version: THEME_BINDING_VERSION, themeKey: key, targetKey: targetKey, avatarId: avatarId, view: normalizedView };
+            return store.getBinding(key, targetKey).then(function (previous) {
                 var operations = [];
                 if (isDedicatedThemeBinding(previous) && previous.avatarId !== avatarId) {
                     operations.push({ type: 'put', binding: {
                         version: THEME_BINDING_VERSION,
                         themeKey: key,
-                        targetKey: themeUserCandidateTargetKey(previous.avatarId),
+                        targetKey: themeAvatarCandidateTargetKey(targetKey, previous.avatarId),
                         avatarId: previous.avatarId,
                         view: previous.view,
                     } });
@@ -1607,59 +1744,68 @@
                 return store.mutateBindings(operations).then(function (results) { return results[results.length - 1]; });
             });
         }
-        function setThemeUserBinding(themeName, avatarId) {
+        function setThemeAvatarBinding(themeName, kind, avatarId) {
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
             var key = themeKey(themeName || getThemeName());
             if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
-            return getThemeUserBindingSet(themeName).then(function (bindingSet) {
+            return getThemeAvatarBindingSet(themeName, kind).then(function (bindingSet) {
+                if (!bindingSet.target) throw Object.assign(new Error(bindingSet.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' });
                 var candidate = bindingSet.candidates.find(function (binding) { return binding.avatarId === avatarId; });
                 if (!candidate) throw Object.assign(new Error('这个头像尚未绑定到当前美化'), { code: 'THEME_AVATAR_NOT_BOUND' });
-                return store.putBinding({ version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: candidate.avatarId, view: candidate.view });
+                return store.putBinding({ version: THEME_BINDING_VERSION, themeKey: key, targetKey: bindingSet.target.key, avatarId: candidate.avatarId, view: candidate.view });
             }).then(function (saved) {
-                if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
+                if (kind !== 'character' && temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
                 sequence += 1;
                 return reconcile().then(function () { return saved; });
             });
         }
-        function removeThemeUserBinding(themeName, avatarId) {
+        function removeThemeAvatarBinding(themeName, kind, avatarId) {
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
             var key = themeKey(themeName || getThemeName());
             if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
-            return getThemeUserBindingSet(themeName).then(function (bindingSet) {
+            return getThemeAvatarBindingSet(themeName, kind).then(function (bindingSet) {
+                if (!bindingSet.target) throw Object.assign(new Error(bindingSet.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' });
+                var targetKey = bindingSet.target.key;
                 var remaining = bindingSet.candidates.filter(function (binding) { return binding.avatarId !== avatarId; });
-                var removeCandidate = store.deleteBinding(key, themeUserCandidateTargetKey(avatarId));
-                if (!bindingSet.active || bindingSet.active.avatarId !== avatarId) return removeCandidate;
-                return removeCandidate.then(function () {
-                    if (!remaining.length) return store.deleteBinding(key, USER_TARGET_KEY);
-                    var next = remaining[0];
-                    return store.putBinding({ version: THEME_BINDING_VERSION, themeKey: key, targetKey: USER_TARGET_KEY, avatarId: next.avatarId, view: next.view });
-                });
+                var operations = [{ type: 'delete', themeKey: key, targetKey: themeAvatarCandidateTargetKey(targetKey, avatarId) }];
+                if (bindingSet.active && bindingSet.active.avatarId === avatarId) {
+                    if (remaining.length) operations.push({ type: 'put', binding: { version: THEME_BINDING_VERSION, themeKey: key, targetKey: targetKey, avatarId: remaining[0].avatarId, view: remaining[0].view } });
+                    else operations.push({ type: 'delete', themeKey: key, targetKey: targetKey });
+                }
+                return store.mutateBindings(operations);
             }).then(function () {
-                if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
+                if (kind !== 'character' && temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
                 sequence += 1;
                 return reconcile();
             });
         }
-        function clearThemeUserBinding(themeName) {
+        function clearThemeAvatarBinding(themeName, kind) {
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
             var key = themeKey(themeName || getThemeName());
             if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
-            if (editor) return cancelEdit('theme-binding-cleared').then(function () { return clearThemeUserBinding(themeName); });
-            if (temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
-            sequence += 1;
-            return store.listBindings().then(function (bindings) {
-                var targetsToDelete = (bindings || []).filter(function (binding) {
-                    return binding.themeKey === key && (binding.targetKey === USER_TARGET_KEY || binding.targetKey.indexOf(THEME_USER_CANDIDATE_PREFIX) === 0);
+            if (editor) return cancelEdit('theme-binding-cleared').then(function () { return clearThemeAvatarBinding(themeName, kind); });
+            return getThemeAvatarBindingSet(themeName, kind).then(function (bindingSet) {
+                if (!bindingSet.target) throw Object.assign(new Error(bindingSet.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' });
+                var targetKey = bindingSet.target.key;
+                var operations = bindingSet.candidates.map(function (binding) {
+                    return { type: 'delete', themeKey: key, targetKey: themeAvatarCandidateTargetKey(targetKey, binding.avatarId) };
                 });
-                if (!targetsToDelete.some(function (binding) { return binding.targetKey === USER_TARGET_KEY; })) {
-                    targetsToDelete.push({ targetKey: USER_TARGET_KEY });
-                }
-                return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(key, binding.targetKey); }));
-            }).then(reconcile);
+                operations.push({ type: 'delete', themeKey: key, targetKey: targetKey });
+                return store.mutateBindings(operations);
+            }).then(function () {
+                if (kind !== 'character' && temporaryUserOverride && temporaryUserOverride.themeKey === key) temporaryUserOverride = null;
+                sequence += 1;
+                return reconcile();
+            });
         }
+        function getThemeUserBindingSet(themeName) { return getThemeAvatarBindingSet(themeName, 'user'); }
+        function putThemeUserBindingByKey(key, avatarId, view) { return putThemeAvatarBindingByKey(key, targets().user, avatarId, view); }
+        function setThemeUserBinding(themeName, avatarId) { return setThemeAvatarBinding(themeName, 'user', avatarId); }
+        function removeThemeUserBinding(themeName, avatarId) { return removeThemeAvatarBinding(themeName, 'user', avatarId); }
+        function clearThemeUserBinding(themeName) { return clearThemeAvatarBinding(themeName, 'user'); }
         function clearAllUserOverrides() {
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
@@ -1774,6 +1920,10 @@
             clearApplicationScope: clearApplicationScope,
             overwriteOriginal: overwriteOriginal,
             getThemeUserBinding: getThemeUserBinding,
+            getThemeAvatarBindingSet: getThemeAvatarBindingSet,
+            setThemeAvatarBinding: setThemeAvatarBinding,
+            removeThemeAvatarBinding: removeThemeAvatarBinding,
+            clearThemeAvatarBinding: clearThemeAvatarBinding,
             getThemeUserBindingSet: getThemeUserBindingSet,
             getGlobalUserBinding: getGlobalUserBinding,
             setThemeUserBinding: setThemeUserBinding,
@@ -1795,7 +1945,9 @@
         DEFAULT_BINDING_KEY: DEFAULT_BINDING_KEY,
         CHAT_BINDING_PREFIX: CHAT_BINDING_PREFIX,
         THEME_USER_CANDIDATE_PREFIX: THEME_USER_CANDIDATE_PREFIX,
+        THEME_CHARACTER_CANDIDATE_PREFIX: THEME_CHARACTER_CANDIDATE_PREFIX,
         themeUserCandidateTargetKey: themeUserCandidateTargetKey,
+        themeAvatarCandidateTargetKey: themeAvatarCandidateTargetKey,
         themeKey: themeKey,
         chatBindingKey: chatBindingKey,
         getContextInfo: getContextInfo,

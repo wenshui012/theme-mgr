@@ -5909,34 +5909,35 @@
                 '<span class="tm-theme-bind-copy"><strong>角色 / 聊天绑定</strong><small>' + summary + '</small></span>' +
                 '<i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i>';
         }
-        function buildUserAvatarBindingOverviewHtml(bindingSet, activeAsset) {
-            var active = bindingSet && bindingSet.active;
-            var count = bindingSet && bindingSet.candidates ? bindingSet.candidates.length : 0;
-            var summary = active
-                ? count + ' 个头像 · 当前：' + (activeAsset && activeAsset.name || '已绑定头像')
-                : '沿用全局 User 头像';
-            return '<span class="tm-theme-bind-icon"><i class="fa-solid fa-user"></i></span>' +
-                '<span class="tm-theme-bind-copy"><strong>User 头像绑定</strong><small>' + esc(summary) + '</small></span>' +
+        function buildAvatarBindingOverviewHtml(userSet, characterSet) {
+            var userCount = userSet && userSet.candidates ? userSet.candidates.length : 0;
+            var characterCount = characterSet && characterSet.candidates ? characterSet.candidates.length : 0;
+            var characterLabel = characterSet && characterSet.target && characterSet.target.label;
+            var summary = 'User：' + (userCount ? userCount + ' 个' : '沿用全局') + ' · ' +
+                (characterLabel ? characterLabel + '：' + (characterCount ? characterCount + ' 个' : '沿用全局') : '当前角色不可用');
+            return '<span class="tm-theme-bind-icon"><i class="fa-solid fa-users"></i></span>' +
+                '<span class="tm-theme-bind-copy"><strong>头像绑定</strong><small>' + esc(summary) + '</small></span>' +
                 '<i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i>';
         }
-        function buildUserAvatarBindingPoolHtml(bindingSet, items) {
+        function buildAvatarBindingPoolHtml(bindingSet, items, kind) {
+            var isCharacter = kind === 'character';
             if (!bindingSet || !items.length) {
-                return '<div class="tm-user-avatar-bind-empty"><i class="fa-regular fa-user"></i><span><strong>沿用全局 User 头像</strong><small>请从头像库选择 User 头像，调整后勾选“绑定到当前美化”</small></span></div>';
+                return '<div class="tm-user-avatar-bind-empty"><i class="fa-regular ' + (isCharacter ? 'fa-address-card' : 'fa-user') + '"></i><span><strong>' + (isCharacter ? '当前角色沿用全局头像' : '沿用全局 User 头像') + '</strong><small>请从头像库选择' + (isCharacter ? '当前角色' : ' User') + '头像，调整后保存到“当前美化”</small></span></div>';
             }
             return '<div class="tm-user-avatar-bind-pool">' + items.map(function (item) {
                 var active = item.binding.active;
                 return '<div class="tm-user-avatar-bind-item' + (active ? ' is-active' : '') + '">' +
-                    '<button type="button" class="tm-user-avatar-bind-choice" data-user-avatar-action="select" data-avatar-id="' + esc(item.binding.avatarId) + '">' +
+                    '<button type="button" class="tm-user-avatar-bind-choice" data-theme-avatar-action="select" data-avatar-id="' + esc(item.binding.avatarId) + '">' +
                     '<span class="tm-user-avatar-bind-thumb"><img src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(item.binding.avatarId) + '" alt=""></span>' +
                     '<span class="tm-user-avatar-bind-copy"><strong>' + esc(item.asset && item.asset.name || '已绑定头像') + '</strong><small>' + (active ? '当前使用' : '点按切换') + '</small></span>' +
                     (active ? '<i class="fa-solid fa-check"></i>' : '') + '</button>' +
-                    '<button type="button" class="tm-user-avatar-bind-remove" data-user-avatar-action="remove" data-avatar-id="' + esc(item.binding.avatarId) + '" aria-label="解除这个头像的绑定"><i class="fa-solid fa-link-slash"></i></button></div>';
+                    '<button type="button" class="tm-user-avatar-bind-remove" data-theme-avatar-action="remove" data-avatar-id="' + esc(item.binding.avatarId) + '" aria-label="解除这个头像的绑定"><i class="fa-solid fa-link-slash"></i></button></div>';
             }).join('') + '</div>';
         }
         var bindingFieldsHtml =
             '<div class="tm-field"><label>绑定背景</label><button type="button" class="tm-bg-bind-card" id="tm-bg-bind">' + buildBackgroundBindHtml(editBackgroundName) + '</button></div>' +
             '<div class="tm-field"><label>角色 / 聊天绑定</label><button type="button" class="tm-theme-bind-card" id="tm-theme-bind-overview">' + buildBindingsOverviewHtml() + '</button></div>' +
-            '<div class="tm-field"><label>User 头像绑定</label><button type="button" class="tm-theme-bind-card" id="tm-user-avatar-bind-overview"><span class="tm-theme-bind-icon"><i class="fa-solid fa-user"></i></span><span class="tm-theme-bind-copy"><strong>User 头像绑定</strong><small>正在读取头像绑定…</small></span><i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i></button></div>';
+            '<div class="tm-field"><label>头像绑定</label><button type="button" class="tm-theme-bind-card" id="tm-avatar-bind-overview"><span class="tm-theme-bind-icon"><i class="fa-solid fa-users"></i></span><span class="tm-theme-bind-copy"><strong>头像绑定</strong><small>正在读取头像绑定…</small></span><i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i></button></div>';
         var annotationFieldsHtml =
             '<div class="tm-field"><label>分类</label><button type="button" class="tm-picker-trigger" id="tm-edit-category-trigger"></button></div>' +
             '<div class="tm-field"><label>标签</label><button type="button" class="tm-picker-trigger" id="tm-edit-tags-trigger"></button></div>' +
@@ -5985,63 +5986,66 @@
         sheet.querySelector('#tm-theme-bind-overview').addEventListener('click', function () {
             openBindingsOverviewSheet(item.key, renderBindingsOverview);
         });
-        var userAvatarBindingOverviewToken = 0;
-        function renderUserAvatarBindingOverview() {
-            var token = ++userAvatarBindingOverviewToken;
+        var avatarBindingOverviewToken = 0;
+        function renderAvatarBindingOverview() {
+            var token = ++avatarBindingOverviewToken;
             var bindingThemeName = themeName;
-            var button = sheet.querySelector('#tm-user-avatar-bind-overview');
+            var button = sheet.querySelector('#tm-avatar-bind-overview');
             if (!button || !avatarRuntime || !avatarStore) return;
-            button.innerHTML = '<span class="tm-theme-bind-icon"><i class="fa-solid fa-user"></i></span><span class="tm-theme-bind-copy"><strong>User 头像绑定</strong><small>正在读取头像绑定…</small></span><i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i>';
-            avatarRuntime.getThemeUserBindingSet(bindingThemeName).then(function (bindingSet) {
-                if (!bindingSet.active) return { bindingSet: bindingSet, activeAsset: null };
-                return avatarStore.getAssetMetadata(bindingSet.active.avatarId).then(function (activeAsset) {
-                    return { bindingSet: bindingSet, activeAsset: activeAsset };
-                });
-            }).then(function (result) {
-                if (token !== userAvatarBindingOverviewToken || bindingThemeName !== themeName || !button.parentNode) return;
-                button.innerHTML = buildUserAvatarBindingOverviewHtml(result.bindingSet, result.activeAsset);
+            button.innerHTML = '<span class="tm-theme-bind-icon"><i class="fa-solid fa-users"></i></span><span class="tm-theme-bind-copy"><strong>头像绑定</strong><small>正在读取头像绑定…</small></span><i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i>';
+            Promise.all([
+                avatarRuntime.getThemeAvatarBindingSet(bindingThemeName, 'user'),
+                avatarRuntime.getThemeAvatarBindingSet(bindingThemeName, 'character'),
+            ]).then(function (sets) {
+                if (token !== avatarBindingOverviewToken || bindingThemeName !== themeName || !button.parentNode) return;
+                button.innerHTML = buildAvatarBindingOverviewHtml(sets[0], sets[1]);
             }).catch(function (error) {
-                if (token !== userAvatarBindingOverviewToken || !button.parentNode) return;
+                if (token !== avatarBindingOverviewToken || !button.parentNode) return;
                 var status = button.querySelector('.tm-theme-bind-copy small');
                 if (status) status.textContent = '头像绑定读取失败';
-                console.warn('[头像管理] 美化专属 User 绑定读取失败:', error);
+                console.warn('[头像管理] 美化专属头像绑定读取失败:', error);
             });
         }
 
-        function beginThemeUserAvatarEdit(bindingThemeName, avatarId) {
+        function beginThemeAvatarEdit(bindingThemeName, kind, avatarId) {
             if (!bindingThemeName || !avatarId) return;
             if (closePopup() === false) return;
             function openEditor() {
                 setTimeout(function () {
                     avatarRuntime.beginEdit({
-                        kind: 'user',
+                        kind: kind,
                         avatarId: avatarId,
                         bindingMode: 'theme',
                         themeName: bindingThemeName,
-                    }).catch(function (error) { toast(error.message || '无法启动 User 头像调整', true); });
+                    }).catch(function (error) { toast(error.message || '无法启动头像调整', true); });
                 }, 32);
             }
             if (getCurrentThemeName() === bindingThemeName) { openEditor(); return; }
             applyManualTheme(bindingThemeName, function (ok, reason) {
                 if (ok) openEditor();
-                else if (reason !== 'superseded') toast('无法应用目标美化，User 头像调整未启动', true);
+                else if (reason !== 'superseded') toast('无法应用目标美化，头像调整未启动', true);
             });
         }
-        function openUserAvatarBindingsSheet(bindingThemeName, onChange) {
+        function openAvatarBindingsSheet(bindingThemeName, onChange) {
             if (!bindingThemeName || !avatarRuntime || !avatarStore) {
-                toast('User 头像绑定模块尚未就绪', true);
+                toast('头像绑定模块尚未就绪', true);
                 return;
             }
+            var capabilities = avatarRuntime.getCapabilities();
+            var characterTarget = capabilities.character && capabilities.character.target;
+            var selectedKind = 'user';
             var bindingSheet = createSheet([
-                '<div class="tm-sheet-title"><i class="fa-solid fa-user"></i>User 头像绑定：' + esc(bindingThemeName) + '</div>',
-                '<div class="tm-hint tm-bindings-all-hint">这里可以查看当前美化已绑定的头像并切换使用；新增头像请从头像库调整后绑定。</div>',
-                '<div class="tm-user-avatar-bind-actions tm-user-avatar-bind-sheet-actions" id="tm-user-avatar-bind-actions"></div>',
-                '<div class="tm-user-avatar-bind" id="tm-user-avatar-bind-sheet-body"><div class="tm-user-avatar-bind-loading">正在读取头像绑定…</div></div>',
-                '<div class="tm-edit-foot tm-bindings-all-foot"><button class="tm-btn tm-btn-outline" id="tm-user-avatar-bind-close">关闭</button></div>',
+                '<div class="tm-sheet-title"><i class="fa-solid fa-users"></i>头像绑定：' + esc(bindingThemeName) + '</div>',
+                '<div class="tm-hint tm-bindings-all-hint">每个目标都可以为当前美化保存多个头像及各自的调整数据；新增头像请从头像库调整后保存到“当前美化”。</div>',
+                '<div class="tm-avatar-bind-targets" role="group" aria-label="头像绑定目标"><button type="button" class="on" data-avatar-bind-kind="user" aria-pressed="true"><i class="fa-solid fa-user"></i> User</button><button type="button" data-avatar-bind-kind="character" aria-pressed="false"' + (characterTarget ? '' : ' disabled') + '><i class="fa-solid fa-address-card"></i> ' + esc(characterTarget && characterTarget.label || '当前角色不可用') + '</button></div>',
+                '<div class="tm-user-avatar-bind-actions tm-user-avatar-bind-sheet-actions" id="tm-avatar-bind-actions"></div>',
+                '<div class="tm-user-avatar-bind" id="tm-avatar-bind-sheet-body"><div class="tm-user-avatar-bind-loading">正在读取头像绑定…</div></div>',
+                '<div class="tm-edit-foot tm-bindings-all-foot"><button class="tm-btn tm-btn-outline" id="tm-avatar-bind-close">关闭</button></div>',
             ].join(''));
-            var body = bindingSheet.querySelector('#tm-user-avatar-bind-sheet-body');
-            var actions = bindingSheet.querySelector('#tm-user-avatar-bind-actions');
+            var body = bindingSheet.querySelector('#tm-avatar-bind-sheet-body');
+            var actions = bindingSheet.querySelector('#tm-avatar-bind-actions');
             var currentBinding = null;
+            var currentSet = null;
             var renderToken = 0;
             var loader = null;
             function disconnectLoader() {
@@ -6053,21 +6057,23 @@
             }
             function render() {
                 var token = ++renderToken;
+                var kind = selectedKind;
                 disconnectLoader();
                 actions.innerHTML = '';
                 body.innerHTML = '<div class="tm-user-avatar-bind-loading">正在读取头像绑定…</div>';
-                avatarRuntime.getThemeUserBindingSet(bindingThemeName).then(function (bindingSet) {
+                avatarRuntime.getThemeAvatarBindingSet(bindingThemeName, kind).then(function (bindingSet) {
                     return Promise.all(bindingSet.candidates.map(function (binding) {
                         return avatarStore.getAssetMetadata(binding.avatarId).then(function (asset) {
                             return { binding: binding, asset: asset };
                         });
                     })).then(function (items) { return { bindingSet: bindingSet, items: items }; });
                 }).then(function (result) {
-                    if (token !== renderToken || !body.parentNode) return;
-                    currentBinding = result.bindingSet.active;
-                    actions.innerHTML = (currentBinding ? '<button type="button" class="tm-btn tm-btn-outline" data-user-avatar-action="adjust"><i class="fa-solid fa-sliders"></i> 调整当前头像</button>' : '') +
-                        (result.bindingSet.candidates.length ? '<button type="button" class="tm-btn tm-btn-danger" data-user-avatar-action="clear">全部解除</button>' : '');
-                    body.innerHTML = buildUserAvatarBindingPoolHtml(result.bindingSet, result.items);
+                    if (token !== renderToken || kind !== selectedKind || !body.parentNode) return;
+                    currentSet = result.bindingSet;
+                    currentBinding = currentSet.active;
+                    actions.innerHTML = (currentBinding && currentSet.available ? '<button type="button" class="tm-btn tm-btn-outline" data-theme-avatar-action="adjust"><i class="fa-solid fa-sliders"></i> 调整当前头像</button>' : '') +
+                        (currentSet.candidates.length ? '<button type="button" class="tm-btn tm-btn-danger" data-theme-avatar-action="clear">全部解除</button>' : '');
+                    body.innerHTML = buildAvatarBindingPoolHtml(currentSet, result.items, kind);
                     loader = imageLoaderApi.createImageLoader({
                         root: body,
                         IntersectionObserver: null,
@@ -6075,36 +6081,48 @@
                     });
                     loader.observe(body.querySelectorAll('.tm-user-avatar-bind-thumb img'));
                 }).catch(function (error) {
-                    if (token !== renderToken || !body.parentNode) return;
+                    if (token !== renderToken || kind !== selectedKind || !body.parentNode) return;
                     actions.innerHTML = '';
                     body.innerHTML = '<div class="tm-user-avatar-bind-loading">头像绑定读取失败</div>';
-                    console.warn('[头像管理] 美化专属 User 绑定读取失败:', error);
+                    console.warn('[头像管理] 美化专属头像绑定读取失败:', error);
                 });
             }
             bindingSheet.addEventListener('click', function (event) {
-                var button = event.target && event.target.closest ? event.target.closest('[data-user-avatar-action]') : null;
+                var kindButton = event.target && event.target.closest ? event.target.closest('[data-avatar-bind-kind]') : null;
+                if (kindButton && bindingSheet.contains(kindButton) && !kindButton.disabled) {
+                    selectedKind = kindButton.getAttribute('data-avatar-bind-kind') === 'character' ? 'character' : 'user';
+                    bindingSheet.querySelectorAll('[data-avatar-bind-kind]').forEach(function (button) {
+                        var active = button.getAttribute('data-avatar-bind-kind') === selectedKind;
+                        button.classList.toggle('on', active);
+                        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+                    });
+                    render();
+                    return;
+                }
+                var button = event.target && event.target.closest ? event.target.closest('[data-theme-avatar-action]') : null;
                 if (!button || !bindingSheet.contains(button)) return;
-                var action = button.getAttribute('data-user-avatar-action');
+                var action = button.getAttribute('data-theme-avatar-action');
                 var avatarId = button.getAttribute('data-avatar-id');
+                var label = selectedKind === 'character' ? '当前角色' : 'User';
                 if (action === 'select' && avatarId) {
-                    avatarRuntime.setThemeUserBinding(bindingThemeName, avatarId).then(function () {
-                        changed(); render(); toast('已切换当前美化的 User 头像');
-                    }).catch(function (error) { toast(error.message || '切换 User 头像失败', true); });
+                    avatarRuntime.setThemeAvatarBinding(bindingThemeName, selectedKind, avatarId).then(function () {
+                        changed(); render(); toast('已切换当前美化的' + label + '头像');
+                    }).catch(function (error) { toast(error.message || '切换头像失败', true); });
                 } else if (action === 'remove' && avatarId) {
-                    avatarRuntime.removeThemeUserBinding(bindingThemeName, avatarId).then(function () {
+                    avatarRuntime.removeThemeAvatarBinding(bindingThemeName, selectedKind, avatarId).then(function () {
                         changed(); render(); toast('已解除这个头像与当前美化的绑定');
-                    }).catch(function (error) { toast(error.message || '解除 User 头像绑定失败', true); });
-                } else if (action === 'adjust' && currentBinding) {
+                    }).catch(function (error) { toast(error.message || '解除头像绑定失败', true); });
+                } else if (action === 'adjust' && currentBinding && currentSet && currentSet.available) {
                     disconnectLoader();
-                    beginThemeUserAvatarEdit(bindingThemeName, currentBinding.avatarId);
+                    beginThemeAvatarEdit(bindingThemeName, selectedKind, currentBinding.avatarId);
                 } else if (action === 'clear') {
-                    avatarRuntime.clearThemeUserBinding(bindingThemeName).then(function () {
+                    avatarRuntime.clearThemeAvatarBinding(bindingThemeName, selectedKind).then(function () {
                         currentBinding = null;
-                        changed(); render(); toast('已解除当前美化的全部 User 头像绑定，将沿用全局头像');
-                    }).catch(function (error) { toast(error.message || '解除 User 头像绑定失败', true); });
+                        changed(); render(); toast('已解除当前美化的全部' + label + '头像绑定，将沿用全局头像');
+                    }).catch(function (error) { toast(error.message || '解除头像绑定失败', true); });
                 }
             });
-            bindingSheet.querySelector('#tm-user-avatar-bind-close').addEventListener('click', function () {
+            bindingSheet.querySelector('#tm-avatar-bind-close').addEventListener('click', function () {
                 disconnectLoader();
                 closeSheet(bindingSheet);
             });
@@ -6113,10 +6131,10 @@
             }
             render();
         }
-        sheet.querySelector('#tm-user-avatar-bind-overview').addEventListener('click', function () {
-            openUserAvatarBindingsSheet(themeName, renderUserAvatarBindingOverview);
+        sheet.querySelector('#tm-avatar-bind-overview').addEventListener('click', function () {
+            openAvatarBindingsSheet(themeName, renderAvatarBindingOverview);
         });
-        renderUserAvatarBindingOverview();
+        renderAvatarBindingOverview();
 
         function pickerTriggerHtml(icon, title, summary) {
             return '<span class="tm-picker-trigger-icon"><i class="fa-solid ' + icon + '"></i></span>' +
@@ -6208,7 +6226,7 @@
             editCrop = draft.crop || null;
             renderBackgroundBind();
             setImg(editImgData, editThumbData, editCrop);
-            renderUserAvatarBindingOverview();
+            renderAvatarBindingOverview();
             sheet.querySelectorAll('.tm-day-night-toggle button').forEach(function (button) {
                 button.classList.toggle('on', button.dataset.variant === variant);
             });
