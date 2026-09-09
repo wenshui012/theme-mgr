@@ -410,7 +410,9 @@ test('45 Avatar bottom bar uses the lightweight four-entry layout and nested glo
     assert.doesNotMatch(source, /id="tm-avatar-restore-user"|id="tm-avatar-restore-character"/);
     assert.doesNotMatch(source, /tm-icon-btn tm-avatars-only" id="tm-avatar-add"/);
     assert.doesNotMatch(source, /tm-avatar-add-primary/);
-    assert.match(styles, /data-tm-active-page="avatars"\]\s+\.tm-bottombar\{justify-content:center;gap:6px;\}/);
+    assert.match(styles, /data-tm-active-page="avatars"\]\s+\.tm-bottombar\{justify-content:space-evenly;gap:0;/);
+    assert.match(styles, /data-tm-active-page="avatars"\]\s+\.tm-bottom-btn\{width:34px;height:34px;[^}]*font-size:1\.15em;/);
+    assert.match(styles, /data-tm-active-page="avatars"\]\s+\.tm-bottom-btn\{[^}]*background:var\(--tm-control-bg/);
     assert.doesNotMatch(styles, /tm-avatar-add-primary|grid-template-columns:40px 40px minmax\(52px,1fr\)/);
     assert.doesNotMatch(source, /fa-user-rotate/);
     assert.doesNotMatch(source, /tm-avatar-enter-batch/);
