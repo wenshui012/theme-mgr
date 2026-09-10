@@ -3853,7 +3853,7 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="全局头像" aria-label="全局头像"><i class="fa-solid fa-eraser"></i></button>' +
+            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="头像解绑" aria-label="头像解绑"><i class="fa-solid fa-eraser"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
             (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
@@ -5511,7 +5511,7 @@
         var button = document.getElementById('tm-avatar-global');
         if (button) {
             button.disabled = !user.targetKey && !character.targetKey;
-            button.title = button.disabled ? (user.reason || character.reason || '全局头像当前不可用') : '全局头像';
+            button.title = button.disabled ? (user.reason || character.reason || '头像解绑当前不可用') : '头像解绑';
         }
     }
 
@@ -5519,32 +5519,59 @@
         if (!avatarRuntime || !avatarPageController || !uiSheetsApi) return;
         var user = avatarPageController.getNativeStatus('user');
         var character = avatarPageController.getNativeStatus('character');
-        function item(action, icon, label, hint, disabled) {
-            return '<button type="button" class="tm-action-dialog-item" data-avatar-global-action="' + action + '"' + (disabled ? ' disabled' : '') + '><i class="fa-solid ' + icon + '"></i><span><strong>' + esc(label) + '</strong>' + (hint ? '<small>' + esc(hint) + '</small>' : '') + '</span></button>';
-        }
-        var menu = uiSheetsApi.createActionDialog('<div class="tm-action-dialog-title"><i class="fa-solid fa-eraser"></i>全局头像</div><div class="tm-action-dialog-list">' +
-            item('user', 'fa-user', '清除 User 全局头像', user.targetKey ? '恢复当前 User 原头像' : (user.reason || '当前 User 不可用'), !user.targetKey) +
-            item('character', 'fa-address-card', '清除 Char 全局头像', character.targetKey ? '恢复' + (character.label || '当前角色') + '原头像' : (character.reason || '当前没有选择角色'), !character.targetKey) +
-            '</div>');
-        menu.addEventListener('click', function (event) {
-            var actionButton = event.target.closest('[data-avatar-global-action]');
-            if (!actionButton || actionButton.disabled) return;
-            var kind = actionButton.dataset.avatarGlobalAction;
-            var message = kind === 'user'
-                ? '清除 User 全局头像并恢复使用原头像？当前美化专属头像也会停止使用；其他美化保持不变。'
-                : '清除 Char 全局头像并恢复使用当前角色原头像？';
-            if (!confirm(message)) return;
-            closeSheet(menu);
-            var operation;
-            if (kind === 'user') {
-                var themeName = getCurrentThemeName();
-                operation = (themeName ? avatarRuntime.clearThemeUserBinding(themeName) : Promise.resolve()).then(function () { return avatarRuntime.clearBinding('user'); });
-            } else operation = avatarRuntime.clearBinding('character');
-            operation.then(function () {
-                toast(kind === 'user' ? '已清除 User 全局头像' : '已清除 Char 全局头像');
-                return avatarPageController.refresh();
-            }).catch(function (error) { toast(error.message || '清除全局头像失败', true); });
-        });
+        Promise.all([
+            avatarRuntime.getApplicationScopes('user'),
+            avatarRuntime.getApplicationScopes('character'),
+            avatarRuntime.getAvatarBindingRecoverySummary(),
+        ]).then(function (parts) {
+            var states = { user: parts[0], character: parts[1] };
+            var recovery = parts[2];
+            function item(kind, scope, icon, label) {
+                var state = states[kind] && states[kind].scopes && states[kind].scopes[scope] || {};
+                var bound = Boolean(state.binding);
+                var hint = bound
+                    ? (scope === 'theme' ? '已绑定 ' + Number(state.count || 1) + ' 张头像' : '当前有绑定')
+                    : '当前无绑定';
+                return '<button type="button" class="tm-action-dialog-item" data-avatar-global-action="clear" data-avatar-kind="' + kind + '" data-avatar-scope="' + scope + '"' + (bound ? '' : ' disabled') + '><i class="fa-solid ' + icon + '"></i><span><strong>' + esc(label) + '</strong><small>' + esc(hint) + '</small></span></button>';
+            }
+            function group(kind, icon, label) {
+                return '<div class="tm-avatar-unbind-group-title"><i class="fa-solid ' + icon + '"></i><span>' + esc(label) + '</span></div>' +
+                    item(kind, 'chat', 'fa-comments', '清除当前聊天绑定') +
+                    item(kind, 'theme', 'fa-palette', '清除当前美化绑定') +
+                    item(kind, 'global', 'fa-globe', '清除全局绑定');
+            }
+            var characterLabel = character.targetKey ? (character.label || '当前角色') : '当前角色不可用';
+            var menu = uiSheetsApi.createActionDialog('<div class="tm-action-dialog-title"><i class="fa-solid fa-eraser"></i>头像解绑</div><div class="tm-action-dialog-list">' +
+                group('user', 'fa-user', 'User') +
+                '<div class="tm-action-dialog-divider"></div>' +
+                group('character', 'fa-address-card', characterLabel) +
+                '<div class="tm-avatar-unbind-danger"><button type="button" class="tm-action-dialog-item is-danger" data-avatar-global-action="recover"' + (recovery.total ? '' : ' disabled') + '><i class="fa-solid fa-rotate-left"></i><span><strong>全部解绑并恢复原头像</strong><small>清除两者在所有聊天、美化和全局中的绑定</small></span></button></div>' +
+                '</div>');
+            menu.addEventListener('click', function (event) {
+                var actionButton = event.target.closest('[data-avatar-global-action]');
+                if (!actionButton || actionButton.disabled) return;
+                var action = actionButton.dataset.avatarGlobalAction;
+                if (action === 'recover') {
+                    var targetsLabel = character.targetKey ? '当前 User 与「' + characterLabel + '」' : '当前 User';
+                    if (!confirm('确认全部解绑并恢复原头像？\n这会清除' + targetsLabel + '在所有聊天、所有美化和全局中的头像绑定。\n头像库图片、SillyTavern 原图和原头像调整数据都会保留。')) return;
+                    closeSheet(menu);
+                    avatarRuntime.clearAllAvatarBindings().then(function (result) {
+                        toast('已恢复原头像，共解除 ' + result.bindingsCleared + ' 项绑定');
+                        return avatarPageController.refresh();
+                    }).catch(function (error) { toast(error.message || '恢复原头像失败', true); });
+                    return;
+                }
+                var kind = actionButton.dataset.avatarKind === 'character' ? 'character' : 'user';
+                var scope = actionButton.dataset.avatarScope;
+                closeSheet(menu);
+                avatarRuntime.clearApplicationScope(kind, scope).then(function () {
+                    var targetLabel = kind === 'character' ? characterLabel : 'User';
+                    var scopeLabel = scope === 'chat' ? '当前聊天' : (scope === 'theme' ? '当前美化' : '全局');
+                    toast('已清除' + targetLabel + '的' + scopeLabel + '绑定');
+                    return avatarPageController.refresh();
+                }).catch(function (error) { toast(error.message || '解除头像绑定失败', true); });
+            });
+        }).catch(function (error) { toast(error.message || '头像绑定读取失败', true); });
     }
 
     // ── 角色 / 聊天绑定 ──────────────────────────────────────
@@ -5913,8 +5940,8 @@
             var userCount = userSet && userSet.candidates ? userSet.candidates.length : 0;
             var characterCount = characterSet && characterSet.candidates ? characterSet.candidates.length : 0;
             var characterLabel = characterSet && characterSet.target && characterSet.target.label;
-            var summary = 'User：' + (userCount ? userCount + ' 个' : '沿用全局') + ' · ' +
-                (characterLabel ? characterLabel + '：' + (characterCount ? characterCount + ' 个' : '沿用全局') : '当前角色不可用');
+            var summary = 'User：' + (userCount ? '已绑定 ' + userCount + ' 张' : '当前美化未绑定') + ' · ' +
+                (characterLabel ? characterLabel + '：' + (characterCount ? '已绑定 ' + characterCount + ' 张' : '当前美化未绑定') : '当前角色不可用');
             return '<span class="tm-theme-bind-icon"><i class="fa-solid fa-users"></i></span>' +
                 '<span class="tm-theme-bind-copy"><strong>头像绑定</strong><small>' + esc(summary) + '</small></span>' +
                 '<i class="fa-solid fa-chevron-right tm-theme-bind-chevron"></i>';
@@ -5922,14 +5949,14 @@
         function buildAvatarBindingPoolHtml(bindingSet, items, kind) {
             var isCharacter = kind === 'character';
             if (!bindingSet || !items.length) {
-                return '<div class="tm-user-avatar-bind-empty"><i class="fa-regular ' + (isCharacter ? 'fa-address-card' : 'fa-user') + '"></i><span><strong>' + (isCharacter ? '当前角色沿用全局头像' : '沿用全局 User 头像') + '</strong><small>请从头像库选择' + (isCharacter ? '当前角色' : ' User') + '头像，调整后保存到“当前美化”</small></span></div>';
+                return '<div class="tm-user-avatar-bind-empty"><i class="fa-regular ' + (isCharacter ? 'fa-address-card' : 'fa-user') + '"></i><span><strong>当前美化未绑定' + (isCharacter ? '角色' : ' User') + '头像</strong><small>显示时继续按聊天、全局、原头像的顺序回退</small></span></div>';
             }
             return '<div class="tm-user-avatar-bind-pool">' + items.map(function (item) {
                 var active = item.binding.active;
                 return '<div class="tm-user-avatar-bind-item' + (active ? ' is-active' : '') + '">' +
                     '<button type="button" class="tm-user-avatar-bind-choice" data-theme-avatar-action="select" data-avatar-id="' + esc(item.binding.avatarId) + '">' +
                     '<span class="tm-user-avatar-bind-thumb"><img src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(item.binding.avatarId) + '" alt=""></span>' +
-                    '<span class="tm-user-avatar-bind-copy"><strong>' + esc(item.asset && item.asset.name || '已绑定头像') + '</strong><small>' + (active ? '当前使用' : '点按切换') + '</small></span>' +
+                    '<span class="tm-user-avatar-bind-copy"><strong>' + esc(item.asset && item.asset.name || '头像资源') + '</strong><small>' + (active ? '当前使用' : '点按切换') + '</small></span>' +
                     (active ? '<i class="fa-solid fa-check"></i>' : '') + '</button>' +
                     '<button type="button" class="tm-user-avatar-bind-remove" data-theme-avatar-action="remove" data-avatar-id="' + esc(item.binding.avatarId) + '" aria-label="解除这个头像的绑定"><i class="fa-solid fa-link-slash"></i></button></div>';
             }).join('') + '</div>';
@@ -6072,7 +6099,7 @@
                     currentSet = result.bindingSet;
                     currentBinding = currentSet.active;
                     actions.innerHTML = (currentBinding && currentSet.available ? '<button type="button" class="tm-btn tm-btn-outline" data-theme-avatar-action="adjust"><i class="fa-solid fa-sliders"></i> 调整当前头像</button>' : '') +
-                        (currentSet.candidates.length ? '<button type="button" class="tm-btn tm-btn-danger" data-theme-avatar-action="clear">全部解除</button>' : '');
+                        (currentSet.candidates.length ? '<button type="button" class="tm-btn tm-btn-danger" data-theme-avatar-action="clear">清除本组</button>' : '');
                     body.innerHTML = buildAvatarBindingPoolHtml(currentSet, result.items, kind);
                     loader = imageLoaderApi.createImageLoader({
                         root: body,
@@ -6118,7 +6145,7 @@
                 } else if (action === 'clear') {
                     avatarRuntime.clearThemeAvatarBinding(bindingThemeName, selectedKind).then(function () {
                         currentBinding = null;
-                        changed(); render(); toast('已解除当前美化的全部' + label + '头像绑定，将沿用全局头像');
+                        changed(); render(); toast('已清除当前美化的全部' + label + '头像绑定');
                     }).catch(function (error) { toast(error.message || '解除头像绑定失败', true); });
                 }
             });

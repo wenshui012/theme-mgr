@@ -208,6 +208,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const horizontalSlider = sliderRoot.querySelector('[data-view="x"]');
                 const verticalSlider = sliderRoot.querySelector('[data-view="y"]');
                 const rotateSlider = sliderRoot.querySelector('[data-view="rotate"]');
+                const toolbarTextOnly = [['flip-x', '水平'], ['flip-y', '垂直'], ['reset', '重置'], ['clear-bindings', '解绑'], ['cancel', '取消'], ['save', '保存']]
+                    .every(([action, text]) => sliderRoot.querySelector('[data-action="' + action + '"]')?.textContent.trim() === text);
                 sizeSlider.value = '1.25'; sizeSlider.dispatchEvent(new Event('input',{bubbles:true}));
                 horizontalSlider.value = '.3'; horizontalSlider.dispatchEvent(new Event('input',{bubbles:true}));
                 verticalSlider.value = '-.2'; verticalSlider.dispatchEvent(new Event('input',{bubbles:true}));
@@ -414,7 +416,8 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const boundToolbarRoot = document.querySelector('#tm-avatar-editor-toolbar')?.shadowRoot;
                 boundToolbarRoot.querySelector('[data-action="save"]').click();
                 for (let attempt = 0; attempt < 30 && boundToolbarRoot.querySelectorAll('[data-action^="save-"]').length !== 4; attempt++) await delay(10);
-                const boundSavePanel = boundToolbarRoot.querySelectorAll('[data-action^="save-"]').length === 4;
+                const boundSavePanel = boundToolbarRoot.querySelectorAll('[data-action^="save-"]').length === 4 &&
+                    /已绑定 \d+ 张头像/.test(boundToolbarRoot.querySelector('[data-action="save-theme"]')?.textContent || '');
                 boundToolbarRoot.querySelector('[data-action="clear-bindings"]').click();
                 for (let attempt = 0; attempt < 30 && boundToolbarRoot.querySelectorAll('.tm-avatar-editor-scope-option[data-action^="clear-"]').length !== 3; attempt++) await delay(10);
                 const boundScopePanel = boundSavePanel && boundToolbarRoot.querySelectorAll('.tm-avatar-editor-scope-option[data-action^="clear-"]').length === 3 &&
@@ -508,7 +511,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const bindingUi = document.createElement('div');
                 bindingUi.className = 'tm-light';
                 bindingUi.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;overflow:hidden;background:#fff';
-                bindingUi.innerHTML = '<button class="tm-theme-bind-card"><span class="tm-theme-bind-icon"></span><span class="tm-theme-bind-copy"><strong>头像绑定</strong><small>User 4 个 · 当前角色 2 个</small></span><i class="tm-theme-bind-chevron"></i></button><div class="tm-sheet"><div class="tm-sheet-content"><div class="tm-avatar-bind-targets"><button class="on">User</button><button>Character</button></div><div class="tm-user-avatar-bind-actions tm-user-avatar-bind-sheet-actions"><button class="tm-btn">调整当前头像</button><button class="tm-btn">全部解除</button></div><div class="tm-user-avatar-bind-pool">' + Array.from({length:4},(_,index)=>'<div class="tm-user-avatar-bind-item"><button class="tm-user-avatar-bind-choice"><span class="tm-user-avatar-bind-thumb"></span><span class="tm-user-avatar-bind-copy"><strong>portrait '+index+'</strong><small>点按切换</small></span></button></div>').join('') + '</div></div></div>';
+                bindingUi.innerHTML = '<button class="tm-theme-bind-card"><span class="tm-theme-bind-icon"></span><span class="tm-theme-bind-copy"><strong>头像绑定</strong><small>User：已绑定 4 张 · 当前角色：已绑定 2 张</small></span><i class="tm-theme-bind-chevron"></i></button><div class="tm-sheet"><div class="tm-sheet-content"><div class="tm-avatar-bind-targets"><button class="on">User</button><button>Character</button></div><div class="tm-user-avatar-bind-actions tm-user-avatar-bind-sheet-actions"><button class="tm-btn">调整当前头像</button><button class="tm-btn">清除本组</button></div><div class="tm-user-avatar-bind-pool">' + Array.from({length:4},(_,index)=>'<div class="tm-user-avatar-bind-item"><button class="tm-user-avatar-bind-choice"><span class="tm-user-avatar-bind-thumb"></span><span class="tm-user-avatar-bind-copy"><strong>portrait '+index+'</strong><small>点按切换</small></span></button></div>').join('') + '</div></div></div>';
                 document.body.appendChild(bindingUi);
                 const bindingOverview = bindingUi.querySelector('.tm-theme-bind-card');
                 const bindingActions = bindingUi.querySelector('.tm-user-avatar-bind-sheet-actions');
@@ -516,6 +519,25 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const bindingUiResponsive = bindingUi.scrollWidth <= innerWidth && bindingOverview.getBoundingClientRect().right <= innerWidth && bindingPool.scrollWidth <= bindingPool.clientWidth;
                 const bindingActionsAbovePool = bindingActions.getBoundingClientRect().bottom <= bindingPool.getBoundingClientRect().top;
                 bindingUi.remove();
+                const unbindUi = document.createElement('div');
+                unbindUi.className = 'tm-sheet-overlay tm-action-dialog-overlay';
+                const unbindAction = (label, hint, disabled = false) => '<button class="tm-action-dialog-item"' + (disabled ? ' disabled' : '') + '><i></i><span><strong>' + label + '</strong><small>' + hint + '</small></span></button>';
+                unbindUi.innerHTML = '<div class="tm-action-dialog"><div class="tm-action-dialog-title"><i></i>头像解绑</div><div class="tm-action-dialog-list">' +
+                    '<div class="tm-avatar-unbind-group-title"><i></i><span>User</span></div>' +
+                    unbindAction('清除当前聊天绑定', '当前有绑定') + unbindAction('清除当前美化绑定', '已绑定 3 张头像') + unbindAction('清除全局绑定', '当前无绑定', true) +
+                    '<div class="tm-action-dialog-divider"></div><div class="tm-avatar-unbind-group-title"><i></i><span>当前角色</span></div>' +
+                    unbindAction('清除当前聊天绑定', '当前有绑定') + unbindAction('清除当前美化绑定', '已绑定 2 张头像') + unbindAction('清除全局绑定', '当前有绑定') +
+                    '<div class="tm-avatar-unbind-danger"><button class="tm-action-dialog-item is-danger"><i></i><span><strong>全部解绑并恢复原头像</strong><small>清除两者在所有聊天、美化和全局中的绑定</small></span></button></div></div></div>';
+                document.body.appendChild(unbindUi);
+                const unbindDialog = unbindUi.querySelector('.tm-action-dialog');
+                const unbindDanger = unbindUi.querySelector('.tm-avatar-unbind-danger');
+                const regularUnbindItems = [...unbindUi.querySelectorAll('.tm-action-dialog-list > .tm-action-dialog-item')];
+                const unbindUiResponsive = unbindDialog.getBoundingClientRect().left >= 0 && unbindDialog.getBoundingClientRect().right <= innerWidth &&
+                    unbindDialog.getBoundingClientRect().top >= 0 && unbindDialog.getBoundingClientRect().bottom <= innerHeight &&
+                    unbindDialog.scrollWidth <= unbindDialog.clientWidth && unbindDialog.scrollHeight >= unbindDialog.clientHeight;
+                const unbindDangerLast = regularUnbindItems.length === 6 && unbindDanger.getBoundingClientRect().top >= regularUnbindItems.at(-1).getBoundingClientRect().bottom &&
+                    getComputedStyle(unbindDanger.querySelector('strong')).color === 'rgb(229, 115, 115)';
+                unbindUi.remove();
                 document.querySelector('#tm-style')?.remove();
                 const noOverflow = document.documentElement.scrollWidth <= window.innerWidth;
                 const cleanup = !document.querySelector('#tm-avatar-editor-toolbar') && !document.querySelector('#tm-avatar-editor-style');
@@ -531,7 +553,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, gridStable, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
-                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, scopePanelFour, unbindPanelThree, toolbarScopeSaved, scopedGlobalEditor, toolbarVisible, toolbarIsolated, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, boundScopePanel, scopedThemeEditor, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, nativeInputHandlingMs, nativeResponsiveInputs,
+                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, scopePanelFour, unbindPanelThree, toolbarScopeSaved, scopedGlobalEditor, toolbarVisible, toolbarIsolated, toolbarTextOnly, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, boundScopePanel, scopedThemeEditor, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, unbindUiResponsive, unbindDangerLast, nativeInputHandlingMs, nativeResponsiveInputs,
                     nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
                     hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
@@ -539,7 +561,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','unbindPanelThree','toolbarScopeSaved','scopedGlobalEditor','toolbarVisible','toolbarIsolated','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','unbindPanelThree','toolbarScopeSaved','scopedGlobalEditor','toolbarVisible','toolbarIsolated','toolbarTextOnly','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','unbindUiResponsive','unbindDangerLast','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

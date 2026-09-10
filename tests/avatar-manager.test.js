@@ -404,15 +404,22 @@ test('44 avatar grid starts with the original-avatar slot and cards stay image-o
     assert.match(f.lastDialog(), /管理头像/);
     assert.match(f.lastDialog(), /is-weak/);
 });
-test('45 Avatar bottom bar uses the lightweight four-entry layout and nested global-avatar actions', () => {
+test('45 Avatar bottom bar uses the lightweight four-entry layout and scoped unbind actions', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     const styles = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.js'), 'utf8');
     assert.match(source, /id="tm-avatar-add"/);
     assert.match(source, /id="tm-avatar-global"/);
     assert.match(source, /fa-eraser/);
     assert.match(source, /id="tm-avatar-global"[\s\S]*id="tm-avatar-batch-toggle"[\s\S]*id="tm-avatar-add"[\s\S]*id="tm-bottom-settings"/);
-    assert.match(source, /清除 User 全局头像/);
-    assert.match(source, /清除 Char 全局头像/);
+    assert.match(source, /id="tm-avatar-global" title="头像解绑" aria-label="头像解绑"/);
+    assert.match(source, /group\('user'/);
+    assert.match(source, /group\('character'/);
+    assert.match(source, /item\(kind, 'chat'/);
+    assert.match(source, /item\(kind, 'theme'/);
+    assert.match(source, /item\(kind, 'global'/);
+    assert.match(source, /全部解绑并恢复原头像/);
+    assert.match(source, /所有聊天、所有美化和全局/);
+    assert.match(source, /原头像调整数据都会保留/);
     assert.doesNotMatch(source, /id="tm-avatar-restore-user"|id="tm-avatar-restore-character"/);
     assert.doesNotMatch(source, /tm-icon-btn tm-avatars-only" id="tm-avatar-add"/);
     assert.doesNotMatch(source, /tm-avatar-add-primary/);
@@ -1331,6 +1338,60 @@ test('91 clearing one application scope preserves every other binding', async ()
     assert.equal((await f.store.getBinding('chat-integrity:chat-uuid-1', 'character:char.png')).avatarId, 'character');
 });
 
+test('application scope status reports the current theme multi-avatar count', async () => {
+    const candidateKey = modules.avatarRuntime.themeUserCandidateTargetKey('candidate');
+    const f = runtimeFixture({ seed: { assets: [asset('active'), asset('candidate')], bindings: [
+        { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'active', view: {} },
+        { version: 4, themeKey: 'theme-name:A', targetKey: candidateKey, avatarId: 'candidate', view: {} },
+    ] } });
+    const status = await f.runtime.getApplicationScopes('user');
+    assert.equal(status.scopes.theme.binding.avatarId, 'active');
+    assert.equal(status.scopes.theme.count, 2);
+});
+
+test('complete avatar recovery atomically clears every User and current Character binding without deleting images or native adjustments', async () => {
+    const userCandidate = modules.avatarRuntime.themeUserCandidateTargetKey('user-theme-b');
+    const characterCandidate = modules.avatarRuntime.themeAvatarCandidateTargetKey('character:char.png', 'char-theme-b');
+    const assets = ['user-global', 'user-theme-a', 'user-theme-b', 'user-chat-a', 'user-chat-b', 'char-global', 'char-theme-a', 'char-theme-b', 'char-chat', 'other-char'].map(id => asset(id));
+    const f = runtimeFixture({ seed: {
+        assets,
+        bindings: [
+            { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'user-global', view: {} },
+            { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'user-theme-a', view: {} },
+            { version: 4, themeKey: 'theme-name:A', targetKey: userCandidate, avatarId: 'user-theme-b', view: {} },
+            { version: 4, themeKey: 'chat-integrity:chat-a', targetKey: 'user:global', avatarId: 'user-chat-a', view: {} },
+            { version: 4, themeKey: 'chat-integrity:chat-b', targetKey: 'user:global', avatarId: 'user-chat-b', view: {} },
+            { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:char.png', avatarId: 'char-global', view: {} },
+            { version: 4, themeKey: 'theme-name:A', targetKey: 'character:char.png', avatarId: 'char-theme-a', view: {} },
+            { version: 4, themeKey: 'theme-name:A', targetKey: characterCandidate, avatarId: 'char-theme-b', view: {} },
+            { version: 4, themeKey: 'chat-integrity:chat-a', targetKey: 'character:char.png', avatarId: 'char-chat', view: {} },
+            { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'character:other.png', avatarId: 'other-char', view: {} },
+        ],
+        nativeViews: [
+            { targetKey: 'user:global', sourceKey: 'raw-user.png', view: { scale: 1.2 } },
+            { targetKey: 'character:char.png', sourceKey: 'char.png', view: { scale: 1.1 } },
+        ],
+    } });
+    const originalBatch = f.store.mutateBindings;
+    const batches = [];
+    f.store.mutateBindings = function (operations) { batches.push(operations); return originalBatch.call(this, operations); };
+    const before = await f.runtime.getAvatarBindingRecoverySummary();
+    assert.equal(before.user.total, 5);
+    assert.equal(before.character.total, 4);
+    assert.equal(before.total, 9);
+
+    const result = await f.runtime.clearAllAvatarBindings();
+    const remaining = await f.store.listBindings();
+    assert.equal(result.bindingsCleared, 9);
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].length, 9);
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].targetKey, 'character:other.png');
+    assert.equal((await f.store.listAssets()).length, assets.length);
+    assert.equal((await f.store.getNativeView('user:global')).view.scale, 1.2);
+    assert.equal((await f.store.getNativeView('character:char.png')).view.scale, 1.1);
+});
+
 test('92 overwriting the host original preserves all existing bindings', async () => {
     const calls = [];
     let reloads = 0;
@@ -1433,7 +1494,12 @@ test('94 Avatar adjustment opens directly and its toolbar owns four save scopes 
     assert.match(panelBlock, /save-global/);
     assert.match(panelBlock, /当前聊天 ＞ 当前美化 ＞ 全局 ＞ SillyTavern 原头像/);
     assert.match(panelBlock, /保存到低权重范围不会清除高权重绑定/);
-    assert.match(runtimeSource, /data-action="clear-bindings"[^>]*>⌫ 解绑/);
+    assert.match(runtimeSource, /data-action="flip-x"[^>]*>水平<\/button>/);
+    assert.match(runtimeSource, /data-action="flip-y"[^>]*>垂直<\/button>/);
+    assert.match(runtimeSource, /data-action="clear-bindings"[^>]*>解绑<\/button>/);
+    assert.match(runtimeSource, /data-action="save">保存<\/button>/);
+    assert.doesNotMatch(runtimeSource, /↔ 水平|↕ 垂直|⌫ 解绑|保存…/);
+    assert.match(panelBlock, /已绑定 ' \+ Number\(scopes\.theme/);
     assert.match(runtimeSource, /clearApplicationScope\(clearKind, clearScope\)/);
 });
 
