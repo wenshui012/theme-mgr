@@ -9597,7 +9597,7 @@
 })(window);
 /* END MODULE 19/27: src/avatar-library.js */
 
-/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:0e395f9dc40e23b06c98df1c302dad6e16ca0d8a3ccfe3b8e4891567764694ca */
+/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:0f58569a6732670945c17b86d12735dc79d066a4f994c3371d5f8ea51da877bd */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -9608,6 +9608,7 @@
     var SOURCE_CACHE_LIMIT = 2;
     var SOURCE_ASSET_CACHE_LIMIT = 2;
     var SOURCE_EDGE_MARGIN = 1;
+    var HOST_IMAGE_CACHE_LIMIT = 12;
     var EDITOR_PREVIEW_MAX_DIMENSION = 384;
     var EDITOR_SETTLE_DELAY = 120;
     var TOOLBAR_ID = 'tm-avatar-editor-toolbar';
@@ -9675,6 +9676,20 @@
     function chatBindingKey(chatKey) {
         chatKey = clean(chatKey);
         return chatKey ? CHAT_BINDING_PREFIX + encodeURIComponent(chatKey) : '';
+    }
+    function hostOriginalSourceFromThumbnail(source, baseHref) {
+        source = clean(source);
+        if (!source) return '';
+        var parsed;
+        try { parsed = new global.URL(source, baseHref || (global.location && global.location.href) || 'http://localhost/'); }
+        catch (_) { return ''; }
+        if (!/(?:^|\/)thumbnail$/.test(parsed.pathname)) return '';
+        var type = clean(parsed.searchParams.get('type')).toLowerCase();
+        var file = clean(parsed.searchParams.get('file'));
+        if ((type !== 'avatar' && type !== 'persona') || !file) return '';
+        var directory = type === 'avatar' ? 'characters' : 'User%20Avatars';
+        var path = '/' + directory + '/' + encodeURIComponent(file);
+        return /^https?:\/\//i.test(source) ? parsed.origin + path : path;
     }
     function getContextInfo(context) {
         context = context || {};
@@ -9922,6 +9937,15 @@
         var getThemeName = options.getThemeName || function () { return ''; };
         var onError = options.onError || function () {};
         var overwriteHostAvatar = options.overwriteHostAvatar;
+        var preloadHostImage = options.preloadHostImage || function (source) {
+            return new Promise(function (resolve) {
+                if (typeof win.Image !== 'function') { resolve(''); return; }
+                var image = new win.Image();
+                image.onload = function () { resolve(source); };
+                image.onerror = function () { resolve(''); };
+                image.src = source;
+            });
+        };
         var imageTools = options.imageTools || ns.imageTools;
         var fetchImage = options.fetch || (typeof win.fetch === 'function' ? win.fetch.bind(win) : null);
         var loadNativeImage = options.loadNativeImage || function (asset) {
@@ -9949,14 +9973,16 @@
         var promotedBindings = new Map();
         var rotatedSources = new Map();
         var nativeImageCache = new Map();
+        var hostImageCache = new Map();
+        var hostSourceRevision = 1;
         var runtimeAttributeValues = new WeakMap();
+        var hostErrorHandlers = new WeakMap();
         var listeners = [];
         var chatObserver = null;
         var observedChat = null;
         var reconcileTimer = null;
         var sequence = 0;
         var started = false;
-        var hasRuntimeBinding = false;
         var editor = null;
         var editorClosing = false;
         var toolbarHost = null;
@@ -10002,6 +10028,60 @@
         function targets() { return getContextInfo(contextSafe()); }
         function isDedicatedThemeBinding(binding) {
             return Boolean(binding && /^theme-name:/.test(binding.themeKey || '') && Number(binding.version) >= THEME_BINDING_VERSION);
+        }
+        function hostThumbnailSourceForEntry(entry) {
+            var image = entry && entry.image;
+            var baseline = baselines.get(image);
+            return clean(baseline && (baseline.src || baseline.resolvedSrc)) || clean(getAttribute(image, 'src')) || resolvedImageSource(image, '');
+        }
+        function hostOriginalSourceForEntry(entry) {
+            return hostOriginalSourceFromThumbnail(hostThumbnailSourceForEntry(entry), doc && doc.baseURI || (win.location && win.location.href));
+        }
+        function revisedHostSource(source) {
+            if (!source) return '';
+            return source + (source.indexOf('?') >= 0 ? '&' : '?') + 'tm_avatar_hd=' + hostSourceRevision;
+        }
+        function invalidateHostSourceCache() {
+            hostSourceRevision += 1;
+            hostImageCache.clear();
+            nativeImageCache.clear();
+        }
+        function loadHostOriginal(source) {
+            source = clean(source);
+            if (!source) return Promise.resolve('');
+            if (hostImageCache.has(source)) return hostImageCache.get(source).promise;
+            var revised = revisedHostSource(source);
+            var record = { loadedSource: '', promise: null };
+            record.promise = Promise.resolve().then(function () { return preloadHostImage(revised); }).then(function (loaded) {
+                record.loadedSource = loaded === false || loaded == null || loaded === '' ? '' : revised;
+                return record.loadedSource;
+            }).catch(function () { record.loadedSource = ''; return ''; });
+            while (hostImageCache.size >= HOST_IMAGE_CACHE_LIMIT) hostImageCache.delete(hostImageCache.keys().next().value);
+            hostImageCache.set(source, record);
+            return record.promise;
+        }
+        function forgetFailedHostSource(source) {
+            hostImageCache.forEach(function (record) {
+                if (record.loadedSource === source) record.loadedSource = '';
+            });
+        }
+        function removeHostErrorFallback(image) {
+            var handler = hostErrorHandlers.get(image);
+            if (handler && image && typeof image.removeEventListener === 'function') image.removeEventListener('error', handler);
+            hostErrorHandlers.delete(image);
+        }
+        function installHostErrorFallback(image, record, highResolutionSource) {
+            removeHostErrorFallback(image);
+            if (!highResolutionSource || !image || typeof image.addEventListener !== 'function') return;
+            var handler = function () {
+                removeHostErrorFallback(image);
+                if (getAttribute(image, 'src') !== highResolutionSource) return;
+                forgetFailedHostSource(highResolutionSource);
+                syncRuntimeAttribute(image, 'src', record.src);
+                syncRuntimeAttribute(image, 'srcset', record.srcset);
+            };
+            hostErrorHandlers.set(image, handler);
+            image.addEventListener('error', handler);
         }
         function isDedicatedChatBinding(binding) {
             return Boolean(binding && binding.themeKey && binding.themeKey.indexOf(CHAT_BINDING_PREFIX) === 0 && Number(binding.version) >= THEME_BINDING_VERSION);
@@ -10091,23 +10171,31 @@
         function embeddedNativeAsset(entry, target) {
             var asset = nativeAssetForEntry(entry, target);
             if (/^data:image\//i.test(asset.imageData)) return Promise.resolve(asset);
-            var cached = nativeImageCache.get(asset.id);
+            var originalSource = hostOriginalSourceFromThumbnail(asset.imageData, doc && doc.baseURI || (win.location && win.location.href));
+            var originalAsset = originalSource ? Object.assign({}, asset, { imageData: revisedHostSource(originalSource) }) : null;
+            var cacheKey = asset.id + ':' + (originalAsset ? originalAsset.imageData : 'thumbnail');
+            var cached = nativeImageCache.get(cacheKey);
             if (cached) return cached;
-            cached = Promise.resolve(loadNativeImage(asset)).then(function (embedded) {
+            var loadAsset = function (candidate) { return Promise.resolve(loadNativeImage(candidate)).then(function (embedded) {
                 if (!embedded || !/^data:image\//i.test(embedded.imageData || '')) {
                     throw Object.assign(new Error('原头像图片读取结果无效'), { code: 'AVATAR_NATIVE_READ_FAILED' });
                 }
                 return embedded;
-            }).catch(function (error) {
-                nativeImageCache.delete(asset.id);
+            }); };
+            cached = (originalAsset ? loadAsset(originalAsset).then(function (embedded) {
+                embedded._tmHostSource = originalAsset.imageData;
+                return embedded;
+            }).catch(function () { return loadAsset(asset); }) : loadAsset(asset)).catch(function (error) {
+                nativeImageCache.delete(cacheKey);
                 throw error;
             });
-            nativeImageCache.set(asset.id, cached);
+            nativeImageCache.set(cacheKey, cached);
             return cached;
         }
         function restoreImage(image, hostSourceTargetKey) {
             var record = baselines.get(image);
             if (!record) return;
+            removeHostErrorFallback(image);
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
             syncRuntimeAttribute(image, 'src', record.src);
             syncRuntimeAttribute(image, 'srcset', record.srcset);
@@ -10130,6 +10218,7 @@
         function applyToEntry(entry, asset, view, targetKey, preview) {
             var image = entry.image;
             var record = captureBaseline(image);
+            removeHostErrorFallback(image);
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
             syncRuntimeAttribute(image, 'srcset', null);
             var sourceAsset = preview ? editorPreviewAsset(asset) : asset;
@@ -10155,10 +10244,12 @@
             var nativeAsset = nativeAssetForEntry(entry, target);
             var transformsSource = Boolean(normalized.x || normalized.y || normalized.scale !== 1 || normalized.rotate || normalized.flipX || normalized.flipY);
             if (!transformsSource) {
-                syncRuntimeAttribute(image, 'src', record.src || nativeAsset.imageData);
-                syncRuntimeAttribute(image, 'srcset', record.srcset);
+                var hostDisplaySource = embeddedAsset && embeddedAsset._tmHostSource || '';
+                syncRuntimeAttribute(image, 'src', hostDisplaySource || record.src || nativeAsset.imageData);
+                syncRuntimeAttribute(image, 'srcset', hostDisplaySource ? null : record.srcset);
                 setExactAttribute(image, 'style', record.style);
                 setImportantStyle(image, 'content', 'normal');
+                installHostErrorFallback(image, record, hostDisplaySource);
                 record.targetKey = target && target.key || '';
                 activeImages.add(image);
                 return;
@@ -10180,9 +10271,17 @@
             if (frame.webkitMaskImage && frame.webkitMaskImage !== 'none') setImportantStyle(image, '-webkit-mask-image', frame.webkitMaskImage);
             if (frame.maskImage && frame.maskImage !== 'none') setImportantStyle(image, 'mask-image', frame.maskImage);
         }
-        function applyHostSourceToEntry(entry, target) {
-            captureBaseline(entry.image);
-            restoreImage(entry.image, target && target.key);
+        function applyHostSourceToEntry(entry, target, highResolutionSource) {
+            var image = entry.image;
+            var record = captureBaseline(image);
+            restoreImage(image, target && target.key);
+            if (!highResolutionSource) return;
+            syncRuntimeAttribute(image, 'srcset', null);
+            syncRuntimeAttribute(image, 'src', highResolutionSource);
+            setImportantStyle(image, 'content', 'normal');
+            installHostErrorFallback(image, record, highResolutionSource);
+            record.targetKey = target && target.key || '';
+            activeImages.add(image);
         }
         function putHostSourceIntent(targetKey) {
             targetKey = clean(targetKey);
@@ -10268,7 +10367,16 @@
         }
         function desiredForHostSource(target, record) {
             return messageImages(doc, target).map(function (entry) {
-                return { entry: entry, binding: record, hostSource: true, target: target };
+                var originalSource = hostOriginalSourceForEntry(entry);
+                var loaded = originalSource && hostImageCache.get(originalSource);
+                return { entry: entry, binding: record, hostSource: true, target: target, highResolutionSource: loaded && loaded.loadedSource || '' };
+            });
+        }
+        function resolveHostSourcePlan(target, intent) {
+            var originals = Array.from(new Set(messageImages(doc, target).map(hostOriginalSourceForEntry).filter(Boolean)));
+            if (!originals.length) return Promise.resolve(intent ? { target: target, binding: intent, asset: null, native: false, hostSource: true } : null);
+            return Promise.all(originals.map(loadHostOriginal)).then(function () {
+                return { target: target, binding: intent || { targetKey: target.key, mode: 'host-source' }, asset: null, native: false, hostSource: true };
             });
         }
         function desiredForPlan(plan) {
@@ -10282,7 +10390,7 @@
             var desired = new Set(items.map(function (item) { return item.entry.image; }));
             Array.from(activeImages).forEach(function (image) { if (!desired.has(image)) restoreImage(image); });
             items.forEach(function (item) {
-                if (item.hostSource) applyHostSourceToEntry(item.entry, item.target);
+                if (item.hostSource) applyHostSourceToEntry(item.entry, item.target, item.highResolutionSource);
                 else if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
                 else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
             });
@@ -10290,11 +10398,9 @@
         function resolveRuntimeDesired(requestedThemeKey, requestedChatKey) {
             var info = targets();
             var targetList = [info.character, info.user].filter(Boolean);
-            var foundBinding = false;
             return Promise.all(targetList.map(function (target) {
                 return getBindingForTarget(target, requestedThemeKey, requestedChatKey).then(function (binding) {
                     if (binding) {
-                        foundBinding = true;
                         return getAsset(binding.avatarId).then(function (asset) {
                             if (!asset) {
                                 if (binding.themeKey === DEFAULT_BINDING_KEY) promotedBindings.delete(target.key);
@@ -10323,9 +10429,9 @@
                     return store.getNativeView(target.key).then(function (record) {
                         if (!record) {
                             return getHostSourceIntent(target.key).then(function (intent) {
-                                if (!intent) return null;
-                                foundBinding = true;
-                                return { target: target, binding: intent, asset: null, native: false, hostSource: true };
+                                return resolveHostSourcePlan(target, intent).then(function (plan) {
+                                    return plan;
+                                });
                             });
                         }
                         var representative = messageImages(doc, target)[0] || null;
@@ -10335,7 +10441,6 @@
                                 return store.deleteNativeView(target.key);
                             }).then(function () { return null; });
                         }
-                        foundBinding = true;
                         return embeddedNativeAsset(representative, target).then(function (asset) {
                             return { target: target, binding: record, asset: asset, native: true };
                         });
@@ -10346,7 +10451,6 @@
                 return {
                     items: plans.reduce(function (all, plan) { return all.concat(desiredForPlan(plan)); }, []),
                     plans: plans,
-                    hasBinding: foundBinding,
                 };
             });
         }
@@ -10364,7 +10468,7 @@
                 desiredForPlan(plan).forEach(function (item) {
                     desired.add(item.entry.image);
                     if (!lightweightNative || !activeImages.has(item.entry.image)) {
-                        if (item.hostSource) applyHostSourceToEntry(item.entry, item.target);
+                        if (item.hostSource) applyHostSourceToEntry(item.entry, item.target, item.highResolutionSource);
                         else if (item.native) applyNativeToEntry(item.entry, item.binding.view, item.target, item.asset);
                         else applyToEntry(item.entry, item.asset, item.binding.view, item.binding.targetKey);
                     }
@@ -10406,7 +10510,6 @@
             }
             return Promise.resolve(store.ready).then(function () { return resolveRuntimeDesired(requestedThemeKey, requestedChatKey); }).then(function (desired) {
                 if (request !== sequence || editor || requestedThemeKey !== currentThemeKey() || requestedChatKey !== currentChatBindingKey()) return { superseded: true };
-                hasRuntimeBinding = desired.hasBinding;
                 bindingPlans = desired.plans;
                 try { applyDesired(desired.items); observeChat(); }
                 catch (error) { restoreAll(); onError(error); return { ok: false, error: error }; }
@@ -10434,13 +10537,34 @@
         }
         function observeChat() {
             var chat = doc.getElementById && doc.getElementById('chat');
-            if (!editor && !hasRuntimeBinding) chat = null;
             if (chat === observedChat) return;
             if (chatObserver) chatObserver.disconnect();
             observedChat = chat;
             if (!chat || typeof win.MutationObserver !== 'function') return;
             chatObserver = new win.MutationObserver(function (records) {
                 if (records && records.length && records.every(isRuntimeAttributeMutation)) return;
+                var hostSourceChanged = false;
+                (records || []).forEach(function (record) {
+                    if (!record || record.type !== 'attributes' || (record.attributeName !== 'src' && record.attributeName !== 'srcset') || isRuntimeAttributeMutation(record)) return;
+                    var baseline = baselines.get(record.target);
+                    if (!baseline) return;
+                    var baselineHostSource = hostOriginalSourceFromThumbnail(baseline.src || baseline.resolvedSrc, doc && doc.baseURI || (win.location && win.location.href));
+                    var currentHostSource = hostOriginalSourceFromThumbnail(getAttribute(record.target, 'src'), doc && doc.baseURI || (win.location && win.location.href));
+                    if (!baselineHostSource && !currentHostSource) return;
+                    runtimeAttributeValues.delete(record.target);
+                    if (record.attributeName === 'src') {
+                        baseline.src = getAttribute(record.target, 'src');
+                        baseline.resolvedSrc = resolvedImageSource(record.target, baseline.src);
+                        baseline.naturalWidth = Number(record.target.naturalWidth) || baseline.naturalWidth;
+                        baseline.naturalHeight = Number(record.target.naturalHeight) || baseline.naturalHeight;
+                    } else baseline.srcset = getAttribute(record.target, 'srcset');
+                    hostSourceChanged = true;
+                });
+                if (hostSourceChanged) {
+                    invalidateHostSourceCache();
+                    scheduleReconcile(0);
+                    return;
+                }
                 applyCachedPlans();
                 scheduleReconcile(0);
             });
@@ -10457,11 +10581,11 @@
             listeners.push({ source: source, name: name, handler: handler });
         }
         function contextChanged() {
+            invalidateHostSourceCache();
             if (editor) cancelEdit('context-changed');
             else { observeChat(); invalidateAndScheduleReconcile(20); }
         }
         function contentChanged() {
-            if (!editor && !hasRuntimeBinding) return;
             observeChat();
             applyCachedPlans();
             scheduleReconcile(0);
@@ -10478,7 +10602,7 @@
             var context = contextSafe();
             var source = context.eventSource;
             var types = context.eventTypes || {};
-            [types.CHAT_CHANGED, types.CHAT_LOADED, types.PERSONA_CHANGED].forEach(function (name) { addEvent(source, name, contextChanged); });
+            [types.CHAT_CHANGED, types.CHAT_LOADED, types.PERSONA_CHANGED, types.PERSONA_UPDATED, types.PERSONA_RENAMED, types.PERSONA_DELETED, types.CHARACTER_EDITED, types.CHARACTER_RENAMED, types.CHARACTER_DELETED].forEach(function (name) { addEvent(source, name, contextChanged); });
             [types.MESSAGE_SENT, types.MESSAGE_RECEIVED, types.MESSAGE_UPDATED, types.USER_MESSAGE_RENDERED, types.CHARACTER_MESSAGE_RENDERED].forEach(function (name) { addEvent(source, name, contentChanged); });
             doc.addEventListener('change', onThemeControlChange, true);
             return Promise.resolve(store.ready).then(reconcile);
@@ -10497,10 +10621,10 @@
             if (reconcileTimer) win.clearTimeout(reconcileTimer);
             reconcileTimer = null;
             started = false;
-            hasRuntimeBinding = false;
             bindingPlans = [];
             temporaryUserOverride = null;
             hostSourceTargets.clear();
+            hostImageCache.clear();
             nativeImageCache.clear();
             sequence += 1;
             restoreAll();
@@ -11267,7 +11391,7 @@
                 if (!avatarAsset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
                 return writeHostOriginal(kind, target, avatarAsset, context);
             }).then(function (result) {
-                nativeImageCache.clear();
+                invalidateHostSourceCache();
                 sequence += 1;
                 var reload = context && typeof context.reloadCurrentChat === 'function'
                     ? Promise.resolve().then(function () { return context.reloadCurrentChat(); })
@@ -11606,6 +11730,7 @@
         themeAvatarCandidateTargetKey: themeAvatarCandidateTargetKey,
         themeKey: themeKey,
         chatBindingKey: chatBindingKey,
+        hostOriginalSourceFromThumbnail: hostOriginalSourceFromThumbnail,
         getContextInfo: getContextInfo,
         messageImages: messageImages,
         chooseRepresentative: chooseRepresentative,

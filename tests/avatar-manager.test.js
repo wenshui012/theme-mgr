@@ -31,7 +31,7 @@ function asset(id = 'a', extra = {}) {
     }, extra);
 }
 
-const baseWindow = { indexedDB: null };
+const baseWindow = { indexedDB: null, URL };
 const modules = loadModules(baseWindow);
 
 function processorFixture(type, width, height, hasAlpha) {
@@ -169,6 +169,9 @@ class Events {
     addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(fn); }
     removeEventListener(type, fn) { this.listeners.set(type, (this.listeners.get(type) || []).filter((x) => x !== fn)); }
     dispatchEvent(event) { event.target ||= this; event.preventDefault ||= () => { event.defaultPrevented = true; }; event.stopImmediatePropagation ||= () => {}; for (const fn of [...(this.listeners.get(event.type) || [])]) fn(event); return !event.defaultPrevented; }
+    on(type, fn) { this.addEventListener(type, fn); }
+    removeListener(type, fn) { this.removeEventListener(type, fn); }
+    emit(type, ...args) { for (const fn of [...(this.listeners.get(type) || [])]) fn(...args); }
 }
 class Classes {
     constructor() { this.values = new Set(); }
@@ -247,26 +250,29 @@ function message(role, rect, src) {
 }
 function runtimeFixture(options = {}) {
     const doc = new Document(); const chat = doc.body.appendChild(new Element('div')); chat.id = 'chat';
-    const chars = [message('character', options.charRect || { x: 30, y: 100, width: 100, height: 100 }, 'raw-char.png'), message('character', options.charRect2 || { x: 30, y: 230, width: 50, height: 50 }, 'raw-char.png')];
-    const user = message('user', { x: 500, y: 100, width: 80, height: 80 }, 'raw-user.png');
+    const charSource = options.charSrc || 'raw-char.png';
+    const userSource = options.userSrc || 'raw-user.png';
+    const chars = [message('character', options.charRect || { x: 30, y: 100, width: 100, height: 100 }, charSource), message('character', options.charRect2 || { x: 30, y: 230, width: 50, height: 50 }, charSource)];
+    const user = message('user', { x: 500, y: 100, width: 80, height: 80 }, userSource);
     [...chars, user].forEach((x) => chat.appendChild(x.mes));
     let theme = options.theme || 'A';
-    const eventSource = { on() {}, removeListener() {} };
+    const eventSource = new Events();
     const context = options.context || {
         characters: [{ avatar: 'char.png', name: 'Char' }], characterId: 0, groupId: null, name1: 'User',
         chatId: 'Chat One', chatMetadata: { integrity: 'chat-uuid-1' },
         getCurrentChatId() { return this.chatId; },
-        eventSource, eventTypes: {},
+        eventSource, eventTypes: options.eventTypes || {},
     };
-    const win = { document: doc, innerWidth: 800, innerHeight: 600, MutationObserver, setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), getComputedStyle: (el) => el.computed, confirm: () => true };
+    const win = { document: doc, location: { href: 'http://localhost/' }, URL, innerWidth: 800, innerHeight: 600, MutationObserver, setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), getComputedStyle: (el) => el.computed, confirm: () => true };
     const mods = loadModules(win); const bundle = memoryStore(options.seed); const runtimeStore = options.store || bundle.store; const runtime = mods.createAvatarRuntime({
         window: win, document: doc, store: runtimeStore, getContext: () => context, getThemeName: () => theme,
         canMutate: options.canMutate,
         canStart: options.canStart,
-        loadNativeImage: async (nativeAsset) => ({ ...nativeAsset, imageData: 'data:image/png;base64,AA==' }),
+        loadNativeImage: options.loadNativeImage || (async (nativeAsset) => ({ ...nativeAsset, imageData: 'data:image/png;base64,AA==' })),
+        preloadHostImage: options.preloadHostImage,
         overwriteHostAvatar: options.overwriteHostAvatar,
     });
-    return { win, doc, chat, chars, user, context, store: bundle.store, runtime, mods, setTheme: (x) => { theme = x; } };
+    return { win, doc, chat, chars, user, context, eventSource: context.eventSource || eventSource, store: bundle.store, runtime, mods, setTheme: (x) => { theme = x; } };
 }
 
 class PageRoot extends Events {
@@ -1510,4 +1516,139 @@ test('95 host original overwrite uses SillyTavern avatar endpoints and overwrite
     assert.match(source, /form\.append\('avatar_url', targetName\)/);
     assert.match(source, /\/api\/characters\/edit-avatar/);
     assert.match(source, /overwriteHostAvatar: overwriteSillyTavernAvatar/);
+});
+
+test('96 SillyTavern avatar thumbnails map only to their matching original files', () => {
+    const map = modules.avatarRuntime.hostOriginalSourceFromThumbnail;
+    assert.equal(map('/thumbnail?type=avatar&file=char.png', 'http://localhost/'), '/characters/char.png');
+    assert.equal(map('/thumbnail?type=persona&file=User%20One.png', 'http://localhost/'), '/User%20Avatars/User%20One.png');
+    assert.equal(map('http://localhost/thumbnail?type=avatar&file=%E8%A7%92%E8%89%B2%20A.png', 'http://localhost/'), 'http://localhost/characters/%E8%A7%92%E8%89%B2%20A.png');
+    assert.equal(map('/thumbnail?type=bg&file=scene.png', 'http://localhost/'), '');
+    assert.equal(map('/characters/char.png', 'http://localhost/'), '');
+});
+
+test('97 unbound User and Character thumbnails switch to preloaded original files without creating bindings', async () => {
+    const preloaded = [];
+    const f = runtimeFixture({
+        charSrc: '/thumbnail?type=avatar&file=char.png',
+        userSrc: '/thumbnail?type=persona&file=User%20One.png',
+        preloadHostImage: async (source) => { preloaded.push(source); return true; },
+    });
+    await f.runtime.start();
+    assert.ok(f.chars.every((entry) => /^\/characters\/char\.png\?tm_avatar_hd=\d+$/.test(entry.image.getAttribute('src'))));
+    assert.match(f.user.image.getAttribute('src'), /^\/User%20Avatars\/User%20One\.png\?tm_avatar_hd=\d+$/);
+    assert.deepEqual(new Set(preloaded.map((source) => source.replace(/\?tm_avatar_hd=\d+$/, ''))), new Set(['/characters/char.png', '/User%20Avatars/User%20One.png']));
+    assert.equal((await f.store.listBindings()).length, 0);
+    assert.equal(await f.store.getSourceIntent('user:global'), null);
+});
+
+test('98 failed original-file enhancement keeps the exact working thumbnail and srcset', async () => {
+    const thumbnail = '/thumbnail?type=persona&file=user.png';
+    const f = runtimeFixture({ userSrc: thumbnail, preloadHostImage: async () => false });
+    f.user.image.setAttribute('srcset', '/thumbnail?type=persona&file=user@2x.png 2x');
+    await f.runtime.start();
+    assert.equal(f.user.image.getAttribute('src'), thumbnail);
+    assert.equal(f.user.image.getAttribute('srcset'), '/thumbnail?type=persona&file=user@2x.png 2x');
+    assert.match(f.user.image.getAttribute('style'), /^opacity:\.99;content:normal!important;$/);
+});
+
+test('99 clearing a replacement reveals the high-resolution host original without changing other binding scopes', async () => {
+    const f = runtimeFixture({
+        userSrc: '/thumbnail?type=persona&file=user.png',
+        preloadHostImage: async () => true,
+        seed: { assets: [asset('global'), asset('theme')], bindings: [
+            { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
+            { version: 4, themeKey: 'theme-name:B', targetKey: 'user:global', avatarId: 'theme', view: {} },
+        ] },
+    });
+    await f.runtime.start();
+    assert.match(f.user.image.getAttribute('src'), /main-global/);
+    await f.runtime.clearBinding('user');
+    assert.match(f.user.image.getAttribute('src'), /^\/User%20Avatars\/user\.png\?tm_avatar_hd=\d+$/);
+    assert.equal(await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'user:global'), null);
+    assert.equal((await f.store.getBinding('theme-name:B', 'user:global')).avatarId, 'theme');
+});
+
+test('100 native original adjustment retries the thumbnail when the high-resolution file cannot be read', async () => {
+    const reads = [];
+    const f = runtimeFixture({
+        charSrc: '/thumbnail?type=avatar&file=char.png',
+        loadNativeImage: async (nativeAsset) => {
+            reads.push(nativeAsset.imageData);
+            if (nativeAsset.imageData.startsWith('/characters/')) throw new Error('missing original');
+            return { ...nativeAsset, imageData: 'data:image/png;base64,fallback' };
+        },
+        seed: { nativeViews: [{ targetKey: 'character:char.png', sourceKey: 'char.png', view: { scale: 1.2 } }] },
+    });
+    await f.runtime.start();
+    assert.match(reads[0], /^\/characters\/char\.png\?tm_avatar_hd=\d+$/);
+    assert.equal(reads[1], '/thumbnail?type=avatar&file=char.png');
+    assert.ok(f.chars.every((entry) => entry.image.getAttribute('src') === 'data:image/png;base64,fallback'));
+});
+
+test('101 persona events and external source rewrites invalidate the high-resolution cache', async () => {
+    const sources = [];
+    const f = runtimeFixture({
+        userSrc: '/thumbnail?type=persona&file=user.png',
+        eventTypes: { PERSONA_UPDATED: 'persona-updated' },
+        preloadHostImage: async (source) => { sources.push(source); return true; },
+    });
+    await f.runtime.start();
+    const first = f.user.image.getAttribute('src');
+    f.eventSource.emit('persona-updated');
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    const second = f.user.image.getAttribute('src');
+    assert.notEqual(second, first);
+
+    f.user.image.setAttribute('src', '/thumbnail?type=persona&file=user.png');
+    const observer = MutationObserver.instances[MutationObserver.instances.length - 1];
+    observer.fn([{ type: 'attributes', attributeName: 'src', target: f.user.image }]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const third = f.user.image.getAttribute('src');
+    assert.notEqual(third, second);
+    assert.equal(new Set(sources).size, 3);
+});
+
+test('102 overwriting the host original forces a fresh high-resolution URL while preserving bindings', async () => {
+    const f = runtimeFixture({
+        userSrc: '/thumbnail?type=persona&file=user.png',
+        preloadHostImage: async () => true,
+        overwriteHostAvatar: async () => ({ ok: true }),
+        seed: { assets: [asset('replacement')] },
+    });
+    f.context.reloadCurrentChat = async () => {};
+    await f.runtime.start();
+    const before = f.user.image.getAttribute('src');
+    await f.runtime.overwriteOriginal('user', 'replacement');
+    const after = f.user.image.getAttribute('src');
+    assert.notEqual(after, before);
+    assert.equal((await f.store.listBindings()).length, 0);
+});
+
+test('103 a late high-resolution image error transparently restores the thumbnail', async () => {
+    const thumbnail = '/thumbnail?type=persona&file=user.png';
+    const f = runtimeFixture({ userSrc: thumbnail, preloadHostImage: async () => true });
+    f.user.image.setAttribute('srcset', '/thumbnail?type=persona&file=user@2x.png 2x');
+    await f.runtime.start();
+    assert.match(f.user.image.getAttribute('src'), /^\/User%20Avatars\/user\.png\?tm_avatar_hd=\d+$/);
+    f.user.image.dispatchEvent({ type: 'error' });
+    assert.equal(f.user.image.getAttribute('src'), thumbnail);
+    assert.equal(f.user.image.getAttribute('srcset'), '/thumbnail?type=persona&file=user@2x.png 2x');
+});
+
+test('104 switching Character identity refreshes every message from the new original file', async () => {
+    const f = runtimeFixture({
+        charSrc: '/thumbnail?type=avatar&file=old-char.png',
+        eventTypes: { CHAT_CHANGED: 'chat-changed' },
+        preloadHostImage: async () => true,
+    });
+    await f.runtime.start();
+    assert.ok(f.chars.every((entry) => /\/characters\/old-char\.png\?tm_avatar_hd=\d+$/.test(entry.image.getAttribute('src'))));
+    f.context.characters[0].avatar = 'new-char.png';
+    f.chars.forEach((entry) => entry.image.setAttribute('src', '/thumbnail?type=avatar&file=new-char.png'));
+    const observer = MutationObserver.instances[MutationObserver.instances.length - 1];
+    observer.fn(f.chars.map((entry) => ({ type: 'attributes', attributeName: 'src', target: entry.image })));
+    f.eventSource.emit('chat-changed');
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    assert.ok(f.chars.every((entry) => /\/characters\/new-char\.png\?tm_avatar_hd=\d+$/.test(entry.image.getAttribute('src'))));
 });

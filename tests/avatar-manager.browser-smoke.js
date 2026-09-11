@@ -16,9 +16,14 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
 (async () => {
     const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64');
     const server = http.createServer((request, response) => {
-        if (request.url === '/avatar.gif') {
+        if (request.url === '/avatar.gif' || request.url.startsWith('/thumbnail?') || request.url.startsWith('/characters/hd-char.png?') || request.url.startsWith('/User%20Avatars/hd-user.png?')) {
             response.writeHead(200, { 'content-type': 'image/gif', 'cache-control': 'public,max-age=3600' });
             response.end(gif);
+            return;
+        }
+        if (request.url.startsWith('/User%20Avatars/missing.png?')) {
+            response.writeHead(404, { 'content-type': 'text/plain' });
+            response.end('missing');
             return;
         }
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -86,6 +91,22 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const context = { characters: [{ avatar: 'char.png', name: 'Character' }], characterId: 0, groupId: null, name1: 'User', chatId:'Chat One', chatMetadata:{ integrity:'chat-smoke-1' }, getCurrentChatId(){ return this.chatId; }, eventSource: { on() {}, removeListener() {} }, eventTypes: {}, reloadCurrentChat: async () => { hostChatReloads += 1; } };
                 const runtime = modules.createAvatarRuntime({ store, getContext: () => context, getThemeName: () => document.querySelector('#themes').value });
                 await runtime.start();
+                const hdFixture = document.createElement('div');
+                hdFixture.innerHTML = '<div class="mes" is_user="false" is_system="false"><div class="avatar"><img data-hd="character" src="/thumbnail?type=avatar&amp;file=hd-char.png"></div></div>' +
+                    '<div class="mes" is_user="true" is_system="false"><div class="avatar"><img data-hd="user" src="/thumbnail?type=persona&amp;file=hd-user.png"></div></div>' +
+                    '<div class="mes" is_user="true" is_system="false"><div class="avatar"><img data-hd="fallback" src="/thumbnail?type=persona&amp;file=missing.png" srcset="/thumbnail?type=persona&amp;file=missing@2x.png 2x"></div></div>';
+                const hdMessages = [...hdFixture.children];
+                hdMessages.forEach((message) => document.querySelector('#chat').appendChild(message));
+                await delay(80);
+                const hdCharacter = document.querySelector('[data-hd="character"]');
+                const hdUser = document.querySelector('[data-hd="user"]');
+                const hdFallback = document.querySelector('[data-hd="fallback"]');
+                const hostHdEnhancement = /\/characters\/hd-char\.png\?tm_avatar_hd=\d+$/.test(hdCharacter.getAttribute('src')) &&
+                    /\/User%20Avatars\/hd-user\.png\?tm_avatar_hd=\d+$/.test(hdUser.getAttribute('src')) &&
+                    hdFallback.getAttribute('src') === '/thumbnail?type=persona&file=missing.png' &&
+                    hdFallback.getAttribute('srcset') === '/thumbnail?type=persona&file=missing@2x.png 2x';
+                hdMessages.forEach((message) => message.remove());
+                await delay(20);
                 const themePreviewSource = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
                 const sheets = modules.createUiSheets({
                     getPopupLayer: () => document.body,
@@ -556,12 +577,12 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, scopePanelFour, unbindPanelThree, toolbarScopeSaved, scopedGlobalEditor, toolbarVisible, toolbarIsolated, toolbarTextOnly, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, boundScopePanel, scopedThemeEditor, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, unbindUiResponsive, unbindDangerLast, nativeInputHandlingMs, nativeResponsiveInputs,
                     nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
-                    hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
+                    hostHdEnhancement, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','unbindPanelThree','toolbarScopeSaved','scopedGlobalEditor','toolbarVisible','toolbarIsolated','toolbarTextOnly','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','unbindUiResponsive','unbindDangerLast','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','unbindPanelThree','toolbarScopeSaved','scopedGlobalEditor','toolbarVisible','toolbarIsolated','toolbarTextOnly','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','unbindUiResponsive','unbindDangerLast','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','hostHdEnhancement','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);
