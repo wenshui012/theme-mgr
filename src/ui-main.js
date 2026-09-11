@@ -62,6 +62,7 @@
     var avatarStore = null;
     var avatarImageProcessor = null;
     var avatarLibraryApi = null;
+    var avatarTransferApi = null;
     var avatarRuntime = null;
     var avatarPageController = null;
     var appShellApi = null;
@@ -202,7 +203,7 @@
                 !modules.themeBindings ||
                 !modules.themeAppearance ||
                 !modules.createAvatarStore || !modules.createAvatarStorageCoordinator || !modules.createAvatarImageProcessor ||
-                !modules.avatarLibrary || !modules.createAvatarRuntime || !modules.createAvatarPage || !modules.avatarPage ||
+                !modules.avatarLibrary || !modules.createAvatarTransfer || !modules.createAvatarRuntime || !modules.createAvatarPage || !modules.avatarPage ||
                 !modules.createBackgrounds ||
                 !modules.createUiSheets ||
                 !modules.createUiEvents || !modules.appShell ||
@@ -231,6 +232,7 @@
                     if (!modules.createAvatarStorageCoordinator) missing.push('avatar-sync.js');
                     if (!modules.createAvatarImageProcessor) missing.push('avatar-image-tools.js');
                     if (!modules.avatarLibrary) missing.push('avatar-library.js');
+                    if (!modules.createAvatarTransfer) missing.push('avatar-transfer.js');
                     if (!modules.createAvatarRuntime) missing.push('avatar-runtime.js');
                     if (!modules.createAvatarPage || !modules.avatarPage) missing.push('avatar-page.js');
                     if (!modules.createBackgrounds) missing.push('backgrounds.js');
@@ -359,6 +361,14 @@
             avatarStore = avatarCoordinator.store;
             global.ThemeMgrAvatarStorageCoordinator = avatarCoordinator;
             avatarImageProcessor = modules.createAvatarImageProcessor({ imageTools: imageToolsApi });
+            avatarTransferApi = modules.createAvatarTransfer({
+                store: avatarStore,
+                coordinator: avatarCoordinator,
+                library: avatarLibraryApi,
+                avatarStorage: modules.avatarStorage,
+                loadUiData: load,
+                pluginVersion: TM_VERSION,
+            });
             avatarRuntime = modules.createAvatarRuntime({
                 window: global,
                 document: document,
@@ -398,9 +408,14 @@
                 loadUiData: load,
                 saveUiData: save,
                 library: avatarLibraryApi,
+                transfer: avatarTransferApi,
                 onImportingChange: function (importing) {
                     var button = document.getElementById('tm-avatar-add');
-                    if (button) button.disabled = importing || !avatarCoordinator || !avatarCoordinator.canMutate();
+                    if (button) button.disabled = importing || avatarTransferApi && avatarTransferApi.getState().busy || !avatarCoordinator || !avatarCoordinator.canMutate();
+                },
+                onExportingChange: function (exporting) {
+                    var button = document.getElementById('tm-avatar-add');
+                    if (button) button.disabled = exporting || !avatarCoordinator || !avatarCoordinator.canMutate();
                 },
                 onBatchModeChange: function (enabled) {
                     var button = document.getElementById('tm-avatar-batch-toggle');
@@ -6735,6 +6750,8 @@
     function openAvatarSettingsSheet() {
         var d = load();
         var state = avatarPageController ? avatarPageController.getState() : { count: 0, categories: 0, series: 0 };
+        var storageState = avatarCoordinator ? avatarCoordinator.getState() : { phase: 'blocked' };
+        var backupDisabled = !avatarTransferApi || state.importing || state.exporting || storageState.phase === 'blocked' || storageState.phase === 'conflict';
         var updateState = getExtensionUpdateState();
         var updateView = getExtensionUpdateView(updateState);
         var interfaceHtml =
@@ -6744,14 +6761,30 @@
             '<button class="tm-btn tm-btn-outline" id="tm-avatar-open-categories" style="width:100%;text-align:left"><i class="fa-solid fa-tags"></i> 管理分类（' + state.categories + '个）</button>';
         var dataHtml =
             '<div class="tm-storage-info">头像 ' + state.count + ' 张 / 分类 ' + state.categories + ' 个 / 系列 ' + state.series + ' 个</div>' +
-            '<div class="tm-hint" style="margin-bottom:9px">图片、绑定与原头像调整继续由 Avatar 安全存储管理；分类、标签和系列是独立轻量标注。</div>' +
+            '<div class="tm-hint" style="margin-bottom:9px">完整备份包含头像主图、缩略图、分类整理、绑定、候选/激活、原头像显示调整和来源意图；不包含酒馆 Character/Persona 原图、其他美化设置或运行时缓存。</div>' +
+            '<button class="tm-btn tm-btn-safe" id="tm-avatar-create-backup" style="width:100%;margin-bottom:9px"' + (backupDisabled ? ' disabled' : '') + '><i class="fa-solid fa-box-archive"></i> 创建完整备份</button>' +
             '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>';
         var extensionHtml = '<div class="tm-update-panel' + (updateState.phase === 'ready' && updateState.available ? ' has-update' : '') + '"><div class="tm-update-panel-head"><div><strong>美化管理 v' + esc(TM_VERSION) + '</strong><span class="tm-update-status">' + esc(updateView.status) + '</span></div><button type="button" class="tm-btn tm-btn-outline tm-update-action" id="tm-avatar-update-action" data-update-mode="' + esc(updateView.mode) + '"' + (updateView.disabled ? ' disabled' : '') + '><i class="fa-solid ' + (updateView.mode === 'update' ? 'fa-download' : 'fa-rotate') + '"></i> ' + esc(updateView.action) + '</button></div><div class="tm-update-detail"' + (updateView.detail ? '' : ' hidden') + '>' + esc(updateView.detail) + '</div><div class="tm-plugin-credit"><span>作者：温水</span><span>发布于毛毛雨美化群、旅程</span></div></div>';
-        var sheet = createSheet(['<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>头像设置</div>', buildDisclosureHtml('tm-avatar-settings-interface', '界面显示', 'fa-display', interfaceHtml), buildDisclosureHtml('tm-avatar-settings-organize', '分类与整理', 'fa-tags', organizeHtml), buildDisclosureHtml('tm-avatar-settings-data', '数据管理', 'fa-database', dataHtml), extensionHtml].join(''));
+        var sheet = createSheet(['<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>', organizeHtml, buildDisclosureHtml('tm-avatar-settings-interface', '界面显示', 'fa-display', interfaceHtml), buildDisclosureHtml('tm-avatar-settings-data', '数据管理', 'fa-database', dataHtml), extensionHtml].join(''));
         sheet.classList.add('tm-sheet-tall', 'tm-settings-sheet');
         sheet.querySelector('#tm-avatar-follow-appearance').addEventListener('change', function () { var next = load(); next.followThemeAppearance = this.checked; save(next); syncManagerAppearance(); });
         sheet.querySelector('#tm-avatar-auto-hide-header').addEventListener('change', function () { var next = load(); next.autoHideHeader = this.checked; save(next); syncManagerAppearance(); });
         sheet.querySelector('#tm-avatar-open-categories').addEventListener('click', function () { closeSheet(sheet); avatarPageController.openCategoryManager(); });
+        sheet.querySelector('#tm-avatar-create-backup').addEventListener('click', function () {
+            var button = this;
+            var original = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在校验并创建…';
+            avatarTransferApi.createFullBackup().then(function (result) {
+                toast(result.source && result.source.consistency === 'last-known-good' ? '完整备份已创建（离线最后已验证副本）' : '完整备份已创建并通过校验');
+            }).catch(function (error) {
+                toast(error && error.message ? error.message : '完整备份创建失败', true);
+            }).finally(function () {
+                button.innerHTML = original;
+                var current = avatarCoordinator && avatarCoordinator.getState();
+                button.disabled = !avatarTransferApi || !current || current.phase === 'blocked' || current.phase === 'conflict';
+            });
+        });
         sheet.querySelector('#tm-clear-all-user-avatar-overrides').addEventListener('click', function () { if (!confirm('彻底恢复 User 原头像？\n这会清除全局 User 头像、所有美化专属 User 头像与候选，以及 User 原头像调整；不会删除头像库。')) return; avatarRuntime.clearAllUserOverrides().then(function () { closeSheet(sheet); toast('已彻底恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复失败', true); }); });
         sheet.querySelector('#tm-avatar-update-action').addEventListener('click', function () { var current = getExtensionUpdateState(); if (current.phase === 'ready' && current.available) openExtensionUpdateConfirmSheet(); else { this.disabled = true; checkExtensionUpdate(true).catch(function () { toast('检查更新失败；请检查网络、Git 状态或酒馆服务日志', true); }); } });
         syncExtensionUpdatePanel();

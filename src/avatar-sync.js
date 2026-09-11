@@ -434,6 +434,8 @@
         var revision = 0;
         var fingerprint = '';
         var writeTail = Promise.resolve();
+        var readBarrierDepth = 0;
+        var readBarrierRequested = false;
 
         function publish(next) {
             state = Object.assign({}, state, next);
@@ -699,6 +701,50 @@
         }
         function ensureWritable() {
             if (!state.writable) throw makeError('AVATAR_STORAGE_READ_ONLY', state.offline ? '头像后端离线，当前仅可读取最后已验证缓存' : '头像存储当前为只读', clone(state));
+            if (readBarrierDepth > 0) throw makeError('AVATAR_EXPORT_IN_PROGRESS', '头像导出期间暂时不能修改头像数据');
+        }
+        function consistencyState() {
+            return initialize().then(function () {
+                if (!activeStore || state.phase === 'blocked' || state.phase === 'conflict' ||
+                    (state.phase !== 'local-ready' && state.phase !== 'remote-ready')) {
+                    throw makeError('AVATAR_BACKUP_UNAVAILABLE', '头像存储异常或冲突时不能创建完整备份', clone(state));
+                }
+                var base = {
+                    phase: state.phase,
+                    authority: state.authoritative,
+                    consistency: state.offline ? 'last-known-good' : 'verified',
+                    offline: state.offline === true,
+                    datasetId: state.authoritative === 'remote' ? datasetId : null,
+                    revision: state.authoritative === 'remote' ? revision : null,
+                    fingerprint: state.authoritative === 'remote' ? fingerprint : '',
+                };
+                if (state.authoritative !== 'remote' || state.offline) return base;
+                return remote.readState().then(function (current) {
+                    if (!current || current.status !== 'present' || current.datasetId !== datasetId || current.revision !== revision || current.fingerprint !== fingerprint) {
+                        throw makeError('AVATAR_EXPORT_SOURCE_CHANGED', '远端头像数据在备份期间发生变化，请刷新后重试', {
+                            expected: { datasetId: datasetId, revision: revision, fingerprint: fingerprint },
+                            current: current && { status: current.status, datasetId: current.datasetId, revision: current.revision, fingerprint: current.fingerprint },
+                        });
+                    }
+                    normalizeManifest(current.manifest, storageApi);
+                    return base;
+                });
+            });
+        }
+        function runReadBarrier(task) {
+            if (typeof task !== 'function') return Promise.reject(makeError('AVATAR_EXPORT_INVALID', '头像只读任务无效'));
+            return ensureActive().then(function () {
+                if (readBarrierDepth > 0 || readBarrierRequested) throw makeError('AVATAR_EXPORT_BUSY', '已有头像只读任务正在进行');
+                readBarrierRequested = true;
+                return writeTail.then(function () {
+                    readBarrierDepth += 1;
+                    readBarrierRequested = false;
+                    return task();
+                }).finally(function () {
+                    readBarrierRequested = false;
+                    if (readBarrierDepth > 0) readBarrierDepth -= 1;
+                });
+            });
         }
         function isBindingMutation(method) {
             return method === 'putBinding' || method === 'deleteBinding' || method === 'mutateBindings';
@@ -837,9 +883,12 @@
         }
         function callWrite(method, args) {
             return ensureActive().then(function (store) {
+                if (readBarrierRequested || readBarrierDepth > 0) throw makeError('AVATAR_EXPORT_IN_PROGRESS', '头像导出期间暂时不能修改头像数据');
                 ensureWritable();
-                if (state.authoritative === 'local') return store[method].apply(store, args);
-                var task = writeTail.then(function () { return remoteMutation(method, args); });
+                var task = writeTail.then(function () {
+                    if (state.authoritative === 'local') return store[method].apply(store, args);
+                    return remoteMutation(method, args);
+                });
                 writeTail = task.catch(function () {});
                 return task;
             });
@@ -860,7 +909,9 @@
             initialize: initialize,
             store: store,
             getState: function () { return clone(state); },
-            canMutate: function () { return state.writable === true && (state.phase === 'local-ready' || state.phase === 'remote-ready'); },
+            getConsistencyState: consistencyState,
+            runReadBarrier: runReadBarrier,
+            canMutate: function () { return !readBarrierRequested && readBarrierDepth === 0 && state.writable === true && (state.phase === 'local-ready' || state.phase === 'remote-ready'); },
             isRuntimeReady: function () { return state.phase === 'local-ready' || state.phase === 'remote-ready'; },
         };
     };

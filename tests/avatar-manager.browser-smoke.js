@@ -3,7 +3,7 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '..');
-const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'ui-sheets.js', 'avatar-runtime.js', 'avatar-library.js', 'avatar-page.js', 'styles.js'];
+const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'ui-sheets.js', 'avatar-library.js', 'avatar-transfer.js', 'avatar-runtime.js', 'avatar-page.js', 'styles.js'];
 const viewports = [
     { label: 'desktop', width: 1280, height: 800 },
     { label: 'mobile-360', width: 360, height: 720, isMobile: true, hasTouch: true },
@@ -129,8 +129,20 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                         return loader;
                     },
                 });
+                const avatarUiData = {};
+                const exportDownloads = [];
+                const localSource = { phase:'local-ready', authority:'local', consistency:'verified', offline:false, datasetId:null, revision:null, fingerprint:'' };
+                const transfer = modules.createAvatarTransfer({
+                    store,
+                    library: modules.avatarLibrary,
+                    avatarStorage: modules.avatarStorage,
+                    loadUiData: () => avatarUiData,
+                    coordinator: { runReadBarrier: (task) => task(), getConsistencyState: async () => ({ ...localSource }) },
+                    pluginVersion: 'browser-smoke',
+                    download: (downloadBlob, filename) => { exportDownloads.push({ blob:downloadBlob, filename }); },
+                });
                 const pageController = modules.createAvatarPage({
-                    store, processor, runtime, imageLoader: loaderApi,
+                    store, processor, runtime, transfer, imageLoader: loaderApi,
                     getRoot: () => document.querySelector('[data-tm-page="avatars"]'),
                     createSheet: sheets.createSheet,
                     createActionDialog: sheets.createActionDialog,
@@ -155,6 +167,19 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 await frame();
                 const avatarId = imported[0].asset.id;
                 const persisted = await store.getAsset(avatarId);
+                const exportDialog = await pageController.openAssetMenu(avatarId);
+                exportDialog.querySelector('[data-avatar-dialog-action="export"]').click();
+                for (let attempt = 0; attempt < 50 && pageController.getState().exporting; attempt++) await delay(10);
+                const expectedMain = Uint8Array.from(atob(persisted.imageData.split(',')[1]), (value) => value.charCodeAt(0));
+                const singleMain = new Uint8Array(await exportDownloads[0].blob.arrayBuffer());
+                await transfer.exportBatch([avatarId]);
+                const batchExport = await transfer.verifyImageExportBlob(exportDownloads[1].blob);
+                await transfer.createFullBackup();
+                const fullBackup = await transfer.verifyBackupBlob(exportDownloads[2].blob);
+                const browserExports = singleMain.length === expectedMain.length && singleMain.every((value, index) => value === expectedMain[index]) &&
+                    batchExport.restorable === false && batchExport.images.length === 1 && batchExport.images[0].id === avatarId &&
+                    fullBackup.inventory.assets.length === 1 && /^sha256:[a-f0-9]{64}$/.test(fullBackup.manifest.source.avatarSnapshotSha256) &&
+                    /^sha256:[a-f0-9]{64}$/.test(fullBackup.manifest.source.avatarLibrarySha256);
                 const outsideAvatar = document.createElement('div');
                 outsideAvatar.className = 'avatar';
                 const outsideAvatarImage = document.createElement('img');
@@ -605,7 +630,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     R_responsive:responsive, reset:reset.x===0&&reset.y===0&&reset.scale===1&&reset.rotate===0&&reset.flipX===false&&reset.flipY===false,
                     gridUsesThumb, gridStable, mainSize:[persisted.width,persisted.height], alpha:persisted.mimeType==='image/png',
                     restoredUser, cleanup, loaderDisconnects, noOverflow, backendCalls, inputHandlingMs,
-                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, scopePanelFour, unbindPanelThree, toolbarScopeSaved, scopedGlobalEditor, toolbarVisible, toolbarIsolated, toolbarTextOnly, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, boundScopePanel, scopedThemeEditor, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, unbindUiResponsive, unbindDangerLast, nativeInputHandlingMs, nativeResponsiveInputs,
+                    emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, browserExports, scopePanelFour, unbindPanelThree, toolbarScopeSaved, scopedGlobalEditor, toolbarVisible, toolbarIsolated, toolbarTextOnly, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, boundScopePanel, scopedThemeEditor, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, unbindUiResponsive, unbindDangerLast, nativeInputHandlingMs, nativeResponsiveInputs,
                     nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
                     originalUploadPreserved, hostHdEnhancement, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
@@ -613,7 +638,7 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','unbindPanelThree','toolbarScopeSaved','scopedGlobalEditor','toolbarVisible','toolbarIsolated','toolbarTextOnly','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','unbindUiResponsive','unbindDangerLast','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','originalUploadPreserved','hostHdEnhancement','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','browserExports','scopePanelFour','unbindPanelThree','toolbarScopeSaved','scopedGlobalEditor','toolbarVisible','toolbarIsolated','toolbarTextOnly','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','unbindUiResponsive','unbindDangerLast','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','originalUploadPreserved','hostHdEnhancement','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);

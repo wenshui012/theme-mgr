@@ -659,3 +659,62 @@ test('a CAS 409 freezes the coordinator in conflict and is never retried', async
     assert.equal(remote.calls.filter(call => call.startsWith('commit:')).length, 1);
     await assert.rejects(sync.store.putSourceIntent({ targetKey: 'character:a' }), error => error.code === 'AVATAR_STORAGE_BLOCKED' || error.code === 'AVATAR_STORAGE_READ_ONLY');
 });
+
+test('read barrier blocks new Avatar writes until the consistent export read completes', async () => {
+    const local = memoryStore({ assets: [asset('a')] });
+    const sync = coordinator({ local, remote: createRemote({ status: 'empty' }), isBackendAvailable: () => false });
+    await sync.initialize();
+    let release;
+    let entered = false;
+    const barrier = sync.runReadBarrier(() => {
+        entered = true;
+        return new Promise((resolve) => { release = resolve; });
+    });
+    while (!entered) await Promise.resolve();
+    assert.equal(sync.canMutate(), false);
+    await assert.rejects(sync.store.putSourceIntent({ targetKey: 'user:global' }), (error) => error.code === 'AVATAR_EXPORT_IN_PROGRESS');
+    release(true);
+    await barrier;
+    assert.equal(sync.canMutate(), true);
+    await sync.store.putSourceIntent({ targetKey: 'user:global' });
+    assert.ok(await local.getSourceIntent('user:global'));
+});
+
+test('read barrier waits for an already accepted local write before capturing a snapshot', async () => {
+    const local = memoryStore({ assets: [asset('a')] });
+    const originalPut = local.putSourceIntent;
+    let writeStarted = false;
+    let releaseWrite;
+    local.putSourceIntent = function (record) {
+        writeStarted = true;
+        return new Promise((resolve, reject) => {
+            releaseWrite = () => originalPut.call(local, record).then(resolve, reject);
+        });
+    };
+    const sync = coordinator({ local, remote: createRemote({ status: 'empty' }), isBackendAvailable: () => false });
+    await sync.initialize();
+    const pendingWrite = sync.store.putSourceIntent({ targetKey: 'user:global' });
+    while (!writeStarted) await Promise.resolve();
+    let barrierEntered = false;
+    const barrier = sync.runReadBarrier(() => { barrierEntered = true; });
+    await Promise.resolve();
+    assert.equal(barrierEntered, false);
+    releaseWrite();
+    await pendingWrite;
+    await barrier;
+    assert.equal(barrierEntered, true);
+    assert.ok(await local.getSourceIntent('user:global'));
+});
+
+test('remote consistency state revalidates the live revision and fingerprint and fails closed on drift', async () => {
+    const original = { status: 'present', datasetId: 'dataset-remote', revision: 7, fingerprint: fingerprint(7), manifest: emptyManifest() };
+    const remote = createRemote(original);
+    const sync = coordinator({ local: memoryStore(), cache: memoryStore(), remote });
+    await sync.initialize();
+    const stamp = await sync.getConsistencyState();
+    assert.equal(stamp.consistency, 'verified');
+    assert.equal(stamp.revision, 7);
+    assert.equal(stamp.fingerprint, fingerprint(7));
+    remote.setState(Object.assign({}, original, { revision: 8, fingerprint: fingerprint(8) }));
+    await assert.rejects(sync.getConsistencyState(), (error) => error.code === 'AVATAR_EXPORT_SOURCE_CHANGED');
+});

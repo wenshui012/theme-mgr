@@ -4,16 +4,17 @@ const fs = require('node:fs');
 
 const build = require('../scripts/build-single-file.js');
 
-test('development loader exposes the fixed 27-module release order', () => {
+test('development loader exposes the fixed 28-module release order', () => {
     const entry = build.parseDevelopmentEntry();
-    assert.equal(entry.modules.length, 27);
+    assert.equal(entry.modules.length, 28);
     assert.deepEqual(entry.modules, build.EXPECTED_MODULES);
     assert.ok(entry.modules.indexOf('src/update-manager.js') > entry.modules.indexOf('src/theme-api.js'));
     assert.ok(entry.modules.indexOf('src/update-manager.js') < entry.modules.indexOf('src/ui-main.js'));
     assert.ok(entry.modules.indexOf('src/avatar-sync.js') > entry.modules.indexOf('src/avatar-storage.js'));
     assert.ok(entry.modules.indexOf('src/avatar-sync.js') < entry.modules.indexOf('src/avatar-runtime.js'));
     assert.ok(entry.modules.indexOf('src/avatar-library.js') > entry.modules.indexOf('src/avatar-image-tools.js'));
-    assert.ok(entry.modules.indexOf('src/avatar-library.js') < entry.modules.indexOf('src/avatar-runtime.js'));
+    assert.ok(entry.modules.indexOf('src/avatar-library.js') < entry.modules.indexOf('src/avatar-transfer.js'));
+    assert.ok(entry.modules.indexOf('src/avatar-transfer.js') < entry.modules.indexOf('src/avatar-runtime.js'));
     assert.ok(entry.modules.indexOf('src/app-shell.js') > entry.modules.indexOf('src/image-loader.js'));
     assert.ok(entry.modules.indexOf('src/app-shell.js') < entry.modules.indexOf('src/ui-main.js'));
 });

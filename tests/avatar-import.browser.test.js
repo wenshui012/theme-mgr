@@ -3,7 +3,7 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '..');
-const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'avatar-page.js'];
+const MODULES = ['image-tools.js', 'avatar-storage.js', 'avatar-image-tools.js', 'image-loader.js', 'avatar-library.js', 'avatar-page.js'];
 
 function assert(condition, message) {
     if (!condition) throw new Error(message);

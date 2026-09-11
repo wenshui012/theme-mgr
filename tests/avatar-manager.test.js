@@ -16,8 +16,18 @@ function loadModules(window) {
     window.Math = Math;
     window.JSON = JSON;
     window.Number = Number;
+    window.Object = Object;
+    window.Uint8Array = Uint8Array;
+    window.Uint32Array = Uint32Array;
+    window.ArrayBuffer = ArrayBuffer;
+    window.DataView = DataView;
+    window.TextEncoder = TextEncoder;
+    window.TextDecoder = TextDecoder;
+    window.Blob = Blob;
+    window.atob = atob;
+    window.btoa = btoa;
     const context = vm.createContext(window);
-    ['image-tools.js', 'avatar-storage.js', 'avatar-sync.js', 'avatar-image-tools.js', 'avatar-runtime.js', 'avatar-library.js', 'avatar-page.js'].forEach((name) => {
+    ['image-tools.js', 'avatar-storage.js', 'avatar-sync.js', 'avatar-image-tools.js', 'avatar-library.js', 'avatar-transfer.js', 'avatar-runtime.js', 'avatar-page.js'].forEach((name) => {
         vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', name), 'utf8'), context, { filename: name });
     });
     return window.ThemeMgrModules;
@@ -407,8 +417,11 @@ test('44 avatar grid starts with the original-avatar slot and cards stay image-o
     assert.match(f.lastDialog(), /调整为 User 头像/);
     assert.match(f.lastDialog(), /调整为当前角色头像/);
     assert.match(f.lastDialog(), /查看完整大图/);
+    assert.match(f.lastDialog(), /导出主图/);
     assert.match(f.lastDialog(), /管理头像/);
     assert.match(f.lastDialog(), /is-weak/);
+    assert.ok(f.lastDialog().indexOf('查看完整大图') < f.lastDialog().indexOf('导出主图'));
+    assert.ok(f.lastDialog().indexOf('导出主图') < f.lastDialog().indexOf('管理头像'));
 });
 test('45 Avatar bottom bar uses the lightweight four-entry layout and scoped unbind actions', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
@@ -449,6 +462,7 @@ test('batch avatar selection updates only the clicked card and count while delet
     const selectionBranch = clickHandler.slice(clickHandler.lastIndexOf('if (batchMode)'), clickHandler.indexOf('} else openAssetMenu'));
     const deleteHandler = source.slice(source.indexOf('function deleteBatchSelection'), source.indexOf('function openJoinSeriesSheet'));
     assert.match(source, /data-avatar-batch="delete"/);
+    assert.match(source, /data-avatar-batch="export"/);
     assert.match(source, /确定删除已选的 ' \+ count \+ ' 张头像吗/);
     assert.match(clickHandler, /syncBatchCard\(card\); updateBatchCount\(\);/);
     assert.doesNotMatch(selectionBranch, /render\(\)/);
@@ -1236,6 +1250,22 @@ test('81 avatar settings exposes a confirmed complete User recovery action', () 
     assert.match(source, /头像库和角色头像不会被删除/);
     assert.match(source, /previousAvatarRuntime\.stop\(\)/);
     assert.match(source, /global\.location\.reload\(\)/);
+});
+
+test('Avatar export entry points and simplified settings layout expose no recovery or backup import UI', () => {
+    const pageSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
+    const uiSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    const settings = uiSource.slice(uiSource.indexOf('function openAvatarSettingsSheet'), uiSource.indexOf('function openSettingsSheet'));
+    assert.match(pageSource, /dialogItem\('view'[\s\S]*dialogItem\('export'[\s\S]*dialogItem\('manage'/);
+    assert.match(pageSource, /transfer\.exportSingle\(id\)/);
+    assert.match(pageSource, /transfer\.exportBatch\(ids\)/);
+    assert.match(settings, />设置<\/div>/);
+    assert.match(settings, /管理分类（' \+ state\.categories \+ '个）/);
+    assert.match(settings, /创建完整备份/);
+    assert.match(settings, /avatarTransferApi\.createFullBackup\(\)/);
+    assert.ok(settings.indexOf('organizeHtml') < settings.indexOf("buildDisclosureHtml('tm-avatar-settings-interface'"));
+    assert.ok(settings.indexOf("buildDisclosureHtml('tm-avatar-settings-interface'") < settings.indexOf("buildDisclosureHtml('tm-avatar-settings-data'"));
+    assert.doesNotMatch(settings, /分类与整理|tm-avatar-settings-organize|导入备份|恢复备份/);
 });
 
 test('82 development module loading replaces stale-build scripts and uses a build cache token', () => {
