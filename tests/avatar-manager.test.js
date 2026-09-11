@@ -270,6 +270,12 @@ function runtimeFixture(options = {}) {
         canStart: options.canStart,
         loadNativeImage: options.loadNativeImage || (async (nativeAsset) => ({ ...nativeAsset, imageData: 'data:image/png;base64,AA==' })),
         preloadHostImage: options.preloadHostImage,
+        renderHostAsset: options.renderHostAsset || (async (avatarAsset, view) => ({
+            ...avatarAsset,
+            imageData: 'data:image/png;base64,YmFrZWQ=',
+            mimeType: 'image/png',
+            bakedView: view,
+        })),
         overwriteHostAvatar: options.overwriteHostAvatar,
     });
     return { win, doc, chat, chars, user, context, eventSource: context.eventSource || eventSource, store: bundle.store, runtime, mods, setTheme: (x) => { theme = x; } };
@@ -1466,24 +1472,67 @@ test('deferred global save never clears higher-priority chat or theme bindings',
     assert.equal((await f.store.getBinding('chat-integrity:chat-uuid-1', 'user:global')).avatarId, 'chat');
 });
 
-test('deferred original overwrite sends the raw library asset and leaves every binding unchanged', async () => {
+test('deferred original overwrite sends the baked adjustment, clears stale native adjustment, and leaves every binding unchanged', async () => {
     const calls = [];
+    const renders = [];
     const f = runtimeFixture({
         seed: { assets: [asset('replacement'), asset('global'), asset('theme')], bindings: [
             { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
             { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'theme', view: {} },
-        ] },
+        ], nativeViews: [{ targetKey: 'user:global', sourceKey: 'raw-user.png', view: { scale: 1.2 } }] },
+        renderHostAsset: async (avatarAsset, view, geometry) => {
+            renders.push({ avatarAsset, view, geometry });
+            return { ...avatarAsset, imageData: 'data:image/png;base64,YmFrZWQ=', mimeType: 'image/png' };
+        },
         overwriteHostAvatar: async input => { calls.push(input); return { ok: true }; },
     });
     const before = JSON.stringify(await f.store.listBindings());
     await f.runtime.beginEdit({ kind: 'user', avatarId: 'replacement', bindingMode: 'deferred' });
     f.runtime.setScale(1.8);
     await f.runtime.saveEdit('original');
+    assert.equal(renders.length, 1);
+    assert.equal(renders[0].view.scale, 1.8);
+    assert.equal(renders[0].geometry.crop.width, 800 / 1.8);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].asset.id, 'replacement');
-    assert.equal(calls[0].asset.imageData, asset('replacement').imageData);
-    assert.equal(Object.prototype.hasOwnProperty.call(calls[0].asset, 'view'), false);
+    assert.equal(calls[0].asset.imageData, 'data:image/png;base64,YmFrZWQ=');
+    assert.equal(calls[0].asset.mimeType, 'image/png');
     assert.equal(JSON.stringify(await f.store.listBindings()), before);
+    assert.equal(await f.store.getNativeView('user:global'), null);
+});
+
+test('original overwrite render failure preserves the editor, host avatar, bindings, and native adjustment', async () => {
+    let hostWrites = 0;
+    const f = runtimeFixture({
+        seed: { assets: [asset('replacement'), asset('global')], bindings: [
+            { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
+        ], nativeViews: [{ targetKey: 'user:global', sourceKey: 'raw-user.png', view: { scale: 1.2 } }] },
+        renderHostAsset: async () => { throw Object.assign(new Error('render failed'), { code: 'AVATAR_ORIGINAL_RENDER_FAILED' }); },
+        overwriteHostAvatar: async () => { hostWrites += 1; return { ok: true }; },
+    });
+    const bindingsBefore = JSON.stringify(await f.store.listBindings());
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'replacement', bindingMode: 'deferred' });
+    f.runtime.setScale(1.8);
+    await assert.rejects(f.runtime.saveEdit('original'), error => error.code === 'AVATAR_ORIGINAL_RENDER_FAILED');
+    assert.equal(hostWrites, 0);
+    assert.equal(f.runtime.getState().state, 'editing');
+    assert.equal(JSON.stringify(await f.store.listBindings()), bindingsBefore);
+    assert.equal((await f.store.getNativeView('user:global')).view.scale, 1.2);
+});
+
+test('baked avatar geometry matches the logical object-view-box crop and preserves output dimensions', () => {
+    const geometry = modules.avatarRuntime.bakedViewGeometry(asset('portrait', { width: 600, height: 1200 }), {
+        x: .2, y: -.1, scale: 2, rotate: 90, flipX: true,
+    });
+    assert.equal(geometry.outputWidth, 600);
+    assert.equal(geometry.outputHeight, 1200);
+    assert.equal(geometry.crop.width, 300);
+    assert.equal(geometry.crop.height, 600);
+    assert.equal(geometry.needsAlpha, true);
+    assert.ok(geometry.source.canvasWidth >= geometry.source.rotatedWidth + 2);
+    assert.ok(geometry.source.canvasHeight >= geometry.source.rotatedHeight + 2);
+    assert.ok(geometry.draw.destinationWidth > 0);
+    assert.ok(geometry.draw.destinationHeight > 0);
 });
 
 test('94 Avatar adjustment opens directly and its toolbar owns four save scopes plus three exact unbind scopes', () => {
@@ -1507,6 +1556,8 @@ test('94 Avatar adjustment opens directly and its toolbar owns four save scopes 
     assert.doesNotMatch(runtimeSource, /↔ 水平|↕ 垂直|⌫ 解绑|保存…/);
     assert.match(panelBlock, /已绑定 ' \+ Number\(scopes\.theme/);
     assert.match(runtimeSource, /clearApplicationScope\(clearKind, clearScope\)/);
+    assert.match(runtimeSource, /当前缩放、位置、旋转和翻转会写入新原头像/);
+    assert.doesNotMatch(runtimeSource, /当前调整参数不会写进原图/);
 });
 
 test('95 host original overwrite uses SillyTavern avatar endpoints and overwrite fields', () => {

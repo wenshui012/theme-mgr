@@ -9597,7 +9597,7 @@
 })(window);
 /* END MODULE 19/27: src/avatar-library.js */
 
-/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:0f58569a6732670945c17b86d12735dc79d066a4f994c3371d5f8ea51da877bd */
+/* BEGIN MODULE 20/27: src/avatar-runtime.js | sha256:7a0d274812ea0f86497912c727aa0d336c2b6039ec05a9fd2c7a1b34abacb944 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -9901,6 +9901,47 @@
             previewEnvelope: true,
         };
     }
+    function bakedViewGeometry(asset, view) {
+        view = normalizeView(view);
+        var width = Math.max(1, Math.round(Number(asset && asset.width) || 1));
+        var height = Math.max(1, Math.round(Number(asset && asset.height) || 1));
+        var transformsSource = Boolean(view.rotate || view.flipX || view.flipY);
+        var source = transformsSource ? transformedSourceGeometry(asset, view) : {
+            canvasWidth: width,
+            canvasHeight: height,
+            logicalWidth: width,
+            logicalHeight: height,
+            logicalLeft: 0,
+            logicalTop: 0,
+        };
+        var visibleWidth = source.logicalWidth / view.scale;
+        var visibleHeight = source.logicalHeight / view.scale;
+        var left = source.logicalLeft + (source.logicalWidth - visibleWidth) / 2 - view.x * visibleWidth;
+        var top = source.logicalTop + (source.logicalHeight - visibleHeight) / 2 - view.y * visibleHeight;
+        var intersectionLeft = Math.max(0, left);
+        var intersectionTop = Math.max(0, top);
+        var intersectionRight = Math.min(source.canvasWidth, left + visibleWidth);
+        var intersectionBottom = Math.min(source.canvasHeight, top + visibleHeight);
+        var intersectionWidth = Math.max(0, intersectionRight - intersectionLeft);
+        var intersectionHeight = Math.max(0, intersectionBottom - intersectionTop);
+        return {
+            source: source,
+            crop: { x: left, y: top, width: visibleWidth, height: visibleHeight },
+            draw: {
+                sourceX: intersectionLeft,
+                sourceY: intersectionTop,
+                sourceWidth: intersectionWidth,
+                sourceHeight: intersectionHeight,
+                destinationX: (intersectionLeft - left) / visibleWidth * width,
+                destinationY: (intersectionTop - top) / visibleHeight * height,
+                destinationWidth: intersectionWidth / visibleWidth * width,
+                destinationHeight: intersectionHeight / visibleHeight * height,
+            },
+            outputWidth: width,
+            outputHeight: height,
+            needsAlpha: Boolean(view.rotate || intersectionWidth < visibleWidth - 0.01 || intersectionHeight < visibleHeight - 0.01),
+        };
+    }
     function editorPreviewAsset(asset) {
         if (!asset || !/^data:image\//i.test(asset.thumbData || '') || asset.thumbData === asset.imageData) return asset;
         var width = Math.max(1, Number(asset.width) || 1);
@@ -9937,6 +9978,7 @@
         var getThemeName = options.getThemeName || function () { return ''; };
         var onError = options.onError || function () {};
         var overwriteHostAvatar = options.overwriteHostAvatar;
+        var renderHostAsset = options.renderHostAsset;
         var preloadHostImage = options.preloadHostImage || function (source) {
             return new Promise(function (resolve) {
                 if (typeof win.Image !== 'function') { resolve(''); return; }
@@ -10126,6 +10168,51 @@
             if (cached.sources.size >= SOURCE_CACHE_LIMIT) cached.sources.delete(cached.sources.keys().next().value);
             cached.sources.set(signature, source);
             return source;
+        }
+        function bakeHostAsset(asset, view) {
+            view = normalizeView(view);
+            var changed = Boolean(view.x || view.y || view.scale !== 1 || view.rotate || view.flipX || view.flipY);
+            if (!changed) return Promise.resolve(clone(asset));
+            if (typeof renderHostAsset === 'function') {
+                return Promise.resolve(renderHostAsset(clone(asset), clone(view), bakedViewGeometry(asset, view)));
+            }
+            if (!doc || typeof doc.createElement !== 'function' || typeof win.Image !== 'function') {
+                return Promise.reject(Object.assign(new Error('当前环境无法导出调整后的原头像'), { code: 'AVATAR_ORIGINAL_RENDER_UNAVAILABLE' }));
+            }
+            var rendered = sourceForView(asset, view);
+            var geometry = bakedViewGeometry(asset, view);
+            var inputMime = clean(asset && asset.mimeType).toLowerCase();
+            var mimeType = geometry.needsAlpha ? 'image/png' : (inputMime === 'image/webp' ? 'image/webp' : (inputMime === 'image/png' ? 'image/png' : 'image/jpeg'));
+            return new Promise(function (resolve, reject) {
+                var image = new win.Image();
+                image.onload = function () {
+                    try {
+                        var canvas = doc.createElement('canvas');
+                        canvas.width = geometry.outputWidth;
+                        canvas.height = geometry.outputHeight;
+                        var context = canvas.getContext('2d', { alpha: mimeType !== 'image/jpeg' });
+                        if (!context) throw new Error('canvas context unavailable');
+                        var draw = geometry.draw;
+                        if (draw.sourceWidth > 0 && draw.sourceHeight > 0) {
+                            context.drawImage(image, draw.sourceX, draw.sourceY, draw.sourceWidth, draw.sourceHeight, draw.destinationX, draw.destinationY, draw.destinationWidth, draw.destinationHeight);
+                        }
+                        var imageData = canvas.toDataURL(mimeType, mimeType === 'image/jpeg' ? 0.92 : undefined);
+                        if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(imageData)) throw new Error('avatar render output invalid');
+                        resolve(Object.assign({}, asset, {
+                            imageData: imageData,
+                            mimeType: mimeType,
+                            width: geometry.outputWidth,
+                            height: geometry.outputHeight,
+                        }));
+                    } catch (error) {
+                        reject(Object.assign(new Error('无法导出调整后的原头像'), { code: 'AVATAR_ORIGINAL_RENDER_FAILED', cause: error }));
+                    }
+                };
+                image.onerror = function () {
+                    reject(Object.assign(new Error('无法读取待覆盖的头像图片'), { code: 'AVATAR_ORIGINAL_RENDER_FAILED' }));
+                };
+                image.src = rendered.source;
+            });
         }
         function resolvedImageSource(image, attributeSource) {
             return clean(image && (image.currentSrc || image.src)) || clean(attributeSource);
@@ -10803,7 +10890,7 @@
                     scopeOptionHtml('save-chat', '绑定当前聊天', '最高优先级，仅当前聊天使用', scopes.chat, false, '当前已设置') +
                     scopeOptionHtml('save-theme', '绑定当前美化', '可以继续添加头像及其调整数据', scopes.theme, false, '已绑定 ' + Number(scopes.theme && scopes.theme.count || 1) + ' 张头像') +
                     scopeOptionHtml('save-global', editor.target.kind === 'user' ? '覆盖 User 全局头像' : '覆盖该角色全局头像', '作为没有聊天或美化绑定时的默认头像', scopes.global, false, '当前已设置') +
-                    scopeOptionHtml('save-original', editor.target.kind === 'user' ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', '不清除绑定；当前调整参数不会写进原图', scopes.original, false);
+                    scopeOptionHtml('save-original', editor.target.kind === 'user' ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', '不清除绑定；当前调整会写入原头像', scopes.original, false);
             } else {
                 panel.innerHTML = '<div class="tm-avatar-editor-scope-title"><span>解除头像绑定</span><small>只清除所选范围</small></div>' +
                     '<div class="tm-avatar-editor-priority">清除后立即退出调整，并按聊天 ＞ 美化 ＞ 全局 ＞ 原头像回退。</div>' +
@@ -11188,10 +11275,17 @@
             if (effectiveBindingMode === 'original') {
                 var originalEditor = editor;
                 var originalContext = contextSafe();
-                return writeHostOriginal(originalEditor.target.kind, originalEditor.target, originalEditor.asset, originalContext).then(function (result) {
+                return bakeHostAsset(originalEditor.asset, originalEditor.view).then(function (bakedAsset) {
+                    if (!bakedAsset || !/^data:image\/(?:jpeg|png|webp);base64,/i.test(clean(bakedAsset.imageData))) {
+                        throw Object.assign(new Error('调整后的原头像导出结果无效'), { code: 'AVATAR_ORIGINAL_RENDER_FAILED' });
+                    }
+                    return writeHostOriginal(originalEditor.target.kind, originalEditor.target, bakedAsset, originalContext);
+                }).then(function (result) {
+                    return store.deleteNativeView(originalEditor.target.key).then(function () { return result; });
+                }).then(function (result) {
                     finishEditorUi();
                     editor = null;
-                    nativeImageCache.clear();
+                    invalidateHostSourceCache();
                     sequence += 1;
                     var reload = originalContext && typeof originalContext.reloadCurrentChat === 'function'
                         ? Promise.resolve().then(function () { return originalContext.reloadCurrentChat(); })
@@ -11272,7 +11366,7 @@
                 var saveScope = action.slice(5);
                 if (saveScope === 'original' && typeof win.confirm === 'function') {
                     var originalLabel = editor && editor.target.kind === 'user' ? '当前人设原头像' : '当前角色卡卡面';
-                    if (!win.confirm('确定用这张图片覆盖' + originalLabel + '？\n现有聊天、美化和全局绑定不会被清除；当前调整参数不会写进原图。')) return;
+                    if (!win.confirm('确定用调整后的图片覆盖' + originalLabel + '？\n当前缩放、位置、旋转和翻转会写入新原头像；现有聊天、美化和全局绑定不会被清除。')) return;
                 }
                 button.disabled = true;
                 saveEdit(saveScope).catch(function (error) { button.disabled = false; onError(error); });
@@ -11740,6 +11834,7 @@
         objectViewBoxForView: objectViewBoxForView,
         transformedSourceGeometry: transformedSourceGeometry,
         editorPreviewGeometry: editorPreviewGeometry,
+        bakedViewGeometry: bakedViewGeometry,
     };
 })(window);
 /* END MODULE 20/27: src/avatar-runtime.js */
