@@ -88,13 +88,13 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 const store = modules.createAvatarStore({ dbName });
                 const processor = modules.createAvatarImageProcessor({});
                 let hostChatReloads = 0;
-                let bakedHostAsset = null;
+                let hostOriginalAsset = null;
                 const context = { characters: [{ avatar: 'char.png', name: 'Character' }], characterId: 0, groupId: null, name1: 'User', chatId:'Chat One', chatMetadata:{ integrity:'chat-smoke-1' }, getCurrentChatId(){ return this.chatId; }, eventSource: { on() {}, removeListener() {} }, eventTypes: {}, reloadCurrentChat: async () => { hostChatReloads += 1; } };
                 const runtime = modules.createAvatarRuntime({
                     store,
                     getContext: () => context,
                     getThemeName: () => document.querySelector('#themes').value,
-                    overwriteHostAvatar: async (input) => { bakedHostAsset = input.asset; return { ok:true }; },
+                    overwriteHostAvatar: async (input) => { hostOriginalAsset = input.asset; return { ok:true }; },
                 });
                 await runtime.start();
                 const hdFixture = document.createElement('div');
@@ -155,28 +155,30 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                 await frame();
                 const avatarId = imported[0].asset.id;
                 const persisted = await store.getAsset(avatarId);
+                const outsideAvatar = document.createElement('div');
+                outsideAvatar.className = 'avatar';
+                const outsideAvatarImage = document.createElement('img');
+                outsideAvatarImage.src = persisted.imageData;
+                outsideAvatar.appendChild(outsideAvatarImage);
+                document.body.appendChild(outsideAvatar);
                 await runtime.beginEdit({ kind:'user', avatarId, bindingMode:'deferred' });
                 runtime.setScale(2);
-                const bakedToolbarRoot = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot;
-                const bakedRotate = bakedToolbarRoot.querySelector('[data-view="rotate"]');
-                bakedRotate.value = '20'; bakedRotate.dispatchEvent(new Event('input', { bubbles:true }));
-                bakedToolbarRoot.querySelector('[data-action="flip-x"]').click();
+                const originalToolbarRoot = document.querySelector('#tm-avatar-editor-toolbar').shadowRoot;
+                const originalRotate = originalToolbarRoot.querySelector('[data-view="rotate"]');
+                originalRotate.value = '20'; originalRotate.dispatchEvent(new Event('input', { bubbles:true }));
+                originalToolbarRoot.querySelector('[data-action="flip-x"]').click();
                 await frame();
                 await runtime.saveEdit('original');
-                const bakedImageResult = await new Promise((resolve) => {
-                    const image = new Image();
-                    image.onload = () => {
-                        const canvas = document.createElement('canvas');
-                        canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
-                        const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
-                        resolve({ size:[image.naturalWidth, image.naturalHeight], cornerAlpha:context.getImageData(0, 0, 1, 1).data[3] });
-                    };
-                    image.onerror = () => resolve({ size:[0, 0], cornerAlpha:0 });
-                    image.src = bakedHostAsset && bakedHostAsset.imageData || '';
-                });
-                const bakedOriginalExport = Boolean(bakedHostAsset && bakedHostAsset.imageData !== persisted.imageData && bakedHostAsset.mimeType === 'image/png' &&
-                    bakedImageResult.size[0] === persisted.width && bakedImageResult.size[1] === persisted.height && bakedImageResult.cornerAlpha > 0 &&
-                    !(await store.getNativeView('user:global')));
+                const originalDisplayView = await store.getNativeView('user:global');
+                const adjustedChatImage = document.querySelector('#chat .mes[is_user="true"] .avatar > img');
+                const originalUploadPreserved = Boolean(hostOriginalAsset && hostOriginalAsset.imageData === persisted.imageData &&
+                    hostOriginalAsset.width === persisted.width && hostOriginalAsset.height === persisted.height &&
+                    originalDisplayView && originalDisplayView.view.scale === 2 && originalDisplayView.view.rotate === 20 && originalDisplayView.view.flipX === true &&
+                    adjustedChatImage && adjustedChatImage.style.getPropertyValue('object-view-box') &&
+                    outsideAvatarImage.src === persisted.imageData && !outsideAvatarImage.style.getPropertyValue('object-view-box'));
+                await store.deleteNativeView('user:global');
+                await runtime.reconcile();
+                outsideAvatar.remove();
                 hostChatReloads = 0;
                 const reloadedStore = modules.createAvatarStore({ dbName });
                 await reloadedStore.ready;
@@ -606,12 +608,12 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
                     emptyLayout, fullPreview, sharedThemePreview, fullLibraryPickerRemoved, scopePanelFour, unbindPanelThree, toolbarScopeSaved, scopedGlobalEditor, toolbarVisible, toolbarIsolated, toolbarTextOnly, sliderControls, responsiveInputs, mirrorControls, themedToolbar, tiltPersisted, contentOnlyScale, simultaneousBindings, themeSwitching, sourceRewriteReapplied, seamlessNewMessage, boundScopePanel, scopedThemeEditor, adaptivePreviewReplacesBound, adaptivePreviewSurvivesHostRefresh, temporarySemantics, themeBindingModified, boundPoolSwitching, themeClearFallback, characterIsolation, completeUserRecovery, menuDelete, bindingUiResponsive, bindingActionsAbovePool, unbindUiResponsive, unbindDangerLast, nativeInputHandlingMs, nativeResponsiveInputs,
                     nativeEntryReady, nativeEditorOpened, nativeLightweightPreview, nativeViewPersisted:Boolean(nativeSave.saved&&persistedNativeView&&persistedNativeView.view.scale===1.3), nativeBindingCleared, nativeContentMoved, nativeUsesSharedCrop, nativeShapePreserved,
                     nativeMenuCombined, nativeUserEditorOpened, nativeUserLightweightPreview, nativeUserPersisted:Boolean(nativeUserSave.saved&&persistedUserNativeView&&persistedUserNativeView.view.scale===1.25), nativeUserMoved, nativeUserRestored, nativeCharacterRestored,
-                    bakedOriginalExport, hostHdEnhancement, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
+                    originalUploadPreserved, hostHdEnhancement, hostUntouched:window.__themeMeta.keep&&document.querySelector('#custom-style').textContent===customBefore,
                 };
             }, { label: viewport.label });
 
             for (const [key, value] of Object.entries(report)) {
-                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','unbindPanelThree','toolbarScopeSaved','scopedGlobalEditor','toolbarVisible','toolbarIsolated','toolbarTextOnly','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','unbindUiResponsive','unbindDangerLast','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','bakedOriginalExport','hostHdEnhancement','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
+                if (/^[A-R]_/.test(key) || ['reset','gridUsesThumb','gridStable','alpha','restoredUser','cleanup','noOverflow','emptyLayout','fullPreview','sharedThemePreview','fullLibraryPickerRemoved','scopePanelFour','unbindPanelThree','toolbarScopeSaved','scopedGlobalEditor','toolbarVisible','toolbarIsolated','toolbarTextOnly','sliderControls','responsiveInputs','mirrorControls','themedToolbar','tiltPersisted','contentOnlyScale','simultaneousBindings','themeSwitching','sourceRewriteReapplied','seamlessNewMessage','boundScopePanel','scopedThemeEditor','adaptivePreviewReplacesBound','adaptivePreviewSurvivesHostRefresh','temporarySemantics','themeBindingModified','boundPoolSwitching','themeClearFallback','characterIsolation','completeUserRecovery','menuDelete','bindingUiResponsive','bindingActionsAbovePool','unbindUiResponsive','unbindDangerLast','nativeResponsiveInputs','nativeEntryReady','nativeEditorOpened','nativeLightweightPreview','nativeViewPersisted','nativeBindingCleared','nativeContentMoved','nativeUsesSharedCrop','nativeShapePreserved','nativeMenuCombined','nativeUserEditorOpened','nativeUserLightweightPreview','nativeUserPersisted','nativeUserMoved','nativeUserRestored','nativeCharacterRestored','originalUploadPreserved','hostHdEnhancement','hostUntouched'].includes(key)) assert(value === true, `${viewport.label}: ${key} failed`);
             }
             assert(report.mainSize[0] === 2048 && report.mainSize[1] === 1024, `${viewport.label}: high resolution resize failed`);
             assert(report.backendCalls === 0, `${viewport.label}: backend was called`);
