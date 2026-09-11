@@ -141,6 +141,32 @@ test('multi-select ZIP contains exact main images and a non-restorable verified 
     assert.deepEqual(Buffer.from(entries.find((entry) => /--b\.png$/.test(entry.path)).data), Buffer.from(PNG_HEADER.concat([2])));
 });
 
+test('multi-select ZIP validates six images including a multi-megabyte persisted main image', async () => {
+    const assets = [asset('large', 9, 3_400_000)].concat(Array.from({ length: 5 }, (_, index) => asset(`small-${index}`, index + 1, 128)));
+    const f = fixture({
+        seed: { assets },
+        uiData: {},
+        isMobile: () => true,
+    });
+    const ids = assets.map((item) => item.id);
+    const result = await f.transfer.exportBatch(ids);
+    assert.equal(result.count, 6);
+    assert.equal(f.downloads.length, 1);
+    const verified = await f.transfer.verifyImageExportBlob(f.downloads[0].blob);
+    assert.deepEqual(Array.from(verified.images, (item) => item.id), ids);
+    assert.equal(verified.images[0].bytes, 3_400_009);
+});
+
+test('large Base64 validation uses constant call stack and still rejects malformed padding', () => {
+    const valid = pngData(7, 3_400_000);
+    const info = modules.avatarTransfer.dataUrlInfo(valid);
+    assert.equal(info.bytes, 3_400_009);
+    assert.throws(
+        () => modules.avatarTransfer.dataUrlInfo(valid.slice(0, -4) + 'A=== '),
+        (error) => error.code === 'AVATAR_IMAGE_INVALID',
+    );
+});
+
 test('full backup preserves the complete Avatar Manager inventory and excludes unrelated settings', async () => {
     const f = fixture();
     const result = await f.transfer.createFullBackup();
@@ -280,6 +306,20 @@ test('mobile payload limits reject large exports before ZIP construction or down
     assert.equal(f.downloads.length, 0);
 });
 
+test('mobile full backup reports the configured payload limit for multi-megabyte images', async () => {
+    const f = fixture({
+        seed: { assets: [asset('large-backup', 9, 3_400_000)] },
+        uiData: {},
+        isMobile: () => true,
+        limits: { payloadBytes: 3 * 1024 * 1024, archiveBytes: 8 * 1024 * 1024, fileBytes: 6 * 1024 * 1024, files: 32 },
+    });
+    await assert.rejects(
+        f.transfer.createFullBackup(),
+        (error) => error.code === 'AVATAR_EXPORT_LIMIT' && /安全上限/.test(error.message),
+    );
+    assert.equal(f.downloads.length, 0);
+});
+
 test('mobile file-count limits stop a large library before any main image is expanded', async () => {
     const assets = Array.from({ length: 40 }, (_, index) => asset(`mobile-${index}`, index));
     const baseStore = modules.createAvatarStore({ adapter: modules.avatarStorage.createMemoryAdapter({ assets }) });
@@ -299,7 +339,7 @@ test('mobile file-count limits stop a large library before any main image is exp
 });
 
 test('large-library backup reads full assets sequentially and stays within explicit bounds', async () => {
-    const assets = Array.from({ length: 64 }, (_, index) => asset(`a${index}`, index + 1));
+    const assets = [asset('large-library-image', 9, 3_400_000)].concat(Array.from({ length: 63 }, (_, index) => asset(`a${index}`, index + 1)));
     const baseStore = modules.createAvatarStore({ adapter: modules.avatarStorage.createMemoryAdapter({ assets }) });
     let activeReads = 0;
     let maxReads = 0;

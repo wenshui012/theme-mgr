@@ -9648,7 +9648,7 @@
 })(window);
 /* END MODULE 19/28: src/avatar-library.js */
 
-/* BEGIN MODULE 20/28: src/avatar-transfer.js | sha256:2db00b1a6c97e5efa2f925ec9add899a3c30a47875ff1fe7747e5c68e04e25df */
+/* BEGIN MODULE 20/28: src/avatar-transfer.js | sha256:74c5ca57f9b7f6412293a4245b2e324b23cf00c5a99413d97f837d9590535d61 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var BACKUP_FORMAT = 'theme-mgr-avatar-backup';
@@ -9700,15 +9700,53 @@
         try { return JSON.parse(text); }
         catch (error) { throw makeError('AVATAR_ARCHIVE_INVALID', (label || 'JSON') + ' 无法解析', { cause: clean(error && error.name) }); }
     }
+    function isBase64Code(code) {
+        return code >= 65 && code <= 90 || code >= 97 && code <= 122 || code >= 48 && code <= 57 || code === 43 || code === 47;
+    }
+    function isDataWhitespace(code) {
+        return code >= 9 && code <= 13 || code === 32 || code === 160 || code === 5760 || code >= 8192 && code <= 8202 ||
+            code === 8232 || code === 8233 || code === 8239 || code === 8287 || code === 12288 || code === 65279;
+    }
     function dataUrlInfo(dataUrl) {
-        var match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/i.exec(clean(dataUrl));
-        if (!match) throw makeError('AVATAR_IMAGE_INVALID', '头像图片不是受支持的持久化 Data URL');
-        var base64 = match[2].replace(/\s/g, '');
-        if (!base64 || base64.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) {
+        var value = clean(dataUrl);
+        var comma = value.indexOf(',');
+        var header = comma > 0 ? /^data:(image\/(?:jpeg|png|webp));base64$/i.exec(value.slice(0, comma)) : null;
+        if (!header) throw makeError('AVATAR_IMAGE_INVALID', '头像图片不是受支持的持久化 Data URL');
+        var start = comma + 1;
+        var encodedLength = 0;
+        var padding = 0;
+        var sawPadding = false;
+        var chunks = null;
+        var segmentStart = start;
+        for (var i = start; i < value.length; i += 1) {
+            var code = value.charCodeAt(i);
+            if (isDataWhitespace(code)) {
+                if (!chunks) chunks = [];
+                if (i > segmentStart) chunks.push(value.slice(segmentStart, i));
+                segmentStart = i + 1;
+                continue;
+            }
+            encodedLength += 1;
+            if (code === 61) {
+                padding += 1;
+                sawPadding = true;
+                if (padding > 2) throw makeError('AVATAR_IMAGE_INVALID', '头像图片 Base64 无效');
+            } else if (sawPadding || !isBase64Code(code)) {
+                throw makeError('AVATAR_IMAGE_INVALID', '头像图片 Base64 无效');
+            }
+        }
+        if (!encodedLength || encodedLength % 4 !== 0 || encodedLength < 4 ||
+            padding === 1 && (encodedLength - padding) % 4 !== 3 || padding === 2 && (encodedLength - padding) % 4 !== 2) {
             throw makeError('AVATAR_IMAGE_INVALID', '头像图片 Base64 无效');
         }
-        var padding = /==$/.test(base64) ? 2 : (/=$/.test(base64) ? 1 : 0);
-        return { mime: match[1].toLowerCase(), base64: base64, bytes: base64.length / 4 * 3 - padding };
+        var base64;
+        if (chunks) {
+            if (segmentStart < value.length) chunks.push(value.slice(segmentStart));
+            base64 = chunks.join('');
+        } else {
+            base64 = value.slice(start);
+        }
+        return { mime: header[1].toLowerCase(), base64: base64, bytes: encodedLength / 4 * 3 - padding };
     }
     function decodeDataUrl(dataUrl, expectedMime) {
         var info = dataUrlInfo(dataUrl);
