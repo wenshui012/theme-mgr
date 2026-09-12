@@ -321,7 +321,8 @@ function pageFixture(seed = [], bindings = [], options = {}) {
     let lastDialog = '';
     const page = mods.createAvatarPage({
         document: doc, store, processor, runtime, imageLoader, getRoot: () => pageRoot,
-        closeManager() {}, toast() {}, confirm: () => true, canMutate: options.canMutate,
+        closeManager() {}, toast: options.toast || function () {}, confirm: () => true, canMutate: options.canMutate,
+        onImportStateChange: options.onImportStateChange,
         loadUiData: () => uiData, saveUiData: () => {},
         createActionDialog(html) { lastDialog = html; return new Element('div'); },
     });
@@ -404,6 +405,91 @@ test('43 Avatar Page exposes a visible importing state until the pipeline settle
     await pending;
     assert.equal(custom.getState().importing, false);
 });
+test('Avatar Page processes 8 imported images sequentially and reports live counts', async () => {
+    let active = 0;
+    let maximum = 0;
+    const states = [];
+    const f = pageFixture([], [], {
+        processor: {
+            processFile: file => new Promise(resolve => {
+                active += 1;
+                maximum = Math.max(maximum, active);
+                setTimeout(() => {
+                    active -= 1;
+                    resolve(asset(file.name));
+                }, 1);
+            }),
+        },
+        onImportStateChange: state => states.push(state),
+    });
+    await f.page.mount();
+    const files = Array.from({ length: 8 }, (_, index) => ({ name: 'batch-' + index, type: 'image/jpeg' }));
+    const results = await f.page.importFiles(files);
+    assert.equal(maximum, 1, 'only one decoded asset may be held by the import pipeline at a time');
+    assert.equal(results.filter(result => result.ok).length, 8);
+    assert.equal((await f.store.listAssets()).length, 8);
+    assert.equal(states.some(state => state.phase === 'running' && state.total === 8 && state.processed > 0), true);
+    assert.equal(f.page.getImportState().success, 8);
+});
+
+test('a failure at image 37 preserves earlier files and continues later files', async () => {
+    let current = 0;
+    const f = pageFixture([], [], {
+        processor: {
+            processFile: async () => {
+                current += 1;
+                if (current === 37) throw Object.assign(new Error('broken image'), { code: 'AVATAR_DECODE_FAILED' });
+                return asset('partial-' + current);
+            },
+        },
+    });
+    await f.page.mount();
+    const files = Array.from({ length: 45 }, (_, index) => ({ name: 'image-' + (index + 1) + '.png', type: 'image/png' }));
+    const results = await f.page.importFiles(files);
+    assert.equal(results.length, 45);
+    assert.equal(results[36].ok, false);
+    assert.equal((await f.store.listAssets()).length, 44);
+    const finalState = JSON.parse(JSON.stringify(f.page.getImportState()));
+    assert.deepEqual(finalState, {
+        phase: 'completed', total: 45, processed: 45, success: 44, failed: 1,
+        failures: [{ name: 'image-37.png', code: 'AVATAR_DECODE_FAILED', message: '图片解码失败' }],
+        startedAt: finalState.startedAt,
+        completedAt: finalState.completedAt,
+        error: '',
+    });
+});
+
+test('an import keeps running after Avatar Page unmount and restores progress on remount', async () => {
+    let releaseFirst;
+    let calls = 0;
+    const states = [];
+    const toasts = [];
+    const first = new Promise(resolve => { releaseFirst = resolve; });
+    const f = pageFixture([], [], {
+        processor: {
+            processFile: async file => {
+                calls += 1;
+                if (calls === 1) await first;
+                return asset(file.name);
+            },
+        },
+        onImportStateChange: state => states.push(state),
+        toast: (message, error) => toasts.push({ message, error }),
+    });
+    await f.page.mount();
+    const pending = f.page.importFiles([{ name: 'one' }, { name: 'two' }, { name: 'three' }]);
+    await Promise.resolve();
+    assert.match(f.pageRoot.notice.innerHTML, /正在添加头像 1 \/ 3/);
+    assert.match(f.pageRoot.notice.innerHTML, /可关闭头像管理继续使用酒馆，请勿刷新或关闭酒馆页面/);
+    f.page.unmount();
+    releaseFirst();
+    await pending;
+    assert.equal(f.page.getImportState().success, 3);
+    assert.equal(states.at(-1).phase, 'completed');
+    assert.match(toasts.at(-1).message, /已添加 3 张头像/);
+    await f.page.mount();
+    assert.match(f.pageRoot.notice.innerHTML, /导入完成：成功 3 张，失败 0 张/);
+});
 test('44 avatar grid starts with the original-avatar slot and cards stay image-only', async () => {
     const f = pageFixture([asset('1000116691')]);
     await f.page.mount();
@@ -453,6 +539,9 @@ test('45 Avatar bottom bar uses the lightweight four-entry layout and scoped unb
     assert.match(source, /avatarPageController\.pickFiles\(\)/);
     assert.match(source, /avatarPageController\.toggleBatchMode\(\)/);
     assert.match(source, /defaultPage: lastAppPage/);
+    assert.match(source, /onImportStateChange: syncAvatarImportIndicator/);
+    assert.match(source, /\[data-tm-page-target="avatars"\],#tm-avatar-add/);
+    assert.match(styles, /tm-avatar-import-active::after/);
     assert.match(source, /lastAppPage = appShellController\.getActivePage\(\)/);
 });
 

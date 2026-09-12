@@ -412,7 +412,9 @@
                 onImportingChange: function (importing) {
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = importing || avatarTransferApi && avatarTransferApi.getState().busy || !avatarCoordinator || !avatarCoordinator.canMutate();
+                    syncAvatarImportIndicator();
                 },
+                onImportStateChange: syncAvatarImportIndicator,
                 onExportingChange: function (exporting) {
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = exporting || !avatarCoordinator || !avatarCoordinator.canMutate();
@@ -3768,6 +3770,7 @@
             onChange: function (activePage) {
                 lastAppPage = activePage;
                 if (activePage === 'avatars') renderAvatarBottomStatus();
+                syncAvatarImportIndicator();
             },
         });
         return appShellController;
@@ -3883,6 +3886,7 @@
         syncExtensionUpdateIndicator();
         checkExtensionUpdate(false).catch(function () {});
         createAppShellController(ov);
+        syncAvatarImportIndicator();
         if (lastAppPage === 'avatars') {
             avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
         } else if (lastAppPage === 'themes') {
@@ -5517,6 +5521,26 @@
         var item = curTheme ? getLogicalItem(curTheme, load()) : null;
         var text = item ? item.name : (curTheme || '未选择主题');
         el.innerHTML = '<div class="tm-status-dot ' + dotClass + '"></div><span class="tm-status-text">' + esc(text) + '</span>';
+    }
+
+    function syncAvatarImportIndicator(importState) {
+        if (!importState && avatarPageController && typeof avatarPageController.getImportState === 'function') importState = avatarPageController.getImportState();
+        importState = importState || { phase: 'idle', total: 0, processed: 0 };
+        var active = importState.phase === 'running';
+        var targets = Array.prototype.slice.call(document.querySelectorAll('[data-tm-page-target="avatars"],#tm-avatar-add'));
+        var switcher = document.getElementById('tm-page-switcher-button');
+        if (switcher && (!appShellController || appShellController.getActivePage() === 'avatars')) targets.push(switcher);
+        targets.forEach(function (element) {
+            element.classList.toggle('tm-avatar-import-active', active);
+            if (active) element.setAttribute('data-avatar-import-progress', importState.processed + '/' + importState.total);
+            else element.removeAttribute('data-avatar-import-progress');
+        });
+        var addButton = document.getElementById('tm-avatar-add');
+        if (addButton) {
+            addButton.disabled = active || avatarTransferApi && avatarTransferApi.getState().busy || !avatarCoordinator || !avatarCoordinator.canMutate();
+            addButton.title = active ? '头像正在后台导入 ' + importState.processed + ' / ' + importState.total : '添加头像';
+            addButton.setAttribute('aria-label', addButton.title);
+        }
     }
 
     function renderAvatarBottomStatus() {

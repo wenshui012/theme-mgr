@@ -824,6 +824,80 @@
                 throw error;
             });
         }
+        function stageManifestMutation(method, args, uploadedRefs) {
+            var manifest = clone(remoteManifest || emptyManifest());
+            var refs = new Map(remoteRefs);
+            var applyArgs = args.slice();
+            var result;
+            if (method === 'putAsset') {
+                var asset = storageApi.normalizeAsset(args[0]);
+                var record = assetManifestRecord(asset, uploadedRefs);
+                var assetIndex = manifest.assets.findIndex(function (item) { return item.id === asset.id; });
+                if (assetIndex === -1) manifest.assets.push(record);
+                else manifest.assets[assetIndex] = record;
+                refs.set(asset.id, uploadedRefs);
+                applyArgs = [asset];
+                result = clone(asset);
+            } else if (method === 'deleteAsset') {
+                var assetId = clean(args[0]);
+                var removed = manifest.assets.some(function (asset) { return asset.id === assetId; });
+                var removedBindings = manifest.bindings.filter(function (binding) { return binding.avatarId === assetId; }).map(clone);
+                var sourceIntents = new Map(manifest.sourceIntents.map(function (record) { return [record.id, record]; }));
+                var preparedIntents = new Map();
+                removedBindings.forEach(function (binding) {
+                    if (binding.targetKey !== 'user:global' && !/^character:/.test(binding.targetKey || '')) return;
+                    var intent = storageApi.normalizeSourceIntent({ targetKey: binding.targetKey });
+                    sourceIntents.set(intent.id, intent);
+                    preparedIntents.set(intent.targetKey, intent);
+                });
+                manifest.assets = manifest.assets.filter(function (asset) { return asset.id !== assetId; });
+                manifest.bindings = manifest.bindings.filter(function (binding) { return binding.avatarId !== assetId; });
+                manifest.sourceIntents = Array.from(sourceIntents.values()).map(clone);
+                refs.delete(assetId);
+                applyArgs = [assetId, Array.from(preparedIntents.values()).map(clone)];
+                result = { removed: removed, bindings: removedBindings };
+            } else if (method === 'clear') {
+                manifest = emptyManifest();
+                refs.clear();
+                applyArgs = [];
+            } else if (method === 'putNativeView') {
+                var nativeView = storageApi.normalizeNativeView(args[0]);
+                var nativeViews = new Map(manifest.nativeViews.map(function (record) { return [record.id, record]; }));
+                nativeViews.set(nativeView.id, nativeView);
+                manifest.nativeViews = Array.from(nativeViews.values()).map(clone);
+                applyArgs = [nativeView];
+                result = clone(nativeView);
+            } else if (method === 'deleteNativeView') {
+                var nativeTargetKey = clean(args[0]);
+                var nativeId = storageApi.nativeViewId(nativeTargetKey);
+                var nativeRemoved = manifest.nativeViews.some(function (record) { return record.id === nativeId; });
+                manifest.nativeViews = manifest.nativeViews.filter(function (record) { return record.id !== nativeId; });
+                applyArgs = [nativeTargetKey];
+                result = nativeRemoved;
+            } else if (method === 'putSourceIntent') {
+                var sourceIntent = storageApi.normalizeSourceIntent(args[0]);
+                var sourceIntentMap = new Map(manifest.sourceIntents.map(function (record) { return [record.id, record]; }));
+                sourceIntentMap.set(sourceIntent.id, sourceIntent);
+                manifest.sourceIntents = Array.from(sourceIntentMap.values()).map(clone);
+                applyArgs = [sourceIntent];
+                result = clone(sourceIntent);
+            } else if (method === 'deleteSourceIntent') {
+                var sourceTargetKey = clean(args[0]);
+                var sourceId = storageApi.sourceIntentId(sourceTargetKey);
+                var sourceRemoved = manifest.sourceIntents.some(function (record) { return record.id === sourceId; });
+                manifest.sourceIntents = manifest.sourceIntents.filter(function (record) { return record.id !== sourceId; });
+                applyArgs = [sourceTargetKey];
+                result = sourceRemoved;
+            } else {
+                throw makeError('AVATAR_MUTATION_INVALID', '头像远端写入类型无效', { method: method });
+            }
+            return {
+                manifest: normalizeManifest(manifest, storageApi).manifest,
+                refs: refs,
+                applyArgs: applyArgs,
+                result: result,
+            };
+        }
         function remoteMutation(method, args) {
             ensureWritable();
             if (isBindingMutation(method)) return remoteBindingMutation(method, args);
@@ -838,43 +912,36 @@
                 });
             }
             return prepare.then(function () {
-                var staging = storeForSnapshot(activeSnapshot);
-                return Promise.resolve(staging[method].apply(staging, preparedArgs)).then(function (result) {
-                    return staging.readSnapshot().then(function (nextSnapshot) {
-                        var refs = new Map(remoteRefs);
-                        if (method === 'putAsset') refs.set(preparedArgs[0].id, uploadedRefs);
-                        if (method === 'deleteAsset') refs.delete(clean(preparedArgs[0]));
-                        if (method === 'clear') refs.clear();
-                        var manifest = manifestFromSnapshot(nextSnapshot, refs, storageApi);
-                        return remote.commit({ expectedRevision: revision, datasetId: datasetId, manifest: manifest }).then(function (committed) {
-                            var normalized = normalizeManifest(committed.manifest, storageApi);
-                            if (committed.datasetId !== datasetId || committed.revision !== revision + 1 || !/^sha256:[a-f0-9]{64}$/.test(committed.fingerprint) ||
-                                stableStringify(normalized.manifest) !== stableStringify(manifest)) {
-                                throw makeError('AVATAR_COMMIT_VERIFY_FAILED', '头像远端写入响应校验失败');
-                            }
-                            return cacheStore.replaceSnapshot(nextSnapshot).then(function () {
-                                return controlStore.put(controlFromState(committed, normalized.manifest));
-                            }).then(function () {
-                                setActiveSnapshot(nextSnapshot);
-                                remoteManifest = normalized.manifest;
-                                remoteRefs = normalized.refs;
-                                revision = committed.revision;
-                                fingerprint = committed.fingerprint;
-                                publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'present', reason: '', error: null });
-                                return result;
-                            }).catch(function (cacheError) {
-                                publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'present', reason: 'cache-update-failed' });
-                                throw makeError('AVATAR_CACHE_UPDATE_FAILED', '远端头像已提交，但本地只读缓存更新失败；已停止后续写入', { cause: cacheError.code || cacheError.message });
-                            });
-                        }).catch(function (error) {
-                            if (error && error.code === 'AVATAR_REVISION_CONFLICT') {
-                                publish({ phase: 'conflict', authoritative: null, writable: false, offline: false, remote: 'present', reason: 'revision-conflict', error: errorSummary(error) });
-                            } else if (!error || error.code !== 'AVATAR_CACHE_UPDATE_FAILED') {
-                                publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'error', reason: 'commit-uncertain', error: errorSummary(error) });
-                            }
-                            throw error;
-                        });
+                var staged = stageManifestMutation(method, preparedArgs, uploadedRefs);
+                var manifest = staged.manifest;
+                return remote.commit({ expectedRevision: revision, datasetId: datasetId, manifest: manifest }).then(function (committed) {
+                    var normalized = normalizeManifest(committed.manifest, storageApi);
+                    if (committed.datasetId !== datasetId || committed.revision !== revision + 1 || !/^sha256:[a-f0-9]{64}$/.test(committed.fingerprint) ||
+                        stableStringify(normalized.manifest) !== stableStringify(manifest)) {
+                        throw makeError('AVATAR_COMMIT_VERIFY_FAILED', '头像远端写入响应校验失败');
+                    }
+                    return Promise.resolve(cacheStore[method].apply(cacheStore, staged.applyArgs)).then(function () {
+                        return controlStore.put(controlFromState(committed, normalized.manifest));
+                    }).then(function () {
+                        return activeStore[method].apply(activeStore, staged.applyArgs);
+                    }).then(function () {
+                        remoteManifest = normalized.manifest;
+                        remoteRefs = normalized.refs;
+                        revision = committed.revision;
+                        fingerprint = committed.fingerprint;
+                        publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'present', reason: '', error: null });
+                        return clone(staged.result);
+                    }).catch(function (cacheError) {
+                        publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'present', reason: 'cache-update-failed' });
+                        throw makeError('AVATAR_CACHE_UPDATE_FAILED', '远端头像已提交，但本地只读缓存更新失败；已停止后续写入', { cause: cacheError.code || cacheError.message });
                     });
+                }).catch(function (error) {
+                    if (error && error.code === 'AVATAR_REVISION_CONFLICT') {
+                        publish({ phase: 'conflict', authoritative: null, writable: false, offline: false, remote: 'present', reason: 'revision-conflict', error: errorSummary(error) });
+                    } else if (!error || error.code !== 'AVATAR_CACHE_UPDATE_FAILED') {
+                        publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: false, remote: 'error', reason: 'commit-uncertain', error: errorSummary(error) });
+                    }
+                    throw error;
                 });
             });
         }

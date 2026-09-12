@@ -302,15 +302,19 @@
                 snapshot.sourceIntents.forEach(function (record) { sourceIntents.set(record.id, record); });
                 return Promise.resolve(clone(snapshot));
             },
-            deleteAsset: function (id) {
+            deleteAsset: function (id, preparedSourceIntents) {
                 id = cleanText(id);
+                var prepared = new Map((preparedSourceIntents || []).map(function (record) {
+                    record = normalizeSourceIntent(record);
+                    return [record.targetKey, record];
+                }));
                 var removedBindings = [];
                 bindings.forEach(function (binding, key) {
                     if (binding.avatarId === id) { removedBindings.push(clone(binding)); bindings.delete(key); }
                 });
                 removedBindings.forEach(function (binding) {
                     if (binding.targetKey === 'user:global' || /^character:/.test(binding.targetKey || '')) {
-                        var intent = normalizeSourceIntent({ targetKey: binding.targetKey });
+                        var intent = prepared.get(binding.targetKey) || normalizeSourceIntent({ targetKey: binding.targetKey });
                         sourceIntents.set(intent.id, intent);
                     }
                 });
@@ -575,8 +579,12 @@
                     setResult(snapshot);
                 });
             },
-            deleteAsset: function (id) {
+            deleteAsset: function (id, preparedSourceIntents) {
                 id = cleanText(id);
+                var prepared = new Map((preparedSourceIntents || []).map(function (record) {
+                    record = normalizeSourceIntent(record);
+                    return [record.targetKey, record];
+                }));
                 return transaction([STORES.assets, STORES.main, STORES.thumbs, STORES.bindings, STORES.meta], 'readwrite', function (tx, setResult) {
                     var bindingStore = tx.objectStore(STORES.bindings);
                     var request = bindingStore.getAll();
@@ -585,7 +593,7 @@
                         removedBindings.forEach(function (binding) { bindingStore.delete(binding.id); });
                         removedBindings.forEach(function (binding) {
                             if (binding.targetKey === 'user:global' || /^character:/.test(binding.targetKey || '')) {
-                                tx.objectStore(STORES.meta).put(normalizeSourceIntent({ targetKey: binding.targetKey }));
+                                tx.objectStore(STORES.meta).put(prepared.get(binding.targetKey) || normalizeSourceIntent({ targetKey: binding.targetKey }));
                             }
                         });
                         tx.objectStore(STORES.assets).delete(id);
@@ -633,7 +641,10 @@
             listSourceIntents: function () { return Promise.resolve(adapter.listSourceIntents()).then(function (items) { return (items || []).map(clone); }); },
             readSnapshot: function () { return Promise.resolve(adapter.readSnapshot()).then(normalizeSnapshot).then(clone); },
             replaceSnapshot: function (snapshot) { return Promise.resolve(adapter.replaceSnapshot(normalizeSnapshot(snapshot))).then(clone); },
-            deleteAsset: function (id) { return Promise.resolve(adapter.deleteAsset(id)).then(clone); },
+            deleteAsset: function (id, preparedSourceIntents) {
+                var prepared = Array.isArray(preparedSourceIntents) ? preparedSourceIntents.map(normalizeSourceIntent) : undefined;
+                return Promise.resolve(adapter.deleteAsset(id, prepared)).then(clone);
+            },
             clear: function () { return Promise.resolve(adapter.clear()); },
             versions: { library: LIBRARY_VERSION, bindings: BINDINGS_VERSION, nativeViews: NATIVE_VIEWS_VERSION, sourceIntents: SOURCE_INTENTS_VERSION },
         };

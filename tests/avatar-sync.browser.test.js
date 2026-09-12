@@ -72,8 +72,11 @@ async function chromium() {
             assert(request.headers()['x-csrf-token'] === csrfToken, 'manifest commit omitted the resolved CSRF header');
             assert(request.headers()['content-type'] === 'application/json', 'manifest commit omitted the JSON content type');
             const body = request.postDataJSON();
-            assert(remoteState.status === 'empty' && body.expectedRevision === 0, 'initial CAS was not revision 0');
-            remoteState = { status: 'present', datasetId: body.datasetId, revision: 1, fingerprint: 'sha256:' + '1'.repeat(64), manifest: body.manifest };
+            const expectedRevision = remoteState.status === 'empty' ? 0 : remoteState.revision;
+            assert(body.expectedRevision === expectedRevision, 'CAS did not use the current revision');
+            assert(!JSON.stringify(body.manifest).includes('data:image/'), 'manifest commit included image Data URLs');
+            const nextRevision = expectedRevision + 1;
+            remoteState = { status: 'present', datasetId: body.datasetId, revision: nextRevision, fingerprint: 'sha256:' + String(nextRevision).repeat(64), manifest: body.manifest };
             return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
                 ok: true,
                 state: 'present',
@@ -112,16 +115,20 @@ async function chromium() {
         const state = await coordinator.initialize();
         const after = await local.readSnapshot();
         const active = await coordinator.store.getAsset('browser-a');
+        await coordinator.store.putAsset({ id: 'browser-b', name: 'Browser B', imageData: dataUrl, thumbData: dataUrl, mimeType: 'image/png', width: 2, height: 2 });
+        const added = await coordinator.store.getAsset('browser-b');
         return {
             state,
             localUnchanged: JSON.stringify(before) === JSON.stringify(after),
             activeDataUrl: active.imageData.startsWith('data:image/png;base64,'),
+            addedDataUrl: added.imageData.startsWith('data:image/png;base64,'),
         };
     }, names);
     assert(first.state.phase === 'remote-ready' && first.state.writable === true, 'migration did not become writable remote-ready');
     assert(first.localUnchanged, 'original local database changed during takeover');
     assert(first.activeDataUrl, 'migrated active store lost its image bytes');
-    assert(calls.filter(call => call === 'PUT /api/plugins/theme-manager/avatars/manifest').length === 1, 'manifest was not committed exactly once');
+    assert(first.addedDataUrl, 'incremental remote asset write lost its image bytes');
+    assert(calls.filter(call => call === 'PUT /api/plugins/theme-manager/avatars/manifest').length === 2, 'migration and incremental asset must each use one manifest commit');
 
     offline = true;
     const second = await page.evaluate(async names => {
@@ -142,7 +149,7 @@ async function chromium() {
         return { state, count: assets.length, writeCode };
     }, names);
     assert(second.state.phase === 'remote-ready' && second.state.offline === true && second.state.writable === false, 'offline reload did not use read-only cache');
-    assert(second.count === 1, 'offline cache did not retain the avatar');
+    assert(second.count === 2, 'offline cache did not retain the incrementally added avatar');
     assert(second.writeCode === 'AVATAR_STORAGE_READ_ONLY', 'offline cache accepted a mutation');
 
     console.log(JSON.stringify({ ok: true, migration: first.state, offline: second.state, calls }, null, 2));

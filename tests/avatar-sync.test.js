@@ -106,6 +106,7 @@ function createRemote(initial, options = {}) {
         },
         upload(dataUrl) {
             calls.push('upload:' + dataUrl);
+            if (options.onUpload) options.onUpload(dataUrl);
             if (options.uploadError) return Promise.reject(options.uploadError);
             const ref = refFor(dataUrl);
             blobs.set(ref.url, dataUrl);
@@ -118,6 +119,7 @@ function createRemote(initial, options = {}) {
         },
         commit(input) {
             calls.push('commit:' + input.expectedRevision);
+            if (options.onCommit) options.onCommit(JSON.parse(JSON.stringify(input)));
             if (commitError) return Promise.reject(commitError);
             const currentRevision = current.status === 'present' ? current.revision : 0;
             const currentDatasetId = current.status === 'present' ? current.datasetId : input.datasetId;
@@ -400,6 +402,9 @@ test('local present plus explicit remote empty uploads blobs then CAS commits an
     assert.equal(afterDelete.manifest.assets.length, 0);
     assert.equal(afterDelete.manifest.bindings.length, 0);
     assert.equal(afterDelete.manifest.sourceIntents[0].targetKey, 'user:global');
+    assert.deepEqual(JSON.parse(JSON.stringify((await cache.listSourceIntents()).map(record => ({ targetKey: record.targetKey, updatedAt: record.updatedAt })))),
+        JSON.parse(JSON.stringify(afterDelete.manifest.sourceIntents.map(record => ({ targetKey: record.targetKey, updatedAt: record.updatedAt })))),
+        'the incremental cache delete must preserve the exact prepared source intent');
     assert.deepEqual(await local.readSnapshot(), before, 'remote deletion must not mutate the takeover backup');
 });
 
@@ -431,10 +436,10 @@ test('remote binding batches use one CAS revision for creation and one for activ
     assert.deepEqual(new Set(state.manifest.bindings.filter(binding => binding.targetKey.indexOf('user:global:theme-avatar:') === 0).map(binding => binding.avatarId)), new Set(['a', 'b']));
 });
 
-test('remote binding-only mutations avoid full snapshot staging and update cache incrementally', async () => {
+test('remote mutations avoid full image snapshot staging and update cache incrementally', async () => {
     const local = memoryStore({ assets: [asset('a'), asset('b')] });
     const cache = memoryStore();
-    const cacheCalls = { replaceSnapshot: 0, putBinding: 0, deleteBinding: 0, mutateBindings: 0 };
+    const cacheCalls = { replaceSnapshot: 0, putAsset: 0, deleteAsset: 0, putBinding: 0, deleteBinding: 0, mutateBindings: 0 };
     Object.keys(cacheCalls).forEach(method => {
         const original = cache[method].bind(cache);
         cache[method] = function () {
@@ -449,7 +454,8 @@ test('remote binding-only mutations avoid full snapshot staging and update cache
             return modules.avatarStorage.createMemoryAdapter(seed);
         },
     });
-    const remote = createRemote({ status: 'empty' });
+    const commits = [];
+    const remote = createRemote({ status: 'empty' }, { onCommit: input => commits.push(input) });
     const sync = modules.createAvatarStorageCoordinator({
         localStore: local,
         cacheStore: cache,
@@ -481,8 +487,84 @@ test('remote binding-only mutations avoid full snapshot staging and update cache
     await sync.store.putAsset(asset('c'));
     const afterAssetWrite = await remote.readState();
     assert.equal(afterAssetWrite.revision, 4);
+    assert.equal(memoryAdapterCreates, initialAdapterCreates, 'asset staging must not rebuild or clone an image-bearing memory store');
+    assert.equal(cacheCalls.replaceSnapshot, 0, 'asset mutations must not replace every cached image');
+    assert.equal(cacheCalls.putAsset, 1, 'the committed asset must update the cache incrementally');
+    assert.doesNotMatch(JSON.stringify(commits.at(-1).manifest), /data:image\//, 'the candidate manifest must contain image references rather than Data URLs');
     assert.equal(afterAssetWrite.manifest.bindings.find(binding => binding.targetKey === 'user:global').avatarId, 'b',
-        'a later full asset mutation must stage from the incrementally updated binding snapshot');
+        'a later asset mutation must stage from the incrementally updated manifest');
+});
+
+test('a 171-asset remote library adds one asset without full snapshot replacement', async () => {
+    const assets = Array.from({ length: 171 }, (_, index) => asset('large-' + index));
+    const local = memoryStore({ assets });
+    const cache = memoryStore();
+    let replacements = 0;
+    let incrementalPuts = 0;
+    const originalReplace = cache.replaceSnapshot.bind(cache);
+    const originalPut = cache.putAsset.bind(cache);
+    cache.replaceSnapshot = snapshot => { replacements += 1; return originalReplace(snapshot); };
+    cache.putAsset = value => { incrementalPuts += 1; return originalPut(value); };
+    const sync = coordinator({ local, cache, remote: createRemote({ status: 'empty' }) });
+    await sync.initialize();
+    replacements = 0;
+    await sync.store.putAsset(asset('large-171'));
+    assert.equal(replacements, 0);
+    assert.equal(incrementalPuts, 1);
+    assert.equal((await sync.store.listAssets()).length, 172);
+});
+
+test('a committed remote asset with a failed cache update locks all later writes', async () => {
+    const local = memoryStore({ assets: [asset('a')] });
+    const cache = memoryStore();
+    const remote = createRemote({ status: 'empty' });
+    const sync = coordinator({ local, cache, remote });
+    await sync.initialize();
+    cache.putAsset = () => Promise.reject(Object.assign(new Error('cache failed'), { code: 'AVATAR_IDB_WRITE_FAILED' }));
+    await assert.rejects(sync.store.putAsset(asset('b')), error => error.code === 'AVATAR_CACHE_UPDATE_FAILED');
+    assert.equal((await remote.readState()).manifest.assets.some(item => item.id === 'b'), true, 'the CAS commit already succeeded remotely');
+    assert.equal(sync.getState().writable, false);
+    assert.equal(sync.getState().reason, 'cache-update-failed');
+    await assert.rejects(sync.store.putAsset(asset('c')), error => error.code === 'AVATAR_STORAGE_READ_ONLY');
+});
+
+test('remote putAsset verifies uploads and commit before cache control and active updates', async () => {
+    const events = [];
+    const local = memoryStore({ assets: [asset('a')] });
+    const cache = memoryStore();
+    const originalCachePut = cache.putAsset.bind(cache);
+    cache.putAsset = value => { events.push('cache'); return originalCachePut(value); };
+    const control = modules.avatarSync.createMemoryControlStore();
+    const originalControlPut = control.put.bind(control);
+    control.put = value => { events.push('control'); return originalControlPut(value); };
+    let recordActiveWrites = false;
+    const storageApi = Object.assign({}, modules.avatarStorage, {
+        createMemoryAdapter(seed) {
+            const adapter = modules.avatarStorage.createMemoryAdapter(seed);
+            const originalPut = adapter.putAsset.bind(adapter);
+            adapter.putAsset = value => {
+                if (recordActiveWrites) events.push('active');
+                return originalPut(value);
+            };
+            return adapter;
+        },
+    });
+    const remote = createRemote({ status: 'empty' }, {
+        onUpload: () => events.push('upload'),
+        onCommit: input => {
+            events.push('commit');
+            assert.doesNotMatch(JSON.stringify(input.manifest), /data:image\//);
+        },
+    });
+    const sync = modules.createAvatarStorageCoordinator({
+        localStore: local, cacheStore: cache, controlStore: control, remote,
+        inspectDataUrl: inspect, avatarStorage: storageApi,
+    });
+    await sync.initialize();
+    events.length = 0;
+    recordActiveWrites = true;
+    await sync.store.putAsset(asset('b'));
+    assert.deepEqual(events, ['upload', 'upload', 'commit', 'cache', 'control', 'active']);
 });
 
 test('remote binding batch CAS conflict leaves the authoritative manifest and cache unchanged', async () => {

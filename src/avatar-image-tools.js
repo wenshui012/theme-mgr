@@ -46,6 +46,7 @@
         context.drawImage(decoded.source, 0, 0, size.width, size.height);
         try { return Promise.resolve(canvas.toDataURL(mimeType, quality)); }
         catch (error) { return Promise.reject(error); }
+        finally { canvas.width = 1; canvas.height = 1; }
     }
 
     ns.createAvatarImageProcessor = function (options) {

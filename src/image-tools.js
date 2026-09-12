@@ -55,7 +55,11 @@
                         width: image.naturalWidth || image.width,
                         height: image.naturalHeight || image.height,
                         hasAlpha: mimeType === 'image/png' || mimeType === 'image/webp',
-                        close: function () {},
+                        close: function () {
+                            image.onload = null;
+                            image.onerror = null;
+                            image.src = '';
+                        },
                     });
                 };
                 image.onerror = function () { reject(imageImportError('IMAGE_DECODE_FAILED', '图片解码失败')); };

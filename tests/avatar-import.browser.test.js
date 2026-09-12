@@ -9,17 +9,17 @@ function assert(condition, message) {
     if (!condition) throw new Error(message);
 }
 
-async function makeFixture(page, mimeType, alpha) {
-    const dataUrl = await page.evaluate(({ mimeType, alpha }) => {
+async function makeFixture(page, mimeType, alpha, width = 24, height = 18) {
+    const dataUrl = await page.evaluate(({ mimeType, alpha, width, height }) => {
         const canvas = document.createElement('canvas');
-        canvas.width = 24;
-        canvas.height = 18;
+        canvas.width = width;
+        canvas.height = height;
         const context = canvas.getContext('2d');
         if (alpha) context.clearRect(0, 0, canvas.width, canvas.height);
         context.fillStyle = alpha ? 'rgba(25,120,210,.45)' : 'rgb(25,120,210)';
-        context.fillRect(2, 2, 20, 14);
+        context.fillRect(0, 0, width, height);
         return canvas.toDataURL(mimeType, 0.92);
-    }, { mimeType, alpha });
+    }, { mimeType, alpha, width, height });
     return {
         mimeType,
         supported: dataUrl.startsWith(`data:${mimeType}`),
@@ -102,6 +102,16 @@ async function waitForIdle(page) {
         await page.waitForFunction((count) => window.__avatarImport.page.getState().count === count + 2, beforeRepeat);
         await waitForIdle(page);
 
+        const largePng = await makeFixture(page, 'image/png', true, 1200, 1800);
+        const beforeBatch = await page.evaluate(() => window.__avatarImport.page.getState().count);
+        await input.setInputFiles(Array.from({ length: 8 }, (_, index) => ({
+            name: `批量头像-${index + 1}.png`, mimeType: 'image/png', buffer: largePng.buffer,
+        })));
+        await page.waitForFunction((count) => window.__avatarImport.page.getState().count === count + 8, beforeBatch);
+        await waitForIdle(page);
+        const batchState = await page.evaluate(() => window.__avatarImport.page.getImportState());
+        assert(batchState.phase === 'completed' && batchState.success === 8 && batchState.failed === 0, '8-image browser import did not complete cleanly');
+
         const beforeInvalid = await page.evaluate(() => window.__avatarImport.page.getState().count);
         await input.setInputFiles({ name: '损坏头像.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('not-an-image') });
         await waitForIdle(page);
@@ -144,6 +154,7 @@ async function waitForIdle(page) {
             webp: webp.supported ? 'tested' : 'skipped-not-supported',
             emptyMimeByExtension: true,
             repeatedImport: true,
+            sequentialBatch: batchState.success,
             decodeFailureVisible: true,
             idbFailureVisible: true,
             persisted: persistence.count,

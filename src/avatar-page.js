@@ -34,10 +34,11 @@
         var imageLoaderApi = options.imageLoader, imageToolsApi = options.imageTools || ns.imageTools, getRoot = options.getRoot;
         var closeManager = options.closeManager || function () {}, createSheet = options.createSheet, closeSheet = options.closeSheet || function (sheet) { if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet); };
         var createActionDialog = options.createActionDialog, openImageLightbox = options.openImageLightbox, openCategoryPicker = options.openCategoryPicker, openTagPicker = options.openTagPicker;
-        var loadUiData = options.loadUiData || function () { return {}; }, saveUiData = options.saveUiData || function () {}, onImportingChange = options.onImportingChange || function () {}, onExportingChange = options.onExportingChange || function () {}, onBatchModeChange = options.onBatchModeChange || function () {}, toast = options.toast || function () {};
+        var loadUiData = options.loadUiData || function () { return {}; }, saveUiData = options.saveUiData || function () {}, onImportingChange = options.onImportingChange || function () {}, onImportStateChange = options.onImportStateChange || function () {}, onExportingChange = options.onExportingChange || function () {}, onBatchModeChange = options.onBatchModeChange || function () {}, toast = options.toast || function () {};
         var confirmAction = options.confirm || global.confirm, logger = options.console || global.console || { error: function () {} };
         var mounted = false, root = null, fileInput = null, gridLoader = null, resizeObserver = null, assets = [], refreshToken = 0, importing = false, exporting = false;
         var searchOpen = false, sortOpen = false, query = '', category = '__all__', batchMode = false, batchSelected = new Set(), batchDeleting = false, expandedSeriesId = '', railTimers = new Map(), lastColumnCount = 0, activeAvatarIds = [];
+        var importTask = { phase: 'idle', total: 0, processed: 0, success: 0, failed: 0, failures: [], startedAt: '', completedAt: '', error: '' };
         function data() { var value = loadUiData(); library.ensureState(value); return value; }
         function reportError(stage, error, file) { if (logger && typeof logger.error === 'function') logger.error('[Theme Manager][Avatar] ' + stage, { file: file && file.name, error: error, cause: error && error.cause }); }
         function setNotice(message, kind) { if (!root) return; var notice = root.querySelector('[data-avatar-notice]'); notice.innerHTML = kind === 'loading' && message ? '<i class="fa-solid fa-spinner"></i>' + esc(message) : esc(message || ''); if (kind) notice.setAttribute('data-kind', kind); else notice.removeAttribute('data-kind'); notice.hidden = !message; }
@@ -45,7 +46,53 @@
         function ensureStyle() { if (doc.getElementById(STYLE_ID)) return; var style = doc.createElement('style'); style.id = STYLE_ID; style.textContent = styleText(); doc.head.appendChild(style); }
         function removeStyle() { var style = doc.getElementById(STYLE_ID); if (style && style.parentNode) style.parentNode.removeChild(style); }
         function friendlyImportError(error) { var code = error && error.code || ''; if (/READ_FAILED/.test(code)) return '图片读取失败'; if (/DECODE_FAILED/.test(code)) return '图片解码失败'; if (code === 'AVATAR_FORMAT_UNSUPPORTED') return '图片格式暂不支持'; if (code === 'AVATAR_STORAGE_QUOTA_EXCEEDED') return '存储空间不足'; if (/^(?:AVATAR_IDB|AVATAR_STORAGE)/.test(code)) return '本地存储失败'; return '未能保存头像'; }
-        function setImporting(value) { importing = Boolean(value); onImportingChange(importing); if (root && importing) setNotice('正在添加头像…', 'loading'); }
+        function getImportState() {
+            return {
+                phase: importTask.phase,
+                total: importTask.total,
+                processed: importTask.processed,
+                success: importTask.success,
+                failed: importTask.failed,
+                failures: importTask.failures.map(function (failure) { return { name: failure.name, code: failure.code, message: failure.message }; }),
+                startedAt: importTask.startedAt,
+                completedAt: importTask.completedAt,
+                error: importTask.error,
+            };
+        }
+        function importNoticeMessage() {
+            if (importTask.phase === 'running') {
+                var current = Math.min(importTask.total, importTask.processed + 1);
+                return '正在添加头像 ' + current + ' / ' + importTask.total + '（成功 ' + importTask.success + '，失败 ' + importTask.failed + '）。可关闭头像管理继续使用酒馆，请勿刷新或关闭酒馆页面';
+            }
+            if (importTask.phase !== 'completed') return '';
+            var summary = '导入完成：成功 ' + importTask.success + ' 张，失败 ' + importTask.failed + ' 张';
+            if (importTask.error) return summary + '；' + importTask.error;
+            if (!importTask.failures.length) return summary;
+            return summary + '；' + importTask.failures.map(function (failure) { return failure.name + '：' + failure.message; }).join('；');
+        }
+        function renderImportState() {
+            var message = importNoticeMessage();
+            if (!message) return;
+            setNotice(message, importTask.phase === 'running' ? 'loading' : (importTask.failed || importTask.error ? 'error' : 'success'));
+        }
+        function publishImportState() { renderImportState(); onImportStateChange(getImportState()); }
+        function setImporting(value) { importing = Boolean(value); onImportingChange(importing); }
+        function yieldImportTurn() {
+            if (typeof global.setTimeout !== 'function') return Promise.resolve();
+            return new Promise(function (resolve) { global.setTimeout(resolve, 0); });
+        }
+        function importResultAsset(asset) {
+            return {
+                version: asset.version,
+                id: asset.id,
+                name: asset.name,
+                mimeType: asset.mimeType,
+                width: asset.width,
+                height: asset.height,
+                createdAt: asset.createdAt,
+                updatedAt: asset.updatedAt,
+            };
+        }
         function setExporting(value, message) { exporting = Boolean(value); onExportingChange(exporting); if (root && exporting) setNotice(message || '正在准备导出…', 'loading'); updateBatchCount(); }
         function runExport(task, loadingMessage, successMessage) {
             if (importing || exporting || !transfer) return Promise.reject(new Error(importing ? '头像导入完成后才能导出' : (exporting ? '已有头像导出任务正在进行' : '头像导出功能不可用')));
@@ -77,9 +124,64 @@
         function renderBatch() { var area = root.querySelector('[data-avatar-batch-area]'); root.classList.toggle('is-batch', batchMode); onBatchModeChange(batchMode); if (!batchMode) { area.innerHTML = ''; area.style.display = 'none'; return; } area.style.display = ''; if (!area.querySelector('[data-avatar-batch-count]')) area.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">已选 <b data-avatar-batch-count>0</b> 个</span><div class="tm-batch-divider"></div><div class="tm-batch-acts"><button class="tm-batch-btn" data-avatar-batch="all">全选</button><button class="tm-batch-btn" data-avatar-batch="none">取消</button><button class="tm-batch-btn" data-avatar-batch="category"><i class="fa-solid fa-folder"></i> 分类</button><button class="tm-batch-btn" data-avatar-batch="tags"><i class="fa-solid fa-tag"></i> 标签</button><button class="tm-batch-btn" data-avatar-batch="series"><i class="fa-solid fa-layer-group"></i> 系列</button><button class="tm-batch-btn" data-avatar-batch="export"><i class="fa-solid fa-file-zipper"></i> 导出</button><button class="tm-batch-btn danger" data-avatar-batch="delete"><i class="fa-solid fa-trash"></i> 删除</button><button class="tm-batch-btn" data-avatar-batch="exit">完成</button></div></div>'; updateBatchCount(); }
         function setBatchMode(enabled) { batchMode = enabled === true; batchSelected.clear(); batchDeleting = false; renderBatch(); syncRenderedBatchCards(); return batchMode; }
         function bindRailInteractions() { root.querySelectorAll('.tm-avatar-series-block').forEach(function (block) { var id = block.dataset.avatarSeriesId; function show() { block.classList.add('is-interacting'); if (railTimers.has(id)) global.clearTimeout(railTimers.get(id)); railTimers.set(id, global.setTimeout(function () { block.classList.remove('is-interacting'); railTimers.delete(id); }, 1700)); } block.addEventListener('pointerdown', show, { passive: true }); block.addEventListener('scroll', show, { passive: true }); block.addEventListener('focusin', show); }); }
-        function render() { if (!root) return; syncActiveAvatarIds(); var state = data(), list = matchingAssets(state), grid = root.querySelector('[data-avatar-grid]'), count = columns(); lastColumnCount = count; renderCategoryBar(state); renderBatch(); grid.innerHTML = nativeSlotHtml() + layoutHtml(state, list, count) + (!assets.length ? '<div class="tm-avatar-page-empty">点击底栏中间的＋添加头像</div>' : (!list.length ? '<div class="tm-avatar-page-empty">没有符合条件的头像</div>' : '')); root.querySelectorAll('[data-avatar-sort]').forEach(function (button) { button.classList.toggle('on', button.dataset.avatarSort === library.ensureState(state).sortMode); }); setupGridLoader(); setImporting(importing); bindRailInteractions(); }
+        function render() { if (!root) return; syncActiveAvatarIds(); var state = data(), list = matchingAssets(state), grid = root.querySelector('[data-avatar-grid]'), count = columns(); lastColumnCount = count; renderCategoryBar(state); renderBatch(); grid.innerHTML = nativeSlotHtml() + layoutHtml(state, list, count) + (!assets.length ? '<div class="tm-avatar-page-empty">点击底栏中间的＋添加头像</div>' : (!list.length ? '<div class="tm-avatar-page-empty">没有符合条件的头像</div>' : '')); root.querySelectorAll('[data-avatar-sort]').forEach(function (button) { button.classList.toggle('on', button.dataset.avatarSort === library.ensureState(state).sortMode); }); setupGridLoader(); renderImportState(); bindRailInteractions(); }
         function refresh() { var token = ++refreshToken; return store.listAssets().then(function (items) { if (!mounted || token !== refreshToken) return; assets = items || []; render(); }).catch(function (error) { reportError('library refresh failed', error); if (mounted) setNotice('头像库读取失败', 'error'); throw error; }); }
-        function importFiles(files) { if (mutationBlocked()) return Promise.reject(Object.assign(new Error('头像存储当前不可写'), { code: 'AVATAR_STORAGE_READ_ONLY' })); files = Array.prototype.slice.call(files || []); if (!files.length) return Promise.resolve([]); setImporting(true); return Promise.all(files.map(function (file) { return processor.processFile(file).then(function (asset) { return store.putAsset(asset).then(function (saved) { runtime.notifyAssetChanged(saved.id); return { ok: true, asset: saved }; }); }).catch(function (error) { reportError('import failed', error, file); return { ok: false, name: file.name || '未命名图片', error: error }; }); })).then(function (results) { var failed = results.filter(function (item) { return !item.ok; }), passed = results.filter(function (item) { return item.ok; }), orderSave = Promise.resolve(); if (passed.length) { var state = data(); library.assignImportOrders(state, passed.map(function (item) { return item.asset.id; })); orderSave = persist(state); } return orderSave.then(function () { return passed.length ? refresh() : null; }).then(function () { if (failed.length) setNotice(failed.map(function (item) { return item.name + '：' + friendlyImportError(item.error); }).join('；'), 'error'); else setNotice('已添加 ' + passed.length + ' 张头像', 'success'); if (passed.length) toast('✅ 已添加 ' + passed.length + ' 张头像'); return results; }); }).finally(function () { setImporting(false); }); }
+        function importFiles(files) {
+            if (importing) return Promise.reject(Object.assign(new Error('已有头像导入任务正在进行'), { code: 'AVATAR_IMPORT_IN_PROGRESS' }));
+            if (mutationBlocked()) return Promise.reject(Object.assign(new Error('头像存储当前不可写'), { code: 'AVATAR_STORAGE_READ_ONLY' }));
+            files = Array.prototype.slice.call(files || []);
+            if (!files.length) return Promise.resolve([]);
+            var results = [];
+            var passedIds = [];
+            importTask = { phase: 'running', total: files.length, processed: 0, success: 0, failed: 0, failures: [], startedAt: new Date().toISOString(), completedAt: '', error: '' };
+            setImporting(true);
+            publishImportState();
+            var queue = files.reduce(function (promise, file) {
+                return promise.then(function () {
+                    if (!canMutate()) throw Object.assign(new Error('头像存储当前不可写'), { code: 'AVATAR_STORAGE_READ_ONLY' });
+                    return processor.processFile(file).then(function (asset) {
+                        return store.putAsset(asset).then(function (saved) {
+                            runtime.notifyAssetChanged(saved.id);
+                            passedIds.push(saved.id);
+                            importTask.success += 1;
+                            results.push({ ok: true, asset: importResultAsset(saved) });
+                        });
+                    });
+                }).catch(function (error) {
+                    var name = file.name || '未命名图片';
+                    var message = friendlyImportError(error);
+                    reportError('import failed', error, file);
+                    importTask.failed += 1;
+                    importTask.failures.push({ name: name, code: error && error.code || '', message: message });
+                    results.push({ ok: false, name: name, error: error });
+                }).then(function () {
+                    importTask.processed += 1;
+                    publishImportState();
+                    return yieldImportTurn();
+                });
+            }, Promise.resolve());
+            return queue.then(function () {
+                if (!passedIds.length) return false;
+                var state = data();
+                library.assignImportOrders(state, passedIds);
+                return persist(state);
+            }).then(function () {
+                return passedIds.length ? refresh() : null;
+            }).then(function () {
+                importTask.phase = 'completed';
+                importTask.completedAt = new Date().toISOString();
+                publishImportState();
+                toast(importTask.failed ? '头像导入完成：成功 ' + importTask.success + ' 张，失败 ' + importTask.failed + ' 张' : '✅ 已添加 ' + importTask.success + ' 张头像', importTask.failed > 0);
+                return results;
+            }).catch(function (error) {
+                importTask.phase = 'completed';
+                importTask.completedAt = new Date().toISOString();
+                importTask.error = error && error.message ? error.message : '导入任务未完整完成';
+                publishImportState();
+                toast('头像导入未完整完成：' + importTask.error, true);
+                throw error;
+            }).finally(function () { setImporting(false); });
+        }
         function beginEdit(kind, avatarId, overlay) { if (mutationBlocked()) return; var caps = runtime.getCapabilities(), cap = kind === 'character' ? caps.character : caps.user; if (!cap || !cap.available) { setNotice(cap && cap.reason || '当前目标不可用'); return; } if (overlay) closeSheet(overlay); if (closeManager() === false) return; global.setTimeout(function () { runtime.beginEdit({ kind: kind, avatarId: avatarId, bindingMode: 'deferred' }).catch(function (error) { toast(error.message || '无法启动头像调整', true); }); }, 32); }
         function beginNativeEdit(kind, overlay) { if (mutationBlocked()) return; var cap = runtime.getCapabilities()[kind]; if (!cap || !cap.available) { setNotice(cap && cap.reason || '原头像无法调整'); return; } if (overlay) closeSheet(overlay); closeManager(); global.setTimeout(function () { runtime.beginNativeEdit(kind).catch(function (error) { toast(error.message || '无法启动原头像调整', true); }); }, 32); }
         function dialogItem(action, icon, label, hint, disabled, weak) { return '<button type="button" class="tm-action-dialog-item' + (weak ? ' is-weak' : '') + '" data-avatar-dialog-action="' + action + '"' + (disabled ? ' disabled' : '') + '><i class="fa-solid ' + icon + '"></i><span><strong>' + esc(label) + '</strong>' + (hint ? '<small>' + esc(hint) + '</small>' : '') + '</span></button>'; }
@@ -200,7 +302,7 @@
         function handleClick(event) { var native = event.target.closest('[data-avatar-action="native"]'); if (native) { openNativeMenu(); return; } var manage = event.target.closest('[data-avatar-series-manage]'); if (manage) { event.stopPropagation(); openSeriesManageSheet(manage.dataset.avatarSeriesManage); return; } var toggle = event.target.closest('[data-avatar-series-toggle]'); if (toggle) { event.stopPropagation(); expandedSeriesId = expandedSeriesId === toggle.dataset.avatarSeriesToggle ? '' : toggle.dataset.avatarSeriesToggle; render(); return; } var cat = event.target.closest('[data-avatar-category]'); if (cat) { category = cat.dataset.avatarCategory; render(); return; } var sort = event.target.closest('[data-avatar-sort]'); if (sort) { var state = data(); library.ensureState(state).sortMode = sort.dataset.avatarSort; persist(state).then(render); return; } var batch = event.target.closest('[data-avatar-batch]'); if (batch) { var action = batch.dataset.avatarBatch; if (batchDeleting || exporting) return; if (action === 'all') assets.forEach(function (asset) { batchSelected.add(asset.id); }); else if (action === 'none') batchSelected.clear(); else if (action === 'exit') { setBatchMode(false); return; } else if (action === 'category') { applyBatchCategory(); return; } else if (action === 'tags') { applyBatchTags(); return; } else if (action === 'series') { createSeriesFromSelection(); return; } else if (action === 'export') { exportBatchSelection().catch(function () {}); return; } else if (action === 'delete') { deleteBatchSelection(); return; } syncRenderedBatchCards(); return; } var card = event.target.closest('.tm-avatar-page-card'); if (!card || !root.contains(card)) return; var id = card.dataset.avatarId; if (batchMode) { if (batchDeleting || exporting) return; if (batchSelected.has(id)) batchSelected.delete(id); else batchSelected.add(id); syncBatchCard(card); updateBatchCount(); } else openAssetMenu(id).catch(function (error) { setNotice(error.message || '头像操作无法打开', 'error'); }); }
         function handleKeydown(event) { if (event.key !== 'Enter' && event.key !== ' ') return; var target = event.target.closest('.tm-avatar-page-card,.tm-avatar-native-slot'); if (!target) return; event.preventDefault(); target.click(); }
         function handleFileChange(event) { var input = event.currentTarget || fileInput, files = imageToolsApi.snapshotInputFiles(input); if (!files.length) return; var pending = importFiles(files); input.value = ''; pending.catch(function (error) { reportError('file input import rejected', error); }); }
-        function mount() { if (mounted) return refresh(); root = getRoot(); if (!root) return Promise.reject(new Error('头像管理页面不存在')); mounted = true; ensureStyle(); fileInput = root.querySelector('[data-avatar-file]'); root.addEventListener('click', handleClick); root.addEventListener('keydown', handleKeydown); fileInput.addEventListener('change', handleFileChange); var search = root.querySelector('[data-avatar-search]'); search.addEventListener('input', function () { query = search.value.trim(); render(); }); root.querySelector('[data-avatar-search-clear]').addEventListener('click', function () { query = ''; search.value = ''; render(); search.focus(); }); if (global.ResizeObserver) { resizeObserver = new global.ResizeObserver(function () { var next = columns(); if (next !== lastColumnCount) render(); }); resizeObserver.observe(root.querySelector('[data-avatar-grid]')); } return refresh(); }
+        function mount() { if (mounted) return refresh().then(function (value) { renderImportState(); return value; }); root = getRoot(); if (!root) return Promise.reject(new Error('头像管理页面不存在')); mounted = true; ensureStyle(); fileInput = root.querySelector('[data-avatar-file]'); root.addEventListener('click', handleClick); root.addEventListener('keydown', handleKeydown); fileInput.addEventListener('change', handleFileChange); var search = root.querySelector('[data-avatar-search]'); search.addEventListener('input', function () { query = search.value.trim(); render(); }); root.querySelector('[data-avatar-search-clear]').addEventListener('click', function () { query = ''; search.value = ''; render(); search.focus(); }); if (global.ResizeObserver) { resizeObserver = new global.ResizeObserver(function () { var next = columns(); if (next !== lastColumnCount) render(); }); resizeObserver.observe(root.querySelector('[data-avatar-grid]')); } return refresh().then(function (value) { renderImportState(); return value; }); }
         function unmount() { if (!mounted) return; mounted = false; refreshToken++; if (gridLoader) gridLoader.disconnect(); if (resizeObserver) resizeObserver.disconnect(); railTimers.forEach(function (timer) { global.clearTimeout(timer); }); railTimers.clear(); root.removeEventListener('click', handleClick); root.removeEventListener('keydown', handleKeydown); fileInput.removeEventListener('change', handleFileChange); fileInput = null; root = null; removeStyle(); }
         function toggleSearch() { if (!root) return false; searchOpen = !searchOpen; var bar = root.querySelector('[data-avatar-search-bar]'); bar.classList.toggle('open', searchOpen); if (searchOpen) root.querySelector('[data-avatar-search]').focus(); else { query = ''; root.querySelector('[data-avatar-search]').value = ''; render(); } return searchOpen; }
         function toggleSort() { if (!root) return false; sortOpen = !sortOpen; root.querySelector('[data-avatar-sortbar]').classList.toggle('open', sortOpen); return sortOpen; }
@@ -241,7 +343,7 @@
             });
             return sheet;
         }
-        return { mount: mount, unmount: unmount, refresh: refresh, importFiles: importFiles, exportAsset: exportAsset, exportBatchSelection: exportBatchSelection, pickFiles: function () { if (!mounted || !fileInput || importing || exporting || mutationBlocked()) return false; fileInput.click(); return true; }, beginNativeEdit: beginNativeEdit, openNativeMenu: openNativeMenu, openAssetMenu: openAssetMenu, viewAsset: viewAsset, toggleSearch: toggleSearch, toggleSort: toggleSort, enterBatchMode: enterBatchMode, toggleBatchMode: toggleBatchMode, openCategoryManager: openCategoryManager, getNativeStatus: function (kind) { kind = kind === 'user' ? 'user' : 'character'; var cap = runtime.getCapabilities()[kind] || {}; return { available: !!cap.available, reason: cap.reason || '', label: cap.target && cap.target.label || '', targetKey: cap.target && cap.target.key || '' }; }, getState: function () { var state = data(); return { mounted: mounted, count: assets.length, importing: importing, exporting: exporting, batchMode: batchMode, categories: library.ensureState(state).categories.length, series: Object.keys(library.ensureState(state).series.groups).length }; } };
+        return { mount: mount, unmount: unmount, refresh: refresh, importFiles: importFiles, getImportState: getImportState, exportAsset: exportAsset, exportBatchSelection: exportBatchSelection, pickFiles: function () { if (!mounted || !fileInput || importing || exporting || mutationBlocked()) return false; fileInput.click(); return true; }, beginNativeEdit: beginNativeEdit, openNativeMenu: openNativeMenu, openAssetMenu: openAssetMenu, viewAsset: viewAsset, toggleSearch: toggleSearch, toggleSort: toggleSort, enterBatchMode: enterBatchMode, toggleBatchMode: toggleBatchMode, openCategoryManager: openCategoryManager, getNativeStatus: function (kind) { kind = kind === 'user' ? 'user' : 'character'; var cap = runtime.getCapabilities()[kind] || {}; return { available: !!cap.available, reason: cap.reason || '', label: cap.target && cap.target.label || '', targetKey: cap.target && cap.target.key || '' }; }, getState: function () { var state = data(); return { mounted: mounted, count: assets.length, importing: importing, importTask: getImportState(), exporting: exporting, batchMode: batchMode, categories: library.ensureState(state).categories.length, series: Object.keys(library.ensureState(state).series.groups).length }; } };
     };
     ns.avatarPage = { buildPageHtml: buildPageHtml, styleText: styleText };
 })(window);
