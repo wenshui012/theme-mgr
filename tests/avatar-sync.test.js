@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const crypto = require('node:crypto');
 
 function loadModules() {
-    const window = { console, Promise, Map, Set, WeakMap, Date, Math, JSON, Number, Object, setTimeout, clearTimeout };
+    const window = { console, Promise, Map, Set, WeakMap, Date, Math, JSON, Number, Object, Uint8Array, Uint32Array, setTimeout, clearTimeout, atob, crypto: crypto.webcrypto };
     window.window = window;
     window.globalThis = window;
     const context = vm.createContext(window);
@@ -57,6 +57,28 @@ function refFor(dataUrl) {
 
 function emptyManifest() {
     return { schemaVersion: 1, assets: [], bindings: [], nativeViews: [], sourceIntents: [] };
+}
+
+function remoteLibrary(count, prefix = 'remote') {
+    const snapshot = modules.avatarStorage.normalizeSnapshot({
+        assets: Array.from({ length: count }, (_, index) => asset(prefix + '-' + index)),
+        bindings: [],
+        nativeViews: [],
+        sourceIntents: [],
+    });
+    const refs = new Map();
+    const downloads = {};
+    snapshot.assets.forEach(item => {
+        const pair = { image: refFor(item.imageData), thumbnail: refFor(item.thumbData) };
+        refs.set(item.id, pair);
+        downloads[pair.image.url] = item.imageData;
+        downloads[pair.thumbnail.url] = item.thumbData;
+    });
+    return {
+        snapshot,
+        manifest: modules.avatarSync.manifestFromSnapshot(snapshot, refs, modules.avatarStorage),
+        downloads,
+    };
 }
 
 function httpResponse(status, body, contentType = 'application/json') {
@@ -138,10 +160,11 @@ function createRemote(initial, options = {}) {
     };
 }
 
-function coordinator({ local, cache, control, remote, isBackendAvailable }) {
+function coordinator({ local, cache, control, remote, isBackendAvailable, createCacheStore }) {
     return modules.createAvatarStorageCoordinator({
         localStore: local || memoryStore(),
         cacheStore: cache || memoryStore(),
+        createCacheStore,
         controlStore: control || modules.avatarSync.createMemoryControlStore(),
         remote,
         isBackendAvailable,
@@ -149,6 +172,22 @@ function coordinator({ local, cache, control, remote, isBackendAvailable }) {
         avatarStorage: modules.avatarStorage,
     });
 }
+
+test('Data URL inspection preserves SHA-256 bytes MIME whitespace and padding validation', async () => {
+    const raw = crypto.randomBytes(100003);
+    const encoded = raw.toString('base64');
+    const actual = await modules.avatarSync.inspectDataUrl('data:image/png;base64,' + encoded);
+    assert.deepEqual(JSON.parse(JSON.stringify(actual)), {
+        sha256: 'sha256:' + crypto.createHash('sha256').update(raw).digest('hex'),
+        bytes: raw.length,
+        mime: 'image/png',
+    });
+    const wrapped = encoded.match(/.{1,79}/g).join('\n');
+    const withWhitespace = await modules.avatarSync.inspectDataUrl('data:image/png;base64,' + wrapped);
+    assert.equal(withWhitespace.sha256, actual.sha256);
+    assert.equal(withWhitespace.bytes, raw.length);
+    await assert.rejects(modules.avatarSync.inspectDataUrl('data:image/png;base64,AAAA=AAA'), error => error.code === 'AVATAR_BLOB_INVALID');
+});
 
 test('shared annotation backend mode keeps Avatar local-ready without a second backend probe', async () => {
     const local = memoryStore({ assets: [asset()] });
@@ -564,7 +603,7 @@ test('remote putAsset verifies uploads and commit before cache control and activ
     events.length = 0;
     recordActiveWrites = true;
     await sync.store.putAsset(asset('b'));
-    assert.deepEqual(events, ['upload', 'upload', 'commit', 'cache', 'control', 'active']);
+    assert.deepEqual(events, ['upload', 'upload', 'commit', 'cache', 'control']);
 });
 
 test('remote binding batch CAS conflict leaves the authoritative manifest and cache unchanged', async () => {
@@ -689,13 +728,165 @@ test('remote present plus local empty hydrates a verified cache before becoming 
     downloads[refs.get('a').thumbnail.url] = snapshot.assets[0].thumbData;
     const remote = createRemote({ status: 'present', datasetId: 'dataset-remote', revision: 4, fingerprint: fingerprint(4), manifest }, { downloads });
     const cache = memoryStore();
+    const cacheStores = new Map([['theme_mgr_avatar_cache_db', cache]]);
+    const createCacheStore = name => {
+        if (!cacheStores.has(name)) cacheStores.set(name, memoryStore());
+        return cacheStores.get(name);
+    };
     const control = modules.avatarSync.createMemoryControlStore();
-    const sync = coordinator({ local: memoryStore(), cache, control, remote });
+    const sync = coordinator({ local: memoryStore(), cache, control, remote, createCacheStore });
     await sync.initialize();
     assert.equal(sync.getState().phase, 'remote-ready');
-    assert.deepEqual(JSON.parse(JSON.stringify(await cache.readSnapshot())), JSON.parse(JSON.stringify(snapshot)));
+    const controlRecord = await control.get();
+    assert.match(controlRecord.cacheDatabaseName, /^theme_mgr_avatar_cache_db__hydrate__/);
+    assert.deepEqual(JSON.parse(JSON.stringify(await cacheStores.get(controlRecord.cacheDatabaseName).readSnapshot())), JSON.parse(JSON.stringify(snapshot)));
+    assert.equal((await cache.listAssets()).length, 0, 'the old cache must remain untouched until the shadow cache is verified');
     assert.equal((await sync.store.getAsset('a')).imageData, snapshot.assets[0].imageData);
-    assert.equal((await control.get()).revision, 4);
+    assert.equal(controlRecord.revision, 4);
+});
+
+test('a matching 242-asset verified cache opens without full snapshots or image downloads', async () => {
+    const fixture = remoteLibrary(242, 'cached');
+    const cache = memoryStore(fixture.snapshot);
+    const local = memoryStore({ assets: Array.from({ length: 23 }, (_, index) => asset('stale-local-' + index)) });
+    cache.readSnapshot = () => Promise.reject(new Error('cache readSnapshot must not run'));
+    local.readSnapshot = () => Promise.reject(new Error('local readSnapshot must not run'));
+    local.getAsset = () => Promise.reject(new Error('stale local images must not load after remote takeover'));
+    const control = modules.avatarSync.createMemoryControlStore({
+        version: 1,
+        mode: 'remote-authoritative',
+        datasetId: 'dataset-large-cache',
+        revision: 9,
+        fingerprint: fingerprint(9),
+        manifest: fixture.manifest,
+        updatedAt: '2026-09-12T00:00:00.000Z',
+    });
+    const remote = createRemote({
+        status: 'present', datasetId: 'dataset-large-cache', revision: 9,
+        fingerprint: fingerprint(9), manifest: fixture.manifest,
+    }, { downloads: fixture.downloads });
+    let activeInspections = 0;
+    let maxActiveInspections = 0;
+    let inspections = 0;
+    const sync = modules.createAvatarStorageCoordinator({
+        localStore: local,
+        cacheStore: cache,
+        controlStore: control,
+        remote,
+        avatarStorage: modules.avatarStorage,
+        inspectDataUrl: async dataUrl => {
+            activeInspections += 1;
+            maxActiveInspections = Math.max(maxActiveInspections, activeInspections);
+            await Promise.resolve();
+            const result = await inspect(dataUrl);
+            inspections += 1;
+            activeInspections -= 1;
+            return result;
+        },
+    });
+    const state = await sync.initialize();
+    assert.equal(state.phase, 'remote-ready');
+    assert.equal((await sync.store.listAssets()).length, 242);
+    assert.equal(inspections, 484);
+    assert.equal(maxActiveInspections, 1, 'cached images must be verified one at a time');
+    assert.equal(remote.calls.filter(call => call.startsWith('download:')).length, 0);
+});
+
+test('large remote hydration downloads and verifies one image at a time into a shadow cache', async () => {
+    const fixture = remoteLibrary(180, 'hydrate');
+    const remote = createRemote({
+        status: 'present', datasetId: 'dataset-large-hydrate', revision: 3,
+        fingerprint: fingerprint(3), manifest: fixture.manifest,
+    }, { downloads: fixture.downloads });
+    const originalDownload = remote.download.bind(remote);
+    let activeDownloads = 0;
+    let maxActiveDownloads = 0;
+    remote.download = async ref => {
+        activeDownloads += 1;
+        maxActiveDownloads = Math.max(maxActiveDownloads, activeDownloads);
+        await Promise.resolve();
+        try { return await originalDownload(ref); }
+        finally { activeDownloads -= 1; }
+    };
+    const baseCache = memoryStore();
+    const cacheStores = new Map([['theme_mgr_avatar_cache_db', baseCache]]);
+    const createCacheStore = name => {
+        if (!cacheStores.has(name)) cacheStores.set(name, memoryStore());
+        return cacheStores.get(name);
+    };
+    const control = modules.avatarSync.createMemoryControlStore();
+    const sync = coordinator({ local: memoryStore(), cache: baseCache, control, remote, createCacheStore });
+    await sync.initialize();
+    const pointer = await control.get();
+    assert.match(pointer.cacheDatabaseName, /^theme_mgr_avatar_cache_db__hydrate__/);
+    assert.equal(maxActiveDownloads, 1, 'remote images must not download concurrently');
+    assert.equal(remote.calls.filter(call => call.startsWith('download:')).length, 360);
+    assert.equal((await cacheStores.get(pointer.cacheDatabaseName).listAssets()).length, 180);
+    assert.equal((await baseCache.listAssets()).length, 0);
+});
+
+test('remote drift during shadow hydration keeps the previous cache pointer and last-known-good data', async () => {
+    const previous = remoteLibrary(1, 'previous');
+    const incoming = remoteLibrary(3, 'incoming');
+    const baseCache = memoryStore(previous.snapshot);
+    const cacheStores = new Map([['theme_mgr_avatar_cache_db', baseCache]]);
+    const createCacheStore = name => {
+        if (!cacheStores.has(name)) cacheStores.set(name, memoryStore());
+        return cacheStores.get(name);
+    };
+    const control = modules.avatarSync.createMemoryControlStore({
+        version: 1, mode: 'remote-authoritative', datasetId: 'dataset-drift', revision: 1,
+        fingerprint: fingerprint(1), manifest: previous.manifest, cacheDatabaseName: 'theme_mgr_avatar_cache_db',
+        updatedAt: '2026-09-12T00:00:00.000Z',
+    });
+    const remote = createRemote({
+        status: 'present', datasetId: 'dataset-drift', revision: 2,
+        fingerprint: fingerprint(2), manifest: incoming.manifest,
+    }, { downloads: incoming.downloads });
+    const originalRead = remote.readState.bind(remote);
+    let reads = 0;
+    remote.readState = () => {
+        reads += 1;
+        if (reads === 2) remote.setState({
+            status: 'present', datasetId: 'dataset-drift', revision: 3,
+            fingerprint: fingerprint(3), manifest: incoming.manifest,
+        });
+        return originalRead();
+    };
+    const sync = coordinator({ local: memoryStore(), cache: baseCache, control, remote, createCacheStore });
+    await assert.rejects(sync.initialize(), error => error.code === 'AVATAR_STORAGE_BLOCKED');
+    const pointer = await control.get();
+    assert.equal(pointer.revision, 1);
+    assert.equal(pointer.cacheDatabaseName, 'theme_mgr_avatar_cache_db');
+    assert.equal((await baseCache.listAssets())[0].id, 'previous-0');
+    assert.equal(sync.getState().reason, 'AVATAR_REMOTE_CHANGED');
+});
+
+test('an online corrupt cache is replaced through a verified shadow without mutating the old cache', async () => {
+    const fixture = remoteLibrary(2, 'repair');
+    const corruptSnapshot = JSON.parse(JSON.stringify(fixture.snapshot));
+    corruptSnapshot.assets[0].imageData = 'data:image/jpeg;base64,tampered';
+    const baseCache = memoryStore(corruptSnapshot);
+    const cacheStores = new Map([['theme_mgr_avatar_cache_db', baseCache]]);
+    const createCacheStore = name => {
+        if (!cacheStores.has(name)) cacheStores.set(name, memoryStore());
+        return cacheStores.get(name);
+    };
+    const control = modules.avatarSync.createMemoryControlStore({
+        version: 1, mode: 'remote-authoritative', datasetId: 'dataset-repair', revision: 7,
+        fingerprint: fingerprint(7), manifest: fixture.manifest, cacheDatabaseName: 'theme_mgr_avatar_cache_db',
+        updatedAt: '2026-09-12T00:00:00.000Z',
+    });
+    const remote = createRemote({
+        status: 'present', datasetId: 'dataset-repair', revision: 7,
+        fingerprint: fingerprint(7), manifest: fixture.manifest,
+    }, { downloads: fixture.downloads });
+    const sync = coordinator({ local: memoryStore(), cache: baseCache, control, remote, createCacheStore });
+    await sync.initialize();
+    const pointer = await control.get();
+    assert.notEqual(pointer.cacheDatabaseName, 'theme_mgr_avatar_cache_db');
+    assert.equal((await baseCache.getAsset('repair-0')).imageData, 'data:image/jpeg;base64,tampered');
+    assert.equal((await sync.store.getAsset('repair-0')).imageData, fixture.snapshot.assets[0].imageData);
 });
 
 test('after takeover an offline backend uses only verified cache and rejects every mutation', async () => {
@@ -791,7 +982,7 @@ test('read barrier waits for an already accepted local write before capturing a 
 test('remote consistency state revalidates the live revision and fingerprint and fails closed on drift', async () => {
     const original = { status: 'present', datasetId: 'dataset-remote', revision: 7, fingerprint: fingerprint(7), manifest: emptyManifest() };
     const remote = createRemote(original);
-    const sync = coordinator({ local: memoryStore(), cache: memoryStore(), remote });
+    const sync = coordinator({ local: memoryStore(), cache: memoryStore(), remote, createCacheStore: () => memoryStore() });
     await sync.initialize();
     const stamp = await sync.getConsistencyState();
     assert.equal(stamp.consistency, 'verified');

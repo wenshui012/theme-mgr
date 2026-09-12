@@ -359,6 +359,7 @@
                 : modules.createAvatarStore({ adapter: modules.avatarStorage.createMemoryAdapter() });
             avatarCoordinator = modules.createAvatarStorageCoordinator({
                 localStore: localAvatarStore,
+                createCacheStore: function (databaseName) { return modules.createAvatarStore({ dbName: databaseName }); },
                 getPostHeaders: getPostHeaders,
                 isBackendAvailable: getServerMode,
                 isExternalWriteBlocked: function () { return avatarRecoveryGateLocked; },

@@ -8370,7 +8370,7 @@
 })(window);
 /* END MODULE 16/29: src/avatar-storage.js */
 
-/* BEGIN MODULE 17/29: src/avatar-sync.js | sha256:b0b60324e4f61e81b707f083557c3f12992bd8cce6e167944837831f7da60d2c */
+/* BEGIN MODULE 17/29: src/avatar-sync.js | sha256:8fa5897e3cdc1431d55280625978639615d091dbfdacc72f89665861fd898f01 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var SERVER_BASE = '/api/plugins/theme-manager';
@@ -8383,6 +8383,8 @@
     var CONTROL_VERSION = 1;
     var IMAGE_URL_PREFIX = SERVER_BASE + '/images/';
     var REQUEST_TIMEOUT_MS = 10000;
+    var CACHE_VERIFY_BATCH_SIZE = 8;
+    var CACHE_VERIFY_TIMEOUT_MS = 30000;
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -8401,6 +8403,24 @@
         return '{' + Object.keys(value).sort().map(function (key) {
             return JSON.stringify(key) + ':' + stableStringify(value[key]);
         }).join(',') + '}';
+    }
+    function forEachSequential(items, iteratee) {
+        items = Array.isArray(items) ? items : [];
+        return new Promise(function (resolve, reject) {
+            var index = 0;
+            function next() {
+                if (index >= items.length) { resolve(); return; }
+                var currentIndex = index;
+                index += 1;
+                var result;
+                try { result = iteratee(items[currentIndex], currentIndex); }
+                catch (error) { reject(error); return; }
+                Promise.resolve(result).then(function () {
+                    global.setTimeout(next, 0);
+                }, reject);
+            }
+            next();
+        });
     }
     function emptySnapshot() { return { assets: [], bindings: [], nativeViews: [], sourceIntents: [] }; }
     function emptyManifest() { return { schemaVersion: MANIFEST_VERSION, assets: [], bindings: [], nativeViews: [], sourceIntents: [] }; }
@@ -8422,8 +8442,11 @@
         var bytes = new Uint8Array(binary.length);
         for (var i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
         if (!bytes.length) return Promise.reject(makeError('AVATAR_BLOB_INVALID', '头像图片内容为空'));
+        var byteLength = bytes.length;
         return global.crypto.subtle.digest('SHA-256', bytes).then(function (hash) {
-            return { sha256: 'sha256:' + bytesToHex(hash), bytes: bytes.length, mime: normalizeMime(match[1]) };
+            binary = '';
+            bytes = null;
+            return { sha256: 'sha256:' + bytesToHex(hash), bytes: byteLength, mime: normalizeMime(match[1]) };
         });
     }
     function arrayBufferToDataUrl(buffer, mime) {
@@ -8520,6 +8543,34 @@
     function makeDatasetId() {
         if (global.crypto && typeof global.crypto.randomUUID === 'function') return 'avatar-' + global.crypto.randomUUID();
         return 'avatar-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14);
+    }
+    function normalizeCacheDatabaseName(value, baseName) {
+        baseName = clean(baseName) || CACHE_DB_NAME;
+        if (baseName.length > 140 || !/^[A-Za-z0-9._-]+$/.test(baseName)) {
+            throw makeError('AVATAR_CONTROL_INVALID', '头像缓存数据库基础名称无效');
+        }
+        value = clean(value) || baseName;
+        if (value === baseName) return value;
+        if (value.indexOf(baseName + '__hydrate__') !== 0 || value.length > 180 || !/^[A-Za-z0-9._-]+$/.test(value)) {
+            throw makeError('AVATAR_CONTROL_INVALID', '头像缓存数据库指针无效');
+        }
+        return value;
+    }
+    function makeCacheDatabaseName(baseName) {
+        var suffix = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14);
+        if (global.crypto && typeof global.crypto.randomUUID === 'function') suffix = global.crypto.randomUUID();
+        return clean(baseName || CACHE_DB_NAME) + '__hydrate__' + suffix;
+    }
+    function cacheVerifierWorkerSource() {
+        return [
+            "function fail(code,message){var error=new Error(message);error.code=code;throw error;}",
+            "function hex(buffer){return Array.prototype.map.call(new Uint8Array(buffer),function(byte){return byte.toString(16).padStart(2,'0');}).join('');}",
+            "function inspect(dataUrl){var match=/^data:(image\\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\\s]+)$/i.exec(String(dataUrl||'').trim());if(!match)fail('AVATAR_BLOB_INVALID','头像缓存图片格式无效');var binary;try{binary=atob(match[2].replace(/\\s/g,''));}catch(error){fail('AVATAR_BLOB_INVALID','头像缓存图片 Base64 无效');}if(!binary.length)fail('AVATAR_BLOB_INVALID','头像缓存图片内容为空');var bytes=new Uint8Array(binary.length);for(var i=0;i<binary.length;i+=1)bytes[i]=binary.charCodeAt(i);var length=bytes.length;return crypto.subtle.digest('SHA-256',bytes).then(function(hash){binary='';bytes=null;return{sha256:'sha256:'+hex(hash),bytes:length,mime:match[1].toLowerCase()==='image/jpg'?'image/jpeg':match[1].toLowerCase()};});}",
+            "function openDb(name){return new Promise(function(resolve,reject){var request=indexedDB.open(name);request.onsuccess=function(){resolve(request.result);};request.onerror=function(){reject(request.error||new Error('cache open failed'));};request.onblocked=function(){reject(new Error('cache open blocked'));};});}",
+            "function getRecord(db,storeName,id){return new Promise(function(resolve,reject){var request=db.transaction([storeName],'readonly').objectStore(storeName).get(id);request.onsuccess=function(){resolve(request.result||null);};request.onerror=function(){reject(request.error||new Error('cache read failed'));};});}",
+            "function verify(actual,expected){if(!actual||actual.sha256!==expected.sha256||actual.bytes!==expected.bytes||actual.mime!==expected.mime)fail('AVATAR_BLOB_MISMATCH','头像缓存图片完整性校验失败');}",
+            "self.onmessage=function(event){var input=event.data||{},db;openDb(input.databaseName).then(function(opened){db=opened;return(input.items||[]).reduce(function(tail,item){return tail.then(function(){var mainData,thumbData;return Promise.all([getRecord(db,'main-images',item.id),getRecord(db,'thumbnails',item.id)]).then(function(records){if(!records[0]||!records[1])fail('AVATAR_CACHE_INVALID','头像缓存缺少主图或缩略图');mainData=records[0].imageData;thumbData=records[1].thumbData;records=null;return inspect(mainData);}).then(function(actual){verify(actual,item.image);mainData='';return inspect(thumbData);}).then(function(actual){verify(actual,item.thumbnail);thumbData='';});});},Promise.resolve());}).then(function(){if(db)db.close();self.postMessage({ok:true});}).catch(function(error){if(db)db.close();self.postMessage({ok:false,code:error&&error.code||'AVATAR_CACHE_INVALID',message:error&&error.message||'头像缓存校验失败'});});};",
+        ].join('\n');
     }
 
     function createMemoryControlStore(seed) {
@@ -8756,7 +8807,7 @@
         return { probeCapability: probeCapability, readState: readState, upload: upload, commit: commit, download: download };
     }
 
-    function normalizeControl(raw, storageApi) {
+    function normalizeControl(raw, storageApi, baseCacheDatabaseName) {
         if (!isObject(raw) || raw.version !== CONTROL_VERSION || raw.mode !== 'remote-authoritative' ||
             typeof raw.datasetId !== 'string' || !/^[A-Za-z0-9._-]{8,128}$/.test(raw.datasetId) || !Number.isSafeInteger(raw.revision) || raw.revision < 1 ||
             !/^sha256:[a-f0-9]{64}$/.test(raw.fingerprint)) throw makeError('AVATAR_CONTROL_INVALID', '头像远端接管标记无效');
@@ -8768,10 +8819,11 @@
             revision: raw.revision,
             fingerprint: raw.fingerprint,
             manifest: normalized,
+            cacheDatabaseName: normalizeCacheDatabaseName(raw.cacheDatabaseName, baseCacheDatabaseName),
             updatedAt: clean(raw.updatedAt),
         };
     }
-    function controlFromState(remoteState, manifest) {
+    function controlFromState(remoteState, manifest, cacheDatabaseName, baseCacheDatabaseName) {
         return {
             version: CONTROL_VERSION,
             mode: 'remote-authoritative',
@@ -8779,6 +8831,7 @@
             revision: remoteState.revision,
             fingerprint: remoteState.fingerprint,
             manifest: clone(manifest),
+            cacheDatabaseName: normalizeCacheDatabaseName(cacheDatabaseName, baseCacheDatabaseName),
             updatedAt: new Date().toISOString(),
         };
     }
@@ -8788,7 +8841,18 @@
         var storageApi = options.avatarStorage || ns.avatarStorage;
         if (!storageApi || !storageApi.normalizeSnapshot) throw makeError('AVATAR_COORDINATOR_UNAVAILABLE', '头像存储协调器缺少本地存储模块');
         var localStore = options.localStore || ns.createAvatarStore({ dbName: options.localDbName || storageApi.DB_NAME });
-        var cacheStore = options.cacheStore || ns.createAvatarStore({ dbName: options.cacheDbName || CACHE_DB_NAME });
+        var baseCacheDatabaseName = normalizeCacheDatabaseName(options.cacheDbName || CACHE_DB_NAME, options.cacheDbName || CACHE_DB_NAME);
+        var cacheDatabaseName = baseCacheDatabaseName;
+        var suppliedCacheStore = options.cacheStore || null;
+        var createCacheStore = typeof options.createCacheStore === 'function'
+            ? options.createCacheStore
+            : suppliedCacheStore
+                ? function (name) {
+                    if (name === baseCacheDatabaseName) return suppliedCacheStore;
+                    throw makeError('AVATAR_CACHE_FACTORY_UNAVAILABLE', '头像缓存需要重建，但没有可持久化的影子库工厂');
+                }
+                : function (name) { return ns.createAvatarStore({ dbName: name }); };
+        var cacheStore = suppliedCacheStore || createCacheStore(cacheDatabaseName);
         var controlStore = options.controlStore || createIndexedDbControlStore(
             hasOwn(options, 'indexedDB') ? options.indexedDB : global.indexedDB,
             options.controlDbName || CONTROL_DB_NAME
@@ -8861,36 +8925,124 @@
             activeStore = storeForSnapshot(activeSnapshot);
             return activeSnapshot;
         }
+        function setActivePersistentStore(store) {
+            activeSnapshot = null;
+            activeStore = store;
+            return store;
+        }
+        function selectCacheStore(name) {
+            name = normalizeCacheDatabaseName(name, baseCacheDatabaseName);
+            if (name === cacheDatabaseName) return cacheStore;
+            cacheDatabaseName = name;
+            cacheStore = createCacheStore(name);
+            if (!cacheStore) throw makeError('AVATAR_CACHE_INVALID', '头像缓存数据库无法打开');
+            return cacheStore;
+        }
         function useLocal(local, remoteStatus, reason, error) {
-            setActiveSnapshot(local.snapshot);
-            activeStore = localStore;
-            return publish({
-                phase: 'local-ready',
-                authoritative: 'local',
-                writable: true,
-                offline: false,
-                remote: remoteStatus || 'unavailable',
-                reason: reason || 'shared-backend-unavailable',
-                error: errorSummary(error),
+            return validateLocal(local).then(function () {
+                setActivePersistentStore(localStore);
+                return publish({
+                    phase: 'local-ready',
+                    authoritative: 'local',
+                    writable: true,
+                    offline: false,
+                    remote: remoteStatus || 'unavailable',
+                    reason: reason || 'shared-backend-unavailable',
+                    error: errorSummary(error),
+                });
+            });
+        }
+        function assetMetadata(raw) {
+            var asset = storageApi.normalizeAsset(Object.assign({}, raw, { imageData: 'verified-cache-main', thumbData: 'verified-cache-thumb' }));
+            delete asset.imageData;
+            delete asset.thumbData;
+            return asset;
+        }
+        function normalizedStoreRecords(store) {
+            return Promise.resolve(store.ready).then(function () {
+                return Promise.all([store.listAssets(), store.listBindings(), store.listNativeViews(), store.listSourceIntents()]);
+            }).then(function (parts) {
+                var assets = (parts[0] || []).map(assetMetadata);
+                var assetIds = new Set();
+                assets.forEach(function (asset) {
+                    if (assetIds.has(asset.id)) throw makeError('AVATAR_CACHE_INVALID', '头像缓存包含重复资产');
+                    assetIds.add(asset.id);
+                });
+                var bindings = (parts[1] || []).map(storageApi.normalizeBinding);
+                var bindingIds = new Set();
+                bindings.forEach(function (binding) {
+                    if (bindingIds.has(binding.id) || !assetIds.has(binding.avatarId)) throw makeError('AVATAR_CACHE_INVALID', '头像缓存包含重复或悬空绑定');
+                    bindingIds.add(binding.id);
+                });
+                var nativeViews = (parts[2] || []).map(storageApi.normalizeNativeView);
+                var nativeIds = new Set();
+                nativeViews.forEach(function (record) {
+                    if (nativeIds.has(record.id)) throw makeError('AVATAR_CACHE_INVALID', '头像缓存包含重复原头像调整');
+                    nativeIds.add(record.id);
+                });
+                var sourceIntents = (parts[3] || []).map(storageApi.normalizeSourceIntent);
+                var sourceIds = new Set();
+                sourceIntents.forEach(function (record) {
+                    if (sourceIds.has(record.id)) throw makeError('AVATAR_CACHE_INVALID', '头像缓存包含重复来源意图');
+                    sourceIds.add(record.id);
+                });
+                function byId(left, right) { return left.id < right.id ? -1 : left.id > right.id ? 1 : 0; }
+                return {
+                    assets: assets.sort(byId),
+                    bindings: bindings.sort(byId),
+                    nativeViews: nativeViews.sort(byId),
+                    sourceIntents: sourceIntents.sort(byId),
+                };
+            });
+        }
+        function validateStoredAssets(store, records) {
+            return forEachSequential(records.assets, function (metadata) {
+                return store.getAsset(metadata.id).then(function (storedAsset) {
+                    if (!storedAsset) throw makeError('AVATAR_CACHE_INVALID', '头像存储缺少主图或缩略图', { avatarId: metadata.id });
+                    var normalized = storageApi.normalizeAsset(storedAsset);
+                    if (stableStringify(assetMetadata(normalized)) !== stableStringify(metadata)) {
+                        throw makeError('AVATAR_CACHE_INVALID', '头像存储的图片与元数据不一致', { avatarId: metadata.id });
+                    }
+                    storedAsset = null;
+                    normalized = null;
+                });
             });
         }
         function classifyLocal() {
-            return Promise.resolve(localStore.ready).then(function () { return localStore.readSnapshot(); }).then(function (snapshot) {
-                snapshot = storageApi.normalizeSnapshot(snapshot);
-                return { status: storageApi.snapshotIsEmpty(snapshot) ? 'empty' : 'present', snapshot: snapshot };
+            return normalizedStoreRecords(localStore).then(function (records) {
+                var empty = !records.assets.length && !records.bindings.length && !records.nativeViews.length && !records.sourceIntents.length;
+                return { status: empty ? 'empty' : 'present', records: records, validated: empty };
             }).catch(function (error) {
                 return { status: error && error.code === 'AVATAR_SNAPSHOT_INVALID' || error && /INVALID/.test(error.code || '') ? 'invalid' : 'error', error: error };
+            });
+        }
+        function validateLocal(local) {
+            if (local.validated || local.status !== 'present') return Promise.resolve(local);
+            return validateStoredAssets(localStore, local.records).then(function () {
+                local.validated = true;
+                return local;
+            });
+        }
+        function loadLocalSnapshot(local) {
+            if (local.snapshot) return Promise.resolve(local);
+            return localStore.readSnapshot().then(function (snapshot) {
+                local.snapshot = storageApi.normalizeSnapshot(snapshot);
+                local.status = storageApi.snapshotIsEmpty(local.snapshot) ? 'empty' : 'present';
+                return local;
             });
         }
         function readControl() {
             return Promise.resolve(controlStore.ready).then(function () { return controlStore.get(); }).then(function (raw) {
                 if (!raw) return { status: 'empty', control: null };
-                return { status: 'present', control: normalizeControl(raw, storageApi) };
+                return { status: 'present', control: normalizeControl(raw, storageApi, baseCacheDatabaseName) };
             }).catch(function (error) { return { status: 'error', error: error }; });
         }
         function verifyBlob(dataUrl, ref) {
             ref = normalizeImageRef(ref);
-            return Promise.resolve(inspectDataUrl(dataUrl)).then(function (actual) {
+            var inspection;
+            try { inspection = inspectDataUrl(dataUrl); }
+            finally { dataUrl = null; }
+            return Promise.resolve(inspection).then(function (actual) {
                 actual = actual || {};
                 if (clean(actual.sha256).toLowerCase() !== ref.sha256 || Number(actual.bytes) !== ref.bytes || normalizeMime(actual.mime) !== ref.mime) {
                     throw makeError('AVATAR_BLOB_MISMATCH', '头像图片与后端校验信息不一致', { name: ref.name });
@@ -8908,61 +9060,180 @@
                 return ref;
             });
         }
-        function hydrateManifest(manifest) {
-            var normalized = normalizeManifest(manifest, storageApi);
-            return Promise.all(normalized.manifest.assets.map(function (asset) {
-                return Promise.all([remote.download(asset.image), remote.download(asset.thumbnail)]).then(function (data) {
-                    return Promise.all([verifyBlob(data[0], asset.image), verifyBlob(data[1], asset.thumbnail)]).then(function () {
-                        return Object.assign({}, asset, { imageData: data[0], thumbData: data[1] });
+        function verifyCacheBatch(workerUrl, assets) {
+            return new Promise(function (resolve, reject) {
+                var worker;
+                var timeout;
+                var settled = false;
+                function finish(error) {
+                    if (settled) return;
+                    settled = true;
+                    if (timeout) global.clearTimeout(timeout);
+                    if (worker) worker.terminate();
+                    if (error) reject(error);
+                    else resolve();
+                }
+                try { worker = new global.Worker(workerUrl); }
+                catch (error) { finish(makeError('AVATAR_CACHE_VERIFY_UNAVAILABLE', '头像缓存隔离校验无法启动', { cause: error.message })); return; }
+                worker.onmessage = function (event) {
+                    var result = event.data || {};
+                    if (result.ok === true) finish();
+                    else finish(makeError(clean(result.code) || 'AVATAR_CACHE_INVALID', clean(result.message) || '头像缓存校验失败'));
+                };
+                worker.onerror = function (event) {
+                    finish(makeError('AVATAR_CACHE_VERIFY_UNAVAILABLE', '头像缓存隔离校验异常', { cause: clean(event && event.message) }));
+                };
+                timeout = global.setTimeout(function () {
+                    finish(makeError('AVATAR_CACHE_VERIFY_TIMEOUT', '头像缓存隔离校验超时'));
+                }, CACHE_VERIFY_TIMEOUT_MS);
+                try {
+                    worker.postMessage({
+                        databaseName: cacheDatabaseName,
+                        items: assets.map(function (asset) {
+                            return { id: asset.id, image: clone(asset.image), thumbnail: clone(asset.thumbnail) };
+                        }),
                     });
-                });
-            })).then(function (assets) {
-                return storageApi.normalizeSnapshot({
-                    assets: assets,
-                    bindings: normalized.manifest.bindings,
-                    nativeViews: normalized.manifest.nativeViews,
-                    sourceIntents: normalized.manifest.sourceIntents,
-                });
+                } catch (error) {
+                    finish(makeError('AVATAR_CACHE_VERIFY_UNAVAILABLE', '头像缓存隔离校验请求失败', { cause: error.message }));
+                }
             });
         }
-        function validateCachedSnapshot(snapshot, manifest) {
-            snapshot = storageApi.normalizeSnapshot(snapshot);
-            var normalized = normalizeManifest(manifest, storageApi);
-            var rebuilt = manifestFromSnapshot(snapshot, normalized.refs, storageApi);
-            if (stableStringify(rebuilt) !== stableStringify(normalized.manifest)) {
-                return Promise.reject(makeError('AVATAR_CACHE_INVALID', '头像最后已知正常缓存与远端 manifest 不一致'));
+        function verifyCacheImages(store, assets) {
+            var isolated = store === cacheStore && inspectDataUrl === defaultInspectDataUrl &&
+                typeof global.Worker === 'function' && typeof global.Blob === 'function' && global.URL &&
+                typeof global.URL.createObjectURL === 'function' && global.indexedDB;
+            if (!isolated) {
+                return forEachSequential(assets, function (manifestAsset) {
+                    return store.getAsset(manifestAsset.id).then(function (cachedAsset) {
+                        if (!cachedAsset) throw makeError('AVATAR_CACHE_INVALID', '头像缓存缺少图片', { avatarId: manifestAsset.id });
+                        var imageData = cachedAsset.imageData;
+                        var thumbData = cachedAsset.thumbData;
+                        cachedAsset = null;
+                        return verifyBlob(imageData, manifestAsset.image).then(function () {
+                            imageData = '';
+                            return verifyBlob(thumbData, manifestAsset.thumbnail);
+                        }).then(function () { thumbData = ''; });
+                    });
+                });
             }
-            return Promise.all(snapshot.assets.map(function (asset) {
-                var refs = normalized.refs.get(asset.id);
-                return Promise.all([verifyBlob(asset.imageData, refs.image), verifyBlob(asset.thumbData, refs.thumbnail)]);
-            })).then(function () { return snapshot; });
+            var workerUrl = global.URL.createObjectURL(new global.Blob([cacheVerifierWorkerSource()], { type: 'text/javascript' }));
+            var batches = [];
+            for (var offset = 0; offset < assets.length; offset += CACHE_VERIFY_BATCH_SIZE) {
+                batches.push(assets.slice(offset, offset + CACHE_VERIFY_BATCH_SIZE));
+            }
+            return forEachSequential(batches, function (batch) { return verifyCacheBatch(workerUrl, batch); }).finally(function () {
+                global.URL.revokeObjectURL(workerUrl);
+            });
+        }
+        function validateCacheStore(store, manifest) {
+            var normalized = normalizeManifest(manifest, storageApi);
+            var expected = {
+                assets: normalized.manifest.assets.map(assetMetadata),
+                bindings: normalized.manifest.bindings.map(storageApi.normalizeBinding),
+                nativeViews: normalized.manifest.nativeViews.map(storageApi.normalizeNativeView),
+                sourceIntents: normalized.manifest.sourceIntents.map(storageApi.normalizeSourceIntent),
+            };
+            Object.keys(expected).forEach(function (key) {
+                expected[key].sort(function (left, right) { return left.id < right.id ? -1 : left.id > right.id ? 1 : 0; });
+            });
+            return normalizedStoreRecords(store).then(function (actual) {
+                if (stableStringify(actual) !== stableStringify(expected)) {
+                    throw makeError('AVATAR_CACHE_INVALID', '头像最后已知正常缓存与远端 manifest 不一致');
+                }
+                return verifyCacheImages(store, normalized.manifest.assets);
+            }).then(function () { return normalized; });
+        }
+        function hydrateIntoStore(store, manifest) {
+            var normalized = normalizeManifest(manifest, storageApi);
+            return Promise.resolve(store.ready).then(function () { return store.clear(); }).then(function () {
+                return forEachSequential(normalized.manifest.assets, function (manifestAsset) {
+                    var imageData;
+                    return remote.download(manifestAsset.image).then(function (dataUrl) {
+                        imageData = dataUrl;
+                        return verifyBlob(dataUrl, manifestAsset.image);
+                    }).then(function () {
+                        return remote.download(manifestAsset.thumbnail);
+                    }).then(function (thumbData) {
+                        return verifyBlob(thumbData, manifestAsset.thumbnail).then(function () {
+                            return store.putAsset(Object.assign({}, manifestAsset, { imageData: imageData, thumbData: thumbData })).then(function () {
+                                imageData = '';
+                                thumbData = '';
+                            });
+                        });
+                    });
+                });
+            }).then(function () {
+                if (!normalized.manifest.bindings.length) return null;
+                return store.mutateBindings(normalized.manifest.bindings.map(function (binding) { return { type: 'put', binding: binding }; }));
+            }).then(function () {
+                return forEachSequential(normalized.manifest.nativeViews, function (record) { return store.putNativeView(record); });
+            }).then(function () {
+                return forEachSequential(normalized.manifest.sourceIntents, function (record) { return store.putSourceIntent(record); });
+            }).then(function () { return validateCacheStore(store, normalized.manifest); });
+        }
+        function activateRemoteCache(remoteState, normalized, writable, offline, localStatus, reason) {
+            setActivePersistentStore(cacheStore);
+            remoteManifest = normalized.manifest;
+            remoteRefs = normalized.refs;
+            datasetId = remoteState.datasetId;
+            revision = remoteState.revision;
+            fingerprint = remoteState.fingerprint;
+            return publish({
+                phase: 'remote-ready', authoritative: 'remote', writable: writable, offline: offline,
+                local: localStatus || state.local, remote: offline ? 'error' : 'present', reason: reason || '', error: null,
+            });
         }
         function persistRemoteReady(snapshot, remoteState, manifest) {
             var normalized = normalizeManifest(manifest, storageApi);
             return cacheStore.replaceSnapshot(snapshot).then(function () {
-                return controlStore.put(controlFromState(remoteState, normalized.manifest));
+                return validateCacheStore(cacheStore, normalized.manifest);
             }).then(function () {
-                setActiveSnapshot(snapshot);
-                remoteManifest = normalized.manifest;
-                remoteRefs = normalized.refs;
-                datasetId = remoteState.datasetId;
-                revision = remoteState.revision;
-                fingerprint = remoteState.fingerprint;
-                return publish({ phase: 'remote-ready', authoritative: 'remote', writable: true, offline: false, remote: 'present', reason: '', error: null });
+                return controlStore.put(controlFromState(remoteState, normalized.manifest, cacheDatabaseName, baseCacheDatabaseName));
+            }).then(function () {
+                return activateRemoteCache(remoteState, normalized, true, false);
             });
         }
         function loadOfflineCache(control, localStatus) {
-            return cacheStore.readSnapshot().then(function (snapshot) { return validateCachedSnapshot(snapshot, control.manifest); }).then(function (snapshot) {
-                var normalized = normalizeManifest(control.manifest, storageApi);
-                setActiveSnapshot(snapshot);
-                remoteManifest = normalized.manifest;
-                remoteRefs = normalized.refs;
-                datasetId = control.datasetId;
-                revision = control.revision;
-                fingerprint = control.fingerprint;
-                return publish({ phase: 'remote-ready', authoritative: 'remote', writable: false, offline: true, local: localStatus, remote: 'error', reason: 'last-known-good-cache' });
+            try { selectCacheStore(control.cacheDatabaseName); }
+            catch (error) { return Promise.resolve().then(function () { return block('offline-cache-invalid', localStatus, 'error', undefined, error); }); }
+            return validateCacheStore(cacheStore, control.manifest).then(function (normalized) {
+                return activateRemoteCache(control, normalized, false, true, localStatus, 'last-known-good-cache');
             }).catch(function (error) {
                 return block(error.code || 'offline-cache-invalid', localStatus, 'error', undefined, error);
+            });
+        }
+        function sameRemoteState(left, right) {
+            if (!left || !right || left.status !== 'present' || right.status !== 'present') return false;
+            if (left.datasetId !== right.datasetId || left.revision !== right.revision || left.fingerprint !== right.fingerprint) return false;
+            return stableStringify(normalizeManifest(left.manifest, storageApi).manifest) === stableStringify(normalizeManifest(right.manifest, storageApi).manifest);
+        }
+        function hydrateRemoteReady(remoteState, localStatus) {
+            var shadowName = makeCacheDatabaseName(baseCacheDatabaseName);
+            var shadowStore = createCacheStore(shadowName);
+            return hydrateIntoStore(shadowStore, remoteState.manifest).then(function (normalized) {
+                return remote.readState().then(function (readBack) {
+                    if (!sameRemoteState(remoteState, readBack)) {
+                        throw makeError('AVATAR_REMOTE_CHANGED', '头像后端在缓存重建期间发生变化，已中止切换');
+                    }
+                    return controlStore.put(controlFromState(readBack, normalized.manifest, shadowName, baseCacheDatabaseName)).then(function () {
+                        cacheDatabaseName = shadowName;
+                        cacheStore = shadowStore;
+                        return activateRemoteCache(readBack, normalized, true, false, localStatus);
+                    });
+                });
+            });
+        }
+        function reuseOrHydrateRemote(control, remoteState, localStatus) {
+            var controlMatches = control && control.datasetId === remoteState.datasetId && control.revision === remoteState.revision &&
+                control.fingerprint === remoteState.fingerprint && stableStringify(control.manifest) === stableStringify(normalizeManifest(remoteState.manifest, storageApi).manifest);
+            if (!controlMatches) return hydrateRemoteReady(remoteState, localStatus);
+            try { selectCacheStore(control.cacheDatabaseName); }
+            catch (_) { return hydrateRemoteReady(remoteState, localStatus); }
+            return validateCacheStore(cacheStore, remoteState.manifest).then(function (normalized) {
+                return activateRemoteCache(remoteState, normalized, true, false, localStatus);
+            }).catch(function (error) {
+                if (error && (error.code === 'AVATAR_CACHE_VERIFY_UNAVAILABLE' || error.code === 'AVATAR_CACHE_VERIFY_TIMEOUT')) throw error;
+                return hydrateRemoteReady(remoteState, localStatus);
             });
         }
         function migrateLocal(local) {
@@ -9030,7 +9301,7 @@
                             if (controlResult.status === 'present') return block('remote-became-empty', local.status, 'empty', 'conflict');
                             if (local.status === 'present') {
                                 remoteWriteStarted = true;
-                                return migrateLocal(local);
+                                return loadLocalSnapshot(local).then(migrateLocal);
                             }
                             setActiveSnapshot(emptySnapshot());
                             datasetId = makeDatasetId();
@@ -9048,9 +9319,7 @@
                         if (controlResult.status === 'present' && controlResult.control.datasetId !== remoteState.datasetId) {
                             return block('dataset-id-conflict', local.status, 'present', 'conflict');
                         }
-                        return hydrateManifest(remoteState.manifest).then(function (snapshot) {
-                            return persistRemoteReady(snapshot, remoteState, remoteState.manifest);
-                        });
+                        return reuseOrHydrateRemote(controlResult.control, remoteState, local.status);
                     });
                 }).catch(function (error) {
                     if (error && (error.code === 'AVATAR_STORAGE_BLOCKED' || error.code === 'AVATAR_STORAGE_CONFLICT')) throw error;
@@ -9218,11 +9487,12 @@
                     throw makeError('AVATAR_COMMIT_VERIFY_FAILED', '头像远端写入响应校验失败');
                 }
                 return Promise.resolve(cacheStore[method].apply(cacheStore, staged.applyArgs)).then(function () {
-                    return controlStore.put(controlFromState(committed, normalized.manifest));
+                    return controlStore.put(controlFromState(committed, normalized.manifest, cacheDatabaseName, baseCacheDatabaseName));
                 }).then(function () {
+                    if (activeStore === cacheStore) return null;
                     return activeStore[method].apply(activeStore, staged.applyArgs);
                 }).then(function () {
-                    activeSnapshot.bindings = clone(normalized.manifest.bindings);
+                    if (activeSnapshot) activeSnapshot.bindings = clone(normalized.manifest.bindings);
                     remoteManifest = normalized.manifest;
                     remoteRefs = normalized.refs;
                     revision = committed.revision;
@@ -9339,8 +9609,9 @@
                         throw makeError('AVATAR_COMMIT_VERIFY_FAILED', '头像远端写入响应校验失败');
                     }
                     return Promise.resolve(cacheStore[method].apply(cacheStore, staged.applyArgs)).then(function () {
-                        return controlStore.put(controlFromState(committed, normalized.manifest));
+                        return controlStore.put(controlFromState(committed, normalized.manifest, cacheDatabaseName, baseCacheDatabaseName));
                     }).then(function () {
+                        if (activeStore === cacheStore) return null;
                         return activeStore[method].apply(activeStore, staged.applyArgs);
                     }).then(function () {
                         remoteManifest = normalized.manifest;
@@ -9415,6 +9686,7 @@
         manifestFromSnapshot: manifestFromSnapshot,
         refsFromManifest: refsFromManifest,
         stableStringify: stableStringify,
+        inspectDataUrl: defaultInspectDataUrl,
         makeError: makeError,
     };
 })(window);
@@ -15095,7 +15367,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:b0a08ce4aa800e3c2347ac64edcf49d23417b1c6d0ce212c95d35092b2ad8c85 */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:0aed7fa62dd170b23ec6e9db2986cb825acaa7e5aeb2d67ecd907f478e41eb44 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -15457,6 +15729,7 @@
                 : modules.createAvatarStore({ adapter: modules.avatarStorage.createMemoryAdapter() });
             avatarCoordinator = modules.createAvatarStorageCoordinator({
                 localStore: localAvatarStore,
+                createCacheStore: function (databaseName) { return modules.createAvatarStore({ dbName: databaseName }); },
                 getPostHeaders: getPostHeaders,
                 isBackendAvailable: getServerMode,
                 isExternalWriteBlocked: function () { return avatarRecoveryGateLocked; },

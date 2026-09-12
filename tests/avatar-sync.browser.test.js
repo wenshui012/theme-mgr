@@ -152,7 +152,31 @@ async function chromium() {
     assert(second.count === 2, 'offline cache did not retain the incrementally added avatar');
     assert(second.writeCode === 'AVATAR_STORAGE_READ_ONLY', 'offline cache accepted a mutation');
 
-    console.log(JSON.stringify({ ok: true, migration: first.state, offline: second.state, calls }, null, 2));
+    offline = false;
+    const imageGetsBeforeReload = calls.filter(call => call.startsWith('GET /api/plugins/theme-manager/images/')).length;
+    const third = await page.evaluate(async names => {
+        const modules = window.ThemeMgrModules;
+        const local = modules.createAvatarStore({ dbName: names.local });
+        const cache = modules.createAvatarStore({ dbName: names.cache });
+        local.readSnapshot = () => Promise.reject(new Error('local readSnapshot must not run during remote reload'));
+        cache.readSnapshot = () => Promise.reject(new Error('cache readSnapshot must not run during remote reload'));
+        const coordinator = modules.createAvatarStorageCoordinator({
+            localStore: local,
+            cacheStore: cache,
+            cacheDbName: names.cache,
+            createCacheStore: databaseName => modules.createAvatarStore({ dbName: databaseName }),
+            controlDbName: names.control,
+            getPostHeaders: () => Promise.resolve({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'browser-csrf-token' }),
+        });
+        const state = await coordinator.initialize();
+        return { state, count: (await coordinator.store.listAssets()).length };
+    }, names);
+    assert(third.state.phase === 'remote-ready' && third.state.writable === true, 'online reload did not reuse the verified persistent cache');
+    assert(third.count === 2, 'online verified cache reload lost avatars');
+    assert(calls.filter(call => call.startsWith('GET /api/plugins/theme-manager/images/')).length === imageGetsBeforeReload,
+        'matching cache reload unexpectedly downloaded images');
+
+    console.log(JSON.stringify({ ok: true, migration: first.state, offline: second.state, reload: third.state, calls }, null, 2));
     await browser.close();
     await new Promise(resolve => server.close(resolve));
 })().catch(error => {
