@@ -424,6 +424,8 @@
         var inspectDataUrl = options.inspectDataUrl || defaultInspectDataUrl;
         var onStateChange = options.onStateChange || function () {};
         var isBackendAvailable = typeof options.isBackendAvailable === 'function' ? options.isBackendAvailable : null;
+        var isExternalWriteBlocked = typeof options.isExternalWriteBlocked === 'function' ? options.isExternalWriteBlocked : function () { return false; };
+        var startupLock = options.startupLock || null;
         var state = { phase: 'idle', authoritative: null, writable: false, offline: false, local: 'unknown', remote: 'unknown', reason: '', error: null };
         var initialization = null;
         var activeStore = null;
@@ -436,6 +438,8 @@
         var writeTail = Promise.resolve();
         var readBarrierDepth = 0;
         var readBarrierRequested = false;
+        var recoveryBarrierDepth = 0;
+        var recoveryBarrierRequested = false;
 
         function publish(next) {
             state = Object.assign({}, state, next);
@@ -617,6 +621,7 @@
         function initializeImpl() {
             var remoteWriteStarted = false;
             publish({ phase: 'probing', authoritative: null, writable: false, offline: false, reason: '', error: null });
+            if (startupLock) return Promise.resolve().then(function () { return block('recovery-incomplete', 'unknown', 'unknown', 'blocked', startupLock.error || startupLock); });
             return Promise.all([classifyLocal(), readControl()]).then(function (parts) {
                 var local = parts[0];
                 var controlResult = parts[1];
@@ -700,6 +705,7 @@
             });
         }
         function ensureWritable() {
+            if (recoveryBarrierRequested || recoveryBarrierDepth > 0 || isExternalWriteBlocked()) throw makeError('AVATAR_RECOVERY_LOCKED', '头像恢复事务进行中，当前禁止修改数据');
             if (!state.writable) throw makeError('AVATAR_STORAGE_READ_ONLY', state.offline ? '头像后端离线，当前仅可读取最后已验证缓存' : '头像存储当前为只读', clone(state));
             if (readBarrierDepth > 0) throw makeError('AVATAR_EXPORT_IN_PROGRESS', '头像导出期间暂时不能修改头像数据');
         }
@@ -733,6 +739,7 @@
         }
         function runReadBarrier(task) {
             if (typeof task !== 'function') return Promise.reject(makeError('AVATAR_EXPORT_INVALID', '头像只读任务无效'));
+            if (recoveryBarrierRequested || recoveryBarrierDepth > 0 || isExternalWriteBlocked()) return Promise.reject(makeError('AVATAR_RECOVERY_LOCKED', '头像恢复事务进行中，当前不能导出'));
             return ensureActive().then(function () {
                 if (readBarrierDepth > 0 || readBarrierRequested) throw makeError('AVATAR_EXPORT_BUSY', '已有头像只读任务正在进行');
                 readBarrierRequested = true;
@@ -744,6 +751,44 @@
                     readBarrierRequested = false;
                     if (readBarrierDepth > 0) readBarrierDepth -= 1;
                 });
+            });
+        }
+        function rebindLocalStore(nextStore, proof) {
+            if (recoveryBarrierDepth < 1) return Promise.reject(makeError('AVATAR_RECOVERY_LOCKED', '只能在恢复事务栅栏内切换头像库'));
+            if (!nextStore || !proof || proof.verified !== true || !clean(proof.databaseName)) {
+                return Promise.reject(makeError('AVATAR_RECOVERY_VERIFY_FAILED', '头像影子库缺少完整验证证据'));
+            }
+            return Promise.resolve(nextStore.ready).then(function () {
+                localStore = nextStore;
+                activeStore = nextStore;
+                activeSnapshot = null;
+                remoteManifest = null;
+                remoteRefs = new Map();
+                datasetId = null;
+                revision = 0;
+                fingerprint = '';
+                startupLock = null;
+                var next = publish({
+                    phase: 'local-ready', authoritative: 'local', writable: true, offline: false,
+                    local: proof.empty === true ? 'empty' : 'present', remote: 'unavailable', reason: 'local-dataset-rebound', error: null,
+                });
+                initialization = Promise.resolve(next);
+                return next;
+            });
+        }
+        function runRecoveryBarrier(task) {
+            if (typeof task !== 'function') return Promise.reject(makeError('AVATAR_RECOVERY_INVALID', '头像恢复事务无效'));
+            if (readBarrierRequested || readBarrierDepth > 0 || recoveryBarrierRequested || recoveryBarrierDepth > 0) {
+                return Promise.reject(makeError('AVATAR_RECOVERY_BUSY', '已有头像导出或恢复任务正在进行'));
+            }
+            recoveryBarrierRequested = true;
+            return writeTail.then(function () {
+                recoveryBarrierDepth += 1;
+                recoveryBarrierRequested = false;
+                return task({ rebindLocalStore: rebindLocalStore });
+            }).finally(function () {
+                recoveryBarrierRequested = false;
+                if (recoveryBarrierDepth > 0) recoveryBarrierDepth -= 1;
             });
         }
         function isBindingMutation(method) {
@@ -950,6 +995,7 @@
         }
         function callWrite(method, args) {
             return ensureActive().then(function (store) {
+                if (recoveryBarrierRequested || recoveryBarrierDepth > 0 || isExternalWriteBlocked()) throw makeError('AVATAR_RECOVERY_LOCKED', '头像恢复事务进行中，当前禁止修改数据');
                 if (readBarrierRequested || readBarrierDepth > 0) throw makeError('AVATAR_EXPORT_IN_PROGRESS', '头像导出期间暂时不能修改头像数据');
                 ensureWritable();
                 var task = writeTail.then(function () {
@@ -978,7 +1024,8 @@
             getState: function () { return clone(state); },
             getConsistencyState: consistencyState,
             runReadBarrier: runReadBarrier,
-            canMutate: function () { return !readBarrierRequested && readBarrierDepth === 0 && state.writable === true && (state.phase === 'local-ready' || state.phase === 'remote-ready'); },
+            runRecoveryBarrier: runRecoveryBarrier,
+            canMutate: function () { return !isExternalWriteBlocked() && !recoveryBarrierRequested && recoveryBarrierDepth === 0 && !readBarrierRequested && readBarrierDepth === 0 && state.writable === true && (state.phase === 'local-ready' || state.phase === 'remote-ready'); },
             isRuntimeReady: function () { return state.phase === 'local-ready' || state.phase === 'remote-ready'; },
         };
     };

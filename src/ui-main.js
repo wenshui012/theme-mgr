@@ -63,6 +63,9 @@
     var avatarImageProcessor = null;
     var avatarLibraryApi = null;
     var avatarTransferApi = null;
+    var avatarRecoveryApi = null;
+    var avatarRecoveryBootstrap = null;
+    var avatarRecoveryGateLocked = false;
     var avatarRuntime = null;
     var avatarPageController = null;
     var appShellApi = null;
@@ -203,7 +206,7 @@
                 !modules.themeBindings ||
                 !modules.themeAppearance ||
                 !modules.createAvatarStore || !modules.createAvatarStorageCoordinator || !modules.createAvatarImageProcessor ||
-                !modules.avatarLibrary || !modules.createAvatarTransfer || !modules.createAvatarRuntime || !modules.createAvatarPage || !modules.avatarPage ||
+                !modules.avatarLibrary || !modules.createAvatarTransfer || !modules.createAvatarRecovery || !modules.avatarRecovery || !modules.createAvatarRuntime || !modules.createAvatarPage || !modules.avatarPage ||
                 !modules.createBackgrounds ||
                 !modules.createUiSheets ||
                 !modules.createUiEvents || !modules.appShell ||
@@ -233,6 +236,7 @@
                     if (!modules.createAvatarImageProcessor) missing.push('avatar-image-tools.js');
                     if (!modules.avatarLibrary) missing.push('avatar-library.js');
                     if (!modules.createAvatarTransfer) missing.push('avatar-transfer.js');
+                    if (!modules.createAvatarRecovery || !modules.avatarRecovery) missing.push('avatar-recovery.js');
                     if (!modules.createAvatarRuntime) missing.push('avatar-runtime.js');
                     if (!modules.createAvatarPage || !modules.avatarPage) missing.push('avatar-page.js');
                     if (!modules.createBackgrounds) missing.push('backgrounds.js');
@@ -340,16 +344,25 @@
             });
             imageToolsApi = modules.imageTools;
             imageLoaderApi = modules.imageLoader;
+            avatarRecoveryBootstrap = modules.avatarRecovery.resolveBootstrap({
+                localStorage: global.localStorage,
+                defaultDatabaseName: modules.avatarStorage.DB_NAME,
+            });
+            avatarRecoveryGateLocked = avatarRecoveryBootstrap.blocked === true;
             var previousAvatarRuntime = global.ThemeMgrAvatarEditor;
             if (previousAvatarRuntime && previousAvatarRuntime !== avatarRuntime && typeof previousAvatarRuntime.stop === 'function') {
                 try { previousAvatarRuntime.stop(); }
                 catch (error) { console.warn('[头像管理] 旧 runtime 清理失败，将继续重建:', error); }
             }
-            var localAvatarStore = modules.createAvatarStore({});
+            var localAvatarStore = avatarRecoveryBootstrap.databaseName
+                ? modules.createAvatarStore({ dbName: avatarRecoveryBootstrap.databaseName })
+                : modules.createAvatarStore({ adapter: modules.avatarStorage.createMemoryAdapter() });
             avatarCoordinator = modules.createAvatarStorageCoordinator({
                 localStore: localAvatarStore,
                 getPostHeaders: getPostHeaders,
                 isBackendAvailable: getServerMode,
+                isExternalWriteBlocked: function () { return avatarRecoveryGateLocked; },
+                startupLock: avatarRecoveryBootstrap.blocked ? { error: avatarRecoveryBootstrap.error } : null,
                 onStateChange: function (avatarState) {
                     var button = document.getElementById('tm-avatar-add');
                     if (button) button.disabled = !avatarCoordinator || !avatarCoordinator.canMutate();
@@ -368,6 +381,25 @@
                 avatarStorage: modules.avatarStorage,
                 loadUiData: load,
                 pluginVersion: TM_VERSION,
+            });
+            avatarRecoveryApi = modules.createAvatarRecovery({
+                localStorage: global.localStorage,
+                defaultDatabaseName: modules.avatarStorage.DB_NAME,
+                bootstrap: avatarRecoveryBootstrap,
+                coordinator: avatarCoordinator,
+                transfer: avatarTransferApi,
+                avatarStorage: modules.avatarStorage,
+                avatarTransferTools: modules.avatarTransfer,
+                library: avatarLibraryApi,
+                loadUiData: load,
+                saveUiData: function (value) {
+                    invalidateLibraryView();
+                    return storageApi.save(value);
+                },
+                flushUiData: function () { return storageApi.flush(); },
+                getAuthorityState: function () { return storageApi.getAuthorityState(); },
+                createStore: function (databaseName) { return modules.createAvatarStore({ dbName: databaseName }); },
+                setGlobalLock: function (locked) { avatarRecoveryGateLocked = locked === true; },
             });
             avatarRuntime = modules.createAvatarRuntime({
                 window: global,
@@ -453,6 +485,7 @@
         libraryViewCache = null;
     }
     function save(d) {
+        if (avatarRecoveryGateLocked) return Promise.reject(Object.assign(new Error('头像恢复事务进行中，当前禁止保存设置'), { code: 'AVATAR_RECOVERY_LOCKED' }));
         invalidateLibraryView();
         return storageApi.save(d);
     }
@@ -6771,11 +6804,16 @@
     }
 
     // ── 设置 ─────────────────────────────────────────────────
+    function formatAvatarMegabytes(bytes) { return (Math.max(0, Number(bytes) || 0) / (1024 * 1024)).toFixed(1) + 'MB'; }
     function openAvatarSettingsSheet() {
         var d = load();
         var state = avatarPageController ? avatarPageController.getState() : { count: 0, categories: 0, series: 0 };
         var storageState = avatarCoordinator ? avatarCoordinator.getState() : { phase: 'blocked' };
-        var backupDisabled = !avatarTransferApi || state.importing || state.exporting || storageState.phase === 'blocked' || storageState.phase === 'conflict';
+        var recoveryState = avatarRecoveryApi ? avatarRecoveryApi.getState() : { phase: 'blocked', locked: true };
+        var authority = storageApi && typeof storageApi.getAuthorityState === 'function' ? storageApi.getAuthorityState() : { ready: false, localOnly: false };
+        var recoveryPending = recoveryState.locked === true;
+        var backupDisabled = !avatarTransferApi || recoveryPending || state.importing || state.exporting || storageState.phase === 'blocked' || storageState.phase === 'conflict';
+        var restoreDisabled = !avatarRecoveryApi || recoveryPending || state.importing || state.exporting || authority.localOnly !== true || storageState.phase !== 'local-ready' || storageState.authoritative !== 'local';
         var updateState = getExtensionUpdateState();
         var updateView = getExtensionUpdateView(updateState);
         var interfaceHtml =
@@ -6785,8 +6823,13 @@
             '<button class="tm-btn tm-btn-outline" id="tm-avatar-open-categories" style="width:100%;text-align:left"><i class="fa-solid fa-tags"></i> 管理分类（' + state.categories + '个）</button>';
         var dataHtml =
             '<div class="tm-storage-info">头像 ' + state.count + ' 张 / 分类 ' + state.categories + ' 个 / 系列 ' + state.series + ' 个</div>' +
+            '<div class="tm-hint" id="tm-avatar-library-size" style="margin-bottom:9px">正在估算当前图库大小…</div>' +
             '<div class="tm-hint" style="margin-bottom:9px">完整备份包含头像主图、缩略图、分类整理、绑定、候选/激活、原头像显示调整和来源意图；不包含酒馆 Character/Persona 原图、其他美化设置或运行时缓存。</div>' +
             '<button class="tm-btn tm-btn-safe" id="tm-avatar-create-backup" style="width:100%;margin-bottom:9px"' + (backupDisabled ? ' disabled' : '') + '><i class="fa-solid fa-box-archive"></i> 创建完整备份</button>' +
+            (recoveryPending
+                ? '<div class="tm-hint" style="margin-bottom:9px;color:var(--warning-color,#d97706)">检测到未完成的头像恢复事务。Avatar Manager 与普通设置保存将保持只读，完成回滚前不会加载半恢复数据。</div><button class="tm-btn tm-btn-danger" id="tm-avatar-rollback-recovery" style="width:100%;margin-bottom:9px"><i class="fa-solid fa-rotate-left"></i> 回滚未完成的恢复</button>'
+                : '<button class="tm-btn tm-btn-outline" id="tm-avatar-restore-backup" style="width:100%;margin-bottom:9px"' + (restoreDisabled ? ' disabled' : '') + '><i class="fa-solid fa-file-arrow-up"></i> 从完整备份恢复</button><input type="file" id="tm-avatar-restore-file" accept=".zip,application/zip" style="display:none">' +
+                    (authority.localOnly === true ? '<div class="tm-hint" style="margin-bottom:9px">恢复会完整替换 Avatar Manager 数据，不会合并；旧头像库将保留为事务回滚依据。</div>' : '<div class="tm-hint" style="margin-bottom:9px">本阶段仅支持经明确确认的本地存储环境恢复；后端头像库不会被修改。</div>')) +
             '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>';
         var extensionHtml = '<div class="tm-update-panel' + (updateState.phase === 'ready' && updateState.available ? ' has-update' : '') + '"><div class="tm-update-panel-head"><div><strong>美化管理 v' + esc(TM_VERSION) + '</strong><span class="tm-update-status">' + esc(updateView.status) + '</span></div><button type="button" class="tm-btn tm-btn-outline tm-update-action" id="tm-avatar-update-action" data-update-mode="' + esc(updateView.mode) + '"' + (updateView.disabled ? ' disabled' : '') + '><i class="fa-solid ' + (updateView.mode === 'update' ? 'fa-download' : 'fa-rotate') + '"></i> ' + esc(updateView.action) + '</button></div><div class="tm-update-detail"' + (updateView.detail ? '' : ' hidden') + '>' + esc(updateView.detail) + '</div><div class="tm-plugin-credit"><span>作者：温水</span><span>发布于毛毛雨美化群、旅程</span></div></div>';
         var sheet = createSheet(['<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>', organizeHtml, buildDisclosureHtml('tm-avatar-settings-interface', '界面显示', 'fa-display', interfaceHtml), buildDisclosureHtml('tm-avatar-settings-data', '数据管理', 'fa-database', dataHtml), extensionHtml].join(''));
@@ -6794,6 +6837,18 @@
         sheet.querySelector('#tm-avatar-follow-appearance').addEventListener('change', function () { var next = load(); next.followThemeAppearance = this.checked; save(next); syncManagerAppearance(); });
         sheet.querySelector('#tm-avatar-auto-hide-header').addEventListener('change', function () { var next = load(); next.autoHideHeader = this.checked; save(next); syncManagerAppearance(); });
         sheet.querySelector('#tm-avatar-open-categories').addEventListener('click', function () { closeSheet(sheet); avatarPageController.openCategoryManager(); });
+        var sizeNode = sheet.querySelector('#tm-avatar-library-size');
+        if (avatarTransferApi && typeof avatarTransferApi.estimateFullBackupSize === 'function') {
+            avatarTransferApi.estimateFullBackupSize().then(function (info) {
+                if (!sizeNode || !sizeNode.parentNode) return;
+                var size = formatAvatarMegabytes(info.payloadBytes);
+                sizeNode.textContent = info.payloadBytes > info.desktopPayloadLimit
+                    ? '当前图库约 ' + size + '，已超过移动端 48MB 和桌面端 256MB 的完整备份安全上限；请分批导出图片'
+                    : (info.payloadBytes > info.mobilePayloadLimit
+                        ? '当前图库约 ' + size + '，超过移动端完整备份安全上限 48MB；可在桌面端备份或分批导出图片'
+                        : '当前图库约 ' + size + '；移动端完整备份安全上限为 48MB。');
+            }).catch(function () { if (sizeNode && sizeNode.parentNode) sizeNode.textContent = '当前图库大小估算失败；创建备份时仍会执行完整安全检查。'; });
+        }
         sheet.querySelector('#tm-avatar-create-backup').addEventListener('click', function () {
             var button = this;
             var original = button.innerHTML;
@@ -6806,7 +6861,56 @@
             }).finally(function () {
                 button.innerHTML = original;
                 var current = avatarCoordinator && avatarCoordinator.getState();
-                button.disabled = !avatarTransferApi || !current || current.phase === 'blocked' || current.phase === 'conflict';
+                button.disabled = !avatarTransferApi || avatarRecoveryGateLocked || !current || current.phase === 'blocked' || current.phase === 'conflict';
+            });
+        });
+        var restoreButton = sheet.querySelector('#tm-avatar-restore-backup');
+        var restoreInput = sheet.querySelector('#tm-avatar-restore-file');
+        if (restoreButton && restoreInput) {
+            restoreButton.addEventListener('click', function () { restoreInput.click(); });
+            restoreInput.addEventListener('change', function () {
+                var file = this.files && this.files[0];
+                this.value = '';
+                if (!file) return;
+                var original = restoreButton.innerHTML;
+                restoreButton.disabled = true;
+                restoreButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在验证备份…';
+                avatarRecoveryApi.inspectBackup(file).then(function (verified) {
+                    var sourceText = verified.manifest.source.consistency === 'last-known-good' ? '离线最后已验证副本' : '完整已验证副本';
+                    if (!confirm('从此完整备份恢复 Avatar Manager？\n\n备份包含 ' + verified.inventory.assets.length + ' 张头像（' + sourceText + '）。\n当前头像资产、分类、系列、绑定与显示调整将被完整替换，不会合并。\n旧头像库会保留用于事务回滚。')) return null;
+                    restoreButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在事务恢复…';
+                    return avatarRecoveryApi.restoreBackup(file);
+                }).then(function (result) {
+                    if (!result) return;
+                    closeSheet(sheet);
+                    if (avatarRuntime) { avatarRuntime.stop(); avatarRuntime.start().catch(function () {}); }
+                    if (avatarPageController) avatarPageController.refresh().catch(function () {});
+                    toast('完整备份恢复成功：' + result.assets + ' 张头像');
+                }).catch(function (error) {
+                    toast(error && error.message ? error.message : '完整备份恢复失败', true);
+                }).finally(function () {
+                    if (!restoreButton.parentNode) return;
+                    restoreButton.innerHTML = original;
+                    restoreButton.disabled = avatarRecoveryGateLocked;
+                });
+            });
+        }
+        var rollbackButton = sheet.querySelector('#tm-avatar-rollback-recovery');
+        if (rollbackButton) rollbackButton.addEventListener('click', function () {
+            if (!confirm('回滚未完成的头像恢复事务？\n只会恢复日志中经过校验的原活动头像库与原头像分类设置，不会猜测修复。')) return;
+            var original = rollbackButton.innerHTML;
+            rollbackButton.disabled = true;
+            rollbackButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在校验并回滚…';
+            avatarRecoveryApi.rollbackIncomplete().then(function () {
+                closeSheet(sheet);
+                if (bindingController) bindingController.start();
+                if (avatarRuntime) avatarRuntime.start().catch(function () {});
+                if (avatarPageController) avatarPageController.refresh().catch(function () {});
+                toast('未完成的头像恢复已安全回滚');
+            }).catch(function (error) {
+                toast(error && error.message ? error.message : '恢复事务回滚失败；仍保持只读', true);
+                rollbackButton.innerHTML = original;
+                rollbackButton.disabled = false;
             });
         });
         sheet.querySelector('#tm-clear-all-user-avatar-overrides').addEventListener('click', function () { if (!confirm('彻底恢复 User 原头像？\n这会清除全局 User 头像、所有美化专属 User 头像与候选，以及 User 原头像调整；不会删除头像库。')) return; avatarRuntime.clearAllUserOverrides().then(function () { closeSheet(sheet); toast('已彻底恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复失败', true); }); });
@@ -7526,7 +7630,7 @@
         initStorage(function (d) {
             if (eventsApi && typeof eventsApi.syncFabVisibility === 'function') eventsApi.syncFabVisibility(d);
             bindColorSchemeListener();
-            if (bindingController) bindingController.start();
+            if (bindingController && !avatarRecoveryGateLocked) bindingController.start();
             if (avatarCoordinator && avatarRuntime) {
                 avatarCoordinator.initialize().then(function () {
                     if (!avatarCoordinator.isRuntimeReady()) return;
@@ -7536,6 +7640,7 @@
                     toast(error.message || '头像本地存储初始化失败', true);
                 });
             }
+            if (avatarRecoveryGateLocked) toast('检测到未完成的头像恢复事务；头像管理与设置保存已保持只读，请在数据管理中回滚', true);
             updateBtn();
         });
     }

@@ -365,6 +365,23 @@ function initTestStorage(storage) {
     return new Promise((resolve) => storage.initStorage(resolve));
 }
 
+test('storage exposes strict local-only authority evidence for restore gating', async () => {
+    const absent = createStorageTestHarness({ server: false, shared: { data: { value: 'local' }, sync: null } });
+    await initTestStorage(absent.storage);
+    assert.deepEqual(absent.storage.getAuthorityState(), { ready: true, localOnly: true, evidence: 'absent' });
+
+    const uncertain = createStorageTestHarness({
+        shared: { data: { value: 'local' }, sync: null },
+        statusFactory: () => Promise.reject(new Error('offline')),
+    });
+    await initTestStorage(uncertain.storage);
+    assert.deepEqual(uncertain.storage.getAuthorityState(), { ready: true, localOnly: false, evidence: 'error' });
+
+    const tauri = createStorageTestHarness({ tauriTavernAbi: true, shared: { data: { value: 'local' }, sync: null } });
+    await initTestStorage(tauri.storage);
+    assert.deepEqual(tauri.storage.getAuthorityState(), { ready: true, localOnly: true, evidence: 'tauri-local-only' });
+});
+
 test('stale PUT acknowledgement cannot overwrite a newer local mutation', async () => {
     const requests = [];
     const harness = createStorageTestHarness({

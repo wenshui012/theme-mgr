@@ -77,13 +77,14 @@ function main() {
     assert(actual === expected.source, 'dist/index.js differs from a fresh deterministic build');
     assert(normalizeNewlines(fs.readFileSync(DIST_MANIFEST_PATH, 'utf8')) === read('manifest.json'), 'dist/manifest.json differs from the source manifest');
     assert(normalizeNewlines(fs.readFileSync(DIST_README_PATH, 'utf8')) === read('README.md'), 'dist/README.md differs from the source README');
-    assert(expected.modules.length === 28, `expected 28 modules, found ${expected.modules.length}`);
+    assert(expected.modules.length === 29, `expected 29 modules, found ${expected.modules.length}`);
 
     verifyModuleMarkers(actual);
     verifyNoDevelopmentLoader(actual);
     verifyVersions(actual, expected.version);
     assert(actual.includes('global.ThemeMgrModules = global.ThemeMgrModules || {}'), 'ThemeMgrModules registration is missing');
     assert(actual.includes('ns.appShell = {'), 'app shell module registration is missing');
+    assert(actual.includes('ns.avatarRecovery = {'), 'avatar recovery module registration is missing');
     assert(actual.includes('appShellApi.createAppShell'), 'app shell initialization is missing');
     assert(actual.includes('aria-haspopup="menu"'), 'compact page switcher menu semantics are missing');
     assert(actual.includes('buildPageMenuHtml'), 'compact page switcher menu builder is missing');

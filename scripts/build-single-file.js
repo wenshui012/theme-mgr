@@ -32,6 +32,7 @@ const EXPECTED_MODULES = [
     'src/avatar-image-tools.js',
     'src/avatar-library.js',
     'src/avatar-transfer.js',
+    'src/avatar-recovery.js',
     'src/avatar-runtime.js',
     'src/avatar-page.js',
     'src/app-shell.js',

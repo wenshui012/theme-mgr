@@ -254,6 +254,7 @@
                 var bytes = new Uint8Array(centralBuffer);
                 var directory = new Map();
                 var cursor = 0;
+                var payloadBytes = 0;
                 for (var index = 0; index < count; index += 1) {
                     if (cursor + 46 > bytes.length) throw makeError('AVATAR_ARCHIVE_INVALID', 'ZIP 中央目录被截断');
                     var cv = new DataView(bytes.buffer, bytes.byteOffset + cursor, bytes.length - cursor);
@@ -269,6 +270,8 @@
                     if (compressed !== uncompressed || uncompressed > limits.fileBytes || cursor + recordLength > bytes.length) {
                         throw makeError('AVATAR_ARCHIVE_LIMIT', 'ZIP 文件大小无效或超出安全上限');
                     }
+                    payloadBytes += uncompressed;
+                    if (payloadBytes > limits.payloadBytes) throw makeError('AVATAR_ARCHIVE_LIMIT', 'ZIP 内容超过当前设备安全上限');
                     var path = safeZipPath(decodeUtf8(bytes.subarray(cursor + 46, cursor + 46 + nameLength)));
                     if (directory.has(path)) throw makeError('AVATAR_ARCHIVE_INVALID', 'ZIP 包含重复路径');
                     directory.set(path, {
@@ -497,7 +500,7 @@
             validateLibrary(inventory.avatarLibrary, assetIds);
             return true;
         }
-        function verifyBackupBlob(blob) {
+        function verifyBackupBlob(blob, retainReader) {
             var currentLimits = limits();
             return openStoredZip(blob, currentLimits).then(function (reader) {
                 return reader.read('manifest.json').then(function (bytes) {
@@ -552,7 +555,19 @@
                                     if (!/^blobs\/sha256\/[a-f0-9]{64}\.(?:jpg|png|webp)$/.test(file.path) || !MIME_EXT[file.mime] ||
                                         file.path !== 'blobs/sha256/' + file.sha256.slice(7) + '.' + MIME_EXT[file.mime]) throw makeError('AVATAR_ARCHIVE_INVALID', '完整备份图片路径或 MIME 无效');
                                     return verifyFile(reader, file, file.mime);
-                                }).then(function () { return { manifest: manifest, inventory: inventory }; });
+                                }).then(function () {
+                                    var result = {
+                                        manifest: manifest,
+                                        inventory: inventory,
+                                        metrics: {
+                                            archiveBytes: Number(blob && blob.size) || 0,
+                                            payloadBytes: manifest.files.reduce(function (total, file) { return total + file.bytes; }, 0),
+                                            files: manifest.files.length + 1,
+                                        },
+                                    };
+                                    if (retainReader === true) result.reader = reader;
+                                    return result;
+                                });
                             });
                         });
                     });
@@ -738,12 +753,26 @@
                 });
             });
         }
+        function estimateFullBackupSize() {
+            return store.listAssets().then(function (items) {
+                var total = 0;
+                return sequentialEach(items, function (metadata) {
+                    return store.getAsset(metadata.id).then(function (asset) {
+                        ensureMetadataMatches(metadata, asset);
+                        total += dataUrlInfo(asset.imageData).bytes + dataUrlInfo(asset.thumbData).bytes;
+                    });
+                }).then(function () {
+                    return { assets: items.length, payloadBytes: total, mobilePayloadLimit: DEFAULT_LIMITS.mobile.payloadBytes, desktopPayloadLimit: DEFAULT_LIMITS.desktop.payloadBytes };
+                });
+            });
+        }
         return {
             exportSingle: exportSingle,
             exportBatch: exportBatch,
             createFullBackup: createFullBackup,
             verifyBackupBlob: verifyBackupBlob,
             verifyImageExportBlob: verifyImageExportBlob,
+            estimateFullBackupSize: estimateFullBackupSize,
             getState: function () { return { busy: busy, limits: limits() }; },
         };
     };

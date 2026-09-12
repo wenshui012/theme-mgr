@@ -23,6 +23,7 @@
         var tauriTavernLocalOnly = typeof opts.tauriTavernLocalOnly === 'boolean'
             ? opts.tauriTavernLocalOnly
             : hasTauriTavernAbi();
+        var backendCapabilityStatus = tauriTavernLocalOnly ? 'local-only' : 'unknown';
         var estimateStorageFn = typeof opts.estimateStorage === 'function'
             ? opts.estimateStorage
             : function () {
@@ -1086,7 +1087,10 @@
                     });
                 })
                 .catch(function (error) { return { status: 'error', error: error }; })
-                .then(function (result) { cb(result); });
+                .then(function (result) {
+                    backendCapabilityStatus = result && result.status ? result.status : 'error';
+                    cb(result);
+                });
         }
 
         function fetchServerRead(url, requestOptions) {
@@ -1574,6 +1578,13 @@
             isDataImage: isDataImage,
             isServerImage: isServerImage,
             getServerMode: function () { return serverMode && canWriteServerData(); },
+            getAuthorityState: function () {
+                return {
+                    ready: storageReady,
+                    localOnly: storageReady && (tauriTavernLocalOnly || backendCapabilityStatus === 'absent'),
+                    evidence: tauriTavernLocalOnly ? 'tauri-local-only' : backendCapabilityStatus,
+                };
+            },
             getSyncState: function () { return cloneValue(syncState); },
             normalizePersistError: function (error) {
                 return normalizeStorageError(error, 'UNKNOWN_LOCAL_PERSIST_FAILURE', { stage: 'ui' });

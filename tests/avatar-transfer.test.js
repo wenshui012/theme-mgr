@@ -358,9 +358,12 @@ test('large-library backup reads full assets sequentially and stays within expli
     assert.equal(f.downloads.length, 1);
 });
 
-test('transfer implementation exposes no restore or import write path', () => {
+test('export verifier stays write-free while restore writes remain isolated in the recovery module', () => {
     const sourceText = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-transfer.js'), 'utf8');
     assert.doesNotMatch(sourceText, /restoreBackup|importBackup|replaceSnapshot|putAsset\s*\(/);
+    const recoveryText = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-recovery.js'), 'utf8');
+    assert.match(recoveryText, /restoreBackup/);
+    assert.match(recoveryText, /runRecoveryBarrier/);
     const uiText = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
-    assert.doesNotMatch(uiText, /导入备份|恢复备份/);
+    assert.match(uiText, /从完整备份恢复/);
 });

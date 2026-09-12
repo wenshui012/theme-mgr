@@ -1341,7 +1341,7 @@ test('81 avatar settings exposes a confirmed complete User recovery action', () 
     assert.match(source, /global\.location\.reload\(\)/);
 });
 
-test('Avatar export entry points and simplified settings layout expose no recovery or backup import UI', () => {
+test('Avatar settings expose verified backup restore and a clear mobile size warning', () => {
     const pageSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
     const uiSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     const settings = uiSource.slice(uiSource.indexOf('function openAvatarSettingsSheet'), uiSource.indexOf('function openSettingsSheet'));
@@ -1352,9 +1352,15 @@ test('Avatar export entry points and simplified settings layout expose no recove
     assert.match(settings, /管理分类（' \+ state\.categories \+ '个）/);
     assert.match(settings, /创建完整备份/);
     assert.match(settings, /avatarTransferApi\.createFullBackup\(\)/);
+    assert.match(settings, /从完整备份恢复/);
+    assert.match(settings, /avatarRecoveryApi\.restoreBackup\(file\)/);
+    assert.match(settings, /超过移动端完整备份安全上限 48MB；可在桌面端备份或分批导出图片/);
+    assert.match(settings, /回滚未完成的恢复/);
+    assert.ok(uiSource.indexOf('modules.avatarRecovery.resolveBootstrap') < uiSource.indexOf('modules.createAvatarStore({ dbName: avatarRecoveryBootstrap.databaseName })'));
+    assert.match(uiSource, /if \(avatarRecoveryGateLocked\) return Promise\.reject/);
     assert.ok(settings.indexOf('organizeHtml') < settings.indexOf("buildDisclosureHtml('tm-avatar-settings-interface'"));
     assert.ok(settings.indexOf("buildDisclosureHtml('tm-avatar-settings-interface'") < settings.indexOf("buildDisclosureHtml('tm-avatar-settings-data'"));
-    assert.doesNotMatch(settings, /分类与整理|tm-avatar-settings-organize|导入备份|恢复备份/);
+    assert.doesNotMatch(settings, /分类与整理|tm-avatar-settings-organize/);
 });
 
 test('82 development module loading replaces stale-build scripts and uses a build cache token', () => {

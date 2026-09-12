@@ -800,3 +800,44 @@ test('remote consistency state revalidates the live revision and fingerprint and
     remote.setState(Object.assign({}, original, { revision: 8, fingerprint: fingerprint(8) }));
     await assert.rejects(sync.getConsistencyState(), (error) => error.code === 'AVATAR_EXPORT_SOURCE_CHANGED');
 });
+
+test('recovery barrier drains accepted writes, blocks new writes, and rebinds the stable active store', async () => {
+    let releaseWrite;
+    let writeStarted = false;
+    let externallyLocked = false;
+    const local = memoryStore({ assets: [asset('a')] });
+    const originalPut = local.putAsset.bind(local);
+    local.putAsset = value => {
+        writeStarted = true;
+        return new Promise(resolve => { releaseWrite = () => originalPut(value).then(resolve); });
+    };
+    const gated = modules.createAvatarStorageCoordinator({
+        localStore: local,
+        cacheStore: memoryStore(),
+        controlStore: modules.avatarSync.createMemoryControlStore(),
+        isBackendAvailable: () => false,
+        isExternalWriteBlocked: () => externallyLocked,
+    });
+    await gated.initialize();
+    const accepted = gated.store.putAsset(asset('b'));
+    while (!writeStarted) await Promise.resolve();
+    assert.equal(writeStarted, true);
+    externallyLocked = true;
+    let entered = false;
+    const replacement = memoryStore({ assets: [asset('restored')] });
+    const barrier = gated.runRecoveryBarrier(async control => {
+        entered = true;
+        await control.rebindLocalStore(replacement, { verified: true, databaseName: 'shadow', empty: false });
+    });
+    await Promise.resolve();
+    assert.equal(entered, false, 'recovery must wait for the accepted write tail');
+    assert.equal(gated.canMutate(), false);
+    await assert.rejects(gated.store.putAsset(asset('blocked')), error => error.code === 'AVATAR_RECOVERY_LOCKED');
+    releaseWrite();
+    await accepted;
+    await barrier;
+    externallyLocked = false;
+    assert.deepEqual(Array.from(await gated.store.listAssets(), item => item.id), ['restored']);
+    assert.equal(gated.getState().authoritative, 'local');
+    assert.equal(gated.canMutate(), true);
+});
