@@ -251,14 +251,14 @@ async function main() {
         report.phase = 'verify-single-file-startup';
         report.bundleIsGenerated = await page.evaluate(async () => {
             const text = await fetch('/scripts/extensions/third-party/theme-mgr/index.js', { cache: 'no-store' }).then((response) => response.text());
-            return text.startsWith('// GENERATED FILE - Theme Manager v4.0.5 single-file release');
+            return text.startsWith('// GENERATED FILE - Theme Manager v4.5.0 single-file release');
         });
         report.version = await page.locator('.tm-version').textContent();
         report.cardCount = await page.locator('.tm-card').count();
         report.moduleRegistrations = await page.evaluate(() => Object.keys(window.ThemeMgrModules || {}).sort());
         report.data = await readPluginDataSummary(page);
         assert(report.bundleIsGenerated, 'the browser did not load the generated dist entry');
-        assert(report.version?.trim() === 'v4.0.5', `unexpected UI version: ${report.version}`);
+        assert(report.version?.trim() === 'v4.5.0', `unexpected UI version: ${report.version}`);
         assert(report.cardCount > 0, 'theme grid is empty');
 
         report.phase = 'metadata-save';

@@ -1,6 +1,6 @@
-// ST美化管理扩展 v4.0.5 - 模块装配与总入口
+// ST美化管理扩展 v4.5.0 - 模块装配与总入口
 (function () {
-    var TM_VERSION = '4.0.5';
+    var TM_VERSION = '4.5.0';
     var TM_BUILD = 'beauty-ui-update-r1';
     var MODULE_LOAD_TOKEN = TM_VERSION + '-' + TM_BUILD;
 
