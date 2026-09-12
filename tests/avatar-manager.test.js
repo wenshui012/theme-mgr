@@ -599,6 +599,24 @@ test('a series larger than the computed row capacity becomes a single-row rail',
     assert.match(f.pageRoot.grid.innerHTML, /--tm-avatar-series-cols:3/);
 });
 
+test('avatar series expand locally without rebuilding the avatar grid', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
+    const toggleHelper = source.slice(source.indexOf('function toggleSeriesExpanded'), source.indexOf('function render()'));
+    const clickHandler = source.slice(source.indexOf('function handleClick'), source.indexOf('function handleKeydown'));
+    assert.match(toggleHelper, /setSeriesExpanded\(block, opening\)/);
+    assert.doesNotMatch(toggleHelper, /render\(\)|innerHTML|setupGridLoader/);
+    assert.match(clickHandler, /toggleSeriesExpanded\(toggle\)/);
+    assert.match(modules.avatarPage.styleText(), /padding:0!important;line-height:1!important/);
+    assert.match(modules.avatarPage.styleText(), /\.tm-avatar-series-control>i\{[^}]*text-align:center!important/);
+});
+
+test('one selected avatar can join an existing searchable series', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
+    assert.match(source, /if \(ids\.length === 1\) \{ openJoinSeriesSheet\(ids\[0\]\); return; \}/);
+    assert.match(source, /title: '加入头像系列'/);
+    assert.match(source, /searchPlaceholder: '搜索头像系列…'/);
+});
+
 test('avatar click opens the action dialog directly without a double-click delay', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-page.js'), 'utf8');
     assert.match(source, /else openAssetMenu\(id\)\.catch/);
@@ -615,6 +633,11 @@ test('avatar and beauty managers expose their intended import sorting choices', 
     assert.match(source, /data-sort="import-asc"/);
     assert.match(source, /data-sort="import-desc"/);
     assert.match(source, /themeImportOrder/);
+    assert.match(source, /importData\.themeImportOrder\[name\] = importData\.nextThemeImportOrder\+\+/);
+    assert.doesNotMatch(source, /if \(!importData\.themeImportOrder\[name\]\)/);
+    assert.match(source, /Math\.max\.apply\(Math, values\)/);
+    assert.match(source, /dd\.themeImportOrder\[newName\] = dd\.themeImportOrder\[oldName\]/);
+    assert.match(source, /delete dd\.themeImportOrder\[themeName\]/);
 });
 test('46 editor toolbar uses a host-level important layout and Shadow DOM isolation when supported', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'avatar-runtime.js'), 'utf8');
@@ -1332,13 +1355,12 @@ test('80 complete User recovery clears every User override while preserving asse
     assert.equal(f.chars[0].image.getAttribute('src'), characterSource);
 });
 
-test('81 avatar settings exposes a confirmed complete User recovery action', () => {
+test('81 avatar settings omits the duplicate complete User recovery action', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
-    assert.match(source, /id=\"tm-clear-all-user-avatar-overrides\"/);
-    assert.match(source, /avatarRuntime\.clearAllUserOverrides\(\)/);
-    assert.match(source, /头像库和角色头像不会被删除/);
+    assert.doesNotMatch(source, /id=\"tm-clear-all-user-avatar-overrides\"/);
+    assert.doesNotMatch(source, /彻底恢复 User 原头像/);
+    assert.match(source, /全部解绑并恢复原头像/);
     assert.match(source, /previousAvatarRuntime\.stop\(\)/);
-    assert.match(source, /global\.location\.reload\(\)/);
 });
 
 test('Avatar settings expose verified backup restore and a clear mobile size warning', () => {
@@ -1685,6 +1707,14 @@ test('96 SillyTavern avatar thumbnails map only to their matching original files
     assert.equal(map('/characters/char.png', 'http://localhost/'), '');
 });
 
+test('native image reads recover a supported MIME from the original file extension', () => {
+    const infer = modules.avatarRuntime.nativeImageMime;
+    assert.equal(infer('/characters/角色.png?cache=1', 'application/octet-stream'), 'image/png');
+    assert.equal(infer('/User%20Avatars/User%20One.JPG', ''), 'image/jpeg');
+    assert.equal(infer('/characters/avatar.webp', 'image/webp'), 'image/webp');
+    assert.equal(infer('/characters/avatar.bin', 'application/octet-stream'), '');
+});
+
 test('97 unbound User and Character thumbnails switch to preloaded original files without creating bindings', async () => {
     const preloaded = [];
     const f = runtimeFixture({
@@ -1742,6 +1772,17 @@ test('100 native original adjustment retries the thumbnail when the high-resolut
     assert.match(reads[0], /^\/characters\/char\.png\?tm_avatar_hd=\d+$/);
     assert.equal(reads[1], '/thumbnail?type=avatar&file=char.png');
     assert.ok(f.chars.every((entry) => entry.image.getAttribute('src') === 'data:image/png;base64,fallback'));
+});
+
+test('background native reconciliation keeps the working host avatar when image embedding fails', async () => {
+    const f = runtimeFixture({
+        charSrc: '/thumbnail?type=avatar&file=char.png',
+        loadNativeImage: async () => { throw new Error('transient native read'); },
+        seed: { nativeViews: [{ targetKey: 'character:char.png', sourceKey: 'char.png', view: { scale: 1.2 } }] },
+    });
+    await f.runtime.start();
+    assert.equal(f.chars[0].image.getAttribute('src'), '/thumbnail?type=avatar&file=char.png');
+    assert.equal((await f.store.getNativeView('character:char.png')).view.scale, 1.2);
 });
 
 test('101 persona events and external source rewrites invalidate the high-resolution cache', async () => {

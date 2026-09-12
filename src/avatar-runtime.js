@@ -91,6 +91,17 @@
         var path = '/' + directory + '/' + encodeURIComponent(file);
         return /^https?:\/\//i.test(source) ? parsed.origin + path : path;
     }
+    function nativeImageMime(source, declaredType) {
+        var declared = clean(declaredType).toLowerCase();
+        if (declared === 'image/jpg') declared = 'image/jpeg';
+        if (/^image\/(?:jpeg|png|webp)$/.test(declared)) return declared;
+        var path = clean(source).split(/[?#]/)[0].toLowerCase();
+        var match = path.match(/\.([a-z0-9]+)$/);
+        if (!match) return '';
+        return match[1] === 'jpg' || match[1] === 'jpeg'
+            ? 'image/jpeg'
+            : (match[1] === 'png' ? 'image/png' : (match[1] === 'webp' ? 'image/webp' : ''));
+    }
     function getContextInfo(context) {
         context = context || {};
         var characters = Array.isArray(context.characters) ? context.characters : [];
@@ -357,6 +368,11 @@
                 if (!response || !response.ok || typeof response.blob !== 'function') throw new Error('avatar image request failed');
                 return response.blob();
             }).then(function (blob) {
+                var mimeType = nativeImageMime(asset.imageData, blob && blob.type);
+                if (mimeType && clean(blob && blob.type).toLowerCase() !== mimeType) {
+                    if (blob && typeof blob.slice === 'function') blob = blob.slice(0, blob.size, mimeType);
+                    else if (typeof win.Blob === 'function') blob = new win.Blob([blob], { type: mimeType });
+                }
                 return imageTools.readImageFile(blob);
             }).then(function (dataUrl) {
                 return Object.assign({}, asset, { imageData: dataUrl });
@@ -375,6 +391,7 @@
         var nativeImageCache = new Map();
         var hostImageCache = new Map();
         var hostSourceRevision = 1;
+        var nativeReadWarningKeys = new Set();
         var runtimeAttributeValues = new WeakMap();
         var hostErrorHandlers = new WeakMap();
         var listeners = [];
@@ -841,8 +858,16 @@
                                 return store.deleteNativeView(target.key);
                             }).then(function () { return null; });
                         }
+                        var nativeReadWarningKey = target.key + ':' + sourceKey;
                         return embeddedNativeAsset(representative, target).then(function (asset) {
+                            nativeReadWarningKeys.delete(nativeReadWarningKey);
                             return { target: target, binding: record, asset: asset, native: true };
+                        }).catch(function (error) {
+                            if (!nativeReadWarningKeys.has(nativeReadWarningKey)) {
+                                nativeReadWarningKeys.add(nativeReadWarningKey);
+                                if (win.console && typeof win.console.warn === 'function') win.console.warn('[Theme Manager][Avatar] 原头像调整暂时无法读取，已保留原头像显示', error);
+                            }
+                            return resolveHostSourcePlan(target, null);
                         });
                     });
                 });
@@ -2145,6 +2170,7 @@
         themeKey: themeKey,
         chatBindingKey: chatBindingKey,
         hostOriginalSourceFromThumbnail: hostOriginalSourceFromThumbnail,
+        nativeImageMime: nativeImageMime,
         getContextInfo: getContextInfo,
         messageImages: messageImages,
         chooseRepresentative: chooseRepresentative,

@@ -11298,7 +11298,7 @@
 })(window);
 /* END MODULE 21/29: src/avatar-recovery.js */
 
-/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:95c1871d2b1ae89bc945918c0562ce14692ebb94ce0593a710b461df86eba88b */
+/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:2f0f17bc4e7d99915005e6ac5c79d166c4db30174e8919e0edb7e9673cf49c98 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -11391,6 +11391,17 @@
         var directory = type === 'avatar' ? 'characters' : 'User%20Avatars';
         var path = '/' + directory + '/' + encodeURIComponent(file);
         return /^https?:\/\//i.test(source) ? parsed.origin + path : path;
+    }
+    function nativeImageMime(source, declaredType) {
+        var declared = clean(declaredType).toLowerCase();
+        if (declared === 'image/jpg') declared = 'image/jpeg';
+        if (/^image\/(?:jpeg|png|webp)$/.test(declared)) return declared;
+        var path = clean(source).split(/[?#]/)[0].toLowerCase();
+        var match = path.match(/\.([a-z0-9]+)$/);
+        if (!match) return '';
+        return match[1] === 'jpg' || match[1] === 'jpeg'
+            ? 'image/jpeg'
+            : (match[1] === 'png' ? 'image/png' : (match[1] === 'webp' ? 'image/webp' : ''));
     }
     function getContextInfo(context) {
         context = context || {};
@@ -11658,6 +11669,11 @@
                 if (!response || !response.ok || typeof response.blob !== 'function') throw new Error('avatar image request failed');
                 return response.blob();
             }).then(function (blob) {
+                var mimeType = nativeImageMime(asset.imageData, blob && blob.type);
+                if (mimeType && clean(blob && blob.type).toLowerCase() !== mimeType) {
+                    if (blob && typeof blob.slice === 'function') blob = blob.slice(0, blob.size, mimeType);
+                    else if (typeof win.Blob === 'function') blob = new win.Blob([blob], { type: mimeType });
+                }
                 return imageTools.readImageFile(blob);
             }).then(function (dataUrl) {
                 return Object.assign({}, asset, { imageData: dataUrl });
@@ -11676,6 +11692,7 @@
         var nativeImageCache = new Map();
         var hostImageCache = new Map();
         var hostSourceRevision = 1;
+        var nativeReadWarningKeys = new Set();
         var runtimeAttributeValues = new WeakMap();
         var hostErrorHandlers = new WeakMap();
         var listeners = [];
@@ -12142,8 +12159,16 @@
                                 return store.deleteNativeView(target.key);
                             }).then(function () { return null; });
                         }
+                        var nativeReadWarningKey = target.key + ':' + sourceKey;
                         return embeddedNativeAsset(representative, target).then(function (asset) {
+                            nativeReadWarningKeys.delete(nativeReadWarningKey);
                             return { target: target, binding: record, asset: asset, native: true };
+                        }).catch(function (error) {
+                            if (!nativeReadWarningKeys.has(nativeReadWarningKey)) {
+                                nativeReadWarningKeys.add(nativeReadWarningKey);
+                                if (win.console && typeof win.console.warn === 'function') win.console.warn('[Theme Manager][Avatar] 原头像调整暂时无法读取，已保留原头像显示', error);
+                            }
+                            return resolveHostSourcePlan(target, null);
                         });
                     });
                 });
@@ -13446,6 +13471,7 @@
         themeKey: themeKey,
         chatBindingKey: chatBindingKey,
         hostOriginalSourceFromThumbnail: hostOriginalSourceFromThumbnail,
+        nativeImageMime: nativeImageMime,
         getContextInfo: getContextInfo,
         messageImages: messageImages,
         chooseRepresentative: chooseRepresentative,
@@ -13459,7 +13485,7 @@
 })(window);
 /* END MODULE 22/29: src/avatar-runtime.js */
 
-/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:ddc58b182868c18d2d257b03540912f90ae4b6c86a4efc0dba7b6c228525b9fa */
+/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:801198ad1268a3b310f4e99165dfbad22a6c89e3827b910a4e16d353358986a2 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -13484,7 +13510,7 @@
         '.tm-avatar-card-active,.tm-avatar-card-check{position:absolute;right:7px;top:7px;z-index:2;width:23px;height:23px;place-items:center;border-radius:50%;background:rgba(0,0,0,.52);color:#fff;border:1px solid rgba(255,255,255,.55)}.tm-avatar-card-active{display:grid;font-size:.68em}.tm-avatar-card-check{display:none}.tm-avatar-page.is-batch .tm-avatar-card-active{display:none}.tm-avatar-page.is-batch .tm-avatar-card-check{display:grid}.tm-avatar-page-card.is-active{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-avatar-page-card.batch-sel{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-avatar-page-card.batch-sel .tm-avatar-card-check{background:var(--SmartThemeQuoteColor,#7c6daf)}',
         '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}.tm-avatar-page-empty{padding:18px 12px;font-size:.78em;opacity:.48}',
         '.tm-avatar-series-inline{grid-column:span var(--tm-avatar-series-size,2);min-width:0;display:grid;grid-template-columns:repeat(var(--tm-avatar-series-size,2),minmax(0,1fr));gap:9px}.tm-avatar-series-block{grid-column:1/-1;min-width:0;position:relative;overflow:hidden}.tm-avatar-series-track{display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - (var(--tm-avatar-series-cols,3) - 1)*9px)/var(--tm-avatar-series-cols,3));gap:9px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}.tm-avatar-series-track::-webkit-scrollbar{display:none}.tm-avatar-series-block.is-expanded{overflow:visible}.tm-avatar-series-block.is-expanded .tm-avatar-series-track{grid-auto-flow:row;grid-auto-columns:initial;grid-template-columns:repeat(var(--tm-avatar-series-cols,3),minmax(0,1fr));overflow:visible}',
-        '.tm-avatar-series-controls{position:absolute;right:6px;top:6px;z-index:4;display:flex;gap:4px;opacity:0;visibility:hidden;transform:translateY(-3px);transition:.18s;pointer-events:none}.tm-avatar-series-block.is-interacting .tm-avatar-series-controls,.tm-avatar-series-controls:focus-within{opacity:1;visibility:visible;transform:none;pointer-events:auto}.tm-avatar-series-control{width:32px;height:32px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.28);border-radius:9px;background:rgba(0,0,0,.58);color:#fff;cursor:pointer}',
+        '.tm-avatar-series-controls{position:absolute;right:6px;top:6px;z-index:4;display:flex;align-items:center;gap:4px;opacity:0;visibility:hidden;transform:translateY(-3px);transition:.18s;pointer-events:none}.tm-avatar-series-block.is-interacting .tm-avatar-series-controls,.tm-avatar-series-controls:focus-within{opacity:1;visibility:visible;transform:none;pointer-events:auto}.tm-avatar-series-control{width:32px!important;height:32px!important;min-width:32px!important;min-height:32px!important;box-sizing:border-box!important;display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important;line-height:1!important;border:1px solid rgba(255,255,255,.28);border-radius:9px;background:rgba(0,0,0,.58);color:#fff;cursor:pointer}.tm-avatar-series-control>i{display:block!important;width:1em!important;height:1em!important;margin:0!important;padding:0!important;line-height:1!important;text-align:center!important;vertical-align:0!important}.tm-avatar-series-control>i::before{display:block;line-height:1}',
         '.tm-avatar-manage-summary{display:flex;align-items:center;gap:10px;margin-bottom:10px}.tm-avatar-manage-thumb{width:54px;height:54px;border-radius:10px;object-fit:cover;background:rgba(127,127,127,.1)}.tm-avatar-manage-summary>span{display:flex;min-width:0;flex-direction:column;gap:3px}.tm-avatar-manage-summary small{opacity:.5}.tm-avatar-category-actions{display:flex;gap:4px}.tm-avatar-category-actions button{width:30px;height:30px;padding:0}',
         '@media(max-width:430px){.tm-avatar-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}.tm-avatar-page-notice{margin:8px 10px 0}.tm-avatar-series-track{gap:7px;grid-auto-columns:calc((100% - (var(--tm-avatar-series-cols,3) - 1)*7px)/var(--tm-avatar-series-cols,3))}}'
     ].join(''); }
@@ -13495,7 +13521,7 @@
         var library = options.library || ns.avatarLibrary, transfer = options.transfer || null, canMutate = options.canMutate || function () { return true; };
         var imageLoaderApi = options.imageLoader, imageToolsApi = options.imageTools || ns.imageTools, getRoot = options.getRoot;
         var closeManager = options.closeManager || function () {}, createSheet = options.createSheet, closeSheet = options.closeSheet || function (sheet) { if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet); };
-        var createActionDialog = options.createActionDialog, openImageLightbox = options.openImageLightbox, openCategoryPicker = options.openCategoryPicker, openTagPicker = options.openTagPicker;
+        var createActionDialog = options.createActionDialog, openImageLightbox = options.openImageLightbox, openCategoryPicker = options.openCategoryPicker, openTagPicker = options.openTagPicker, openChoicePicker = options.openChoicePicker;
         var loadUiData = options.loadUiData || function () { return {}; }, saveUiData = options.saveUiData || function () {}, onImportingChange = options.onImportingChange || function () {}, onImportStateChange = options.onImportStateChange || function () {}, onExportingChange = options.onExportingChange || function () {}, onBatchModeChange = options.onBatchModeChange || function () {}, toast = options.toast || function () {};
         var confirmAction = options.confirm || global.confirm, logger = options.console || global.console || { error: function () {} };
         var mounted = false, root = null, fileInput = null, gridLoader = null, resizeObserver = null, assets = [], refreshToken = 0, importing = false, exporting = false;
@@ -13577,7 +13603,7 @@
         function countGridTracks(value) { value = String(value || '').trim(); if (/^repeat\(\s*auto-(?:fill|fit)/i.test(value)) return 0; var repeat = value.match(/^repeat\(\s*(\d+)/i); if (repeat) return Number(repeat[1]); var depth = 0, count = 0, token = false; value.split('').forEach(function (character) { if (/\s/.test(character) && depth === 0) { if (token) { count += 1; token = false; } return; } token = true; if (character === '(') depth += 1; else if (character === ')' && depth > 0) depth -= 1; }); return count + (token ? 1 : 0); }
         function columns() { var grid = root && root.querySelector('[data-avatar-grid]'), width = grid && grid.clientWidth || 0; if (grid && typeof global.getComputedStyle === 'function') { var template = global.getComputedStyle(grid).gridTemplateColumns, actual = template && template !== 'none' ? countGridTracks(template) : 0; if (actual > 0) return actual; } if (width <= 430) return 3; return Math.max(1, Math.floor((Math.max(112, width - 24) + 9) / 121)); }
         function matchingAssets(state) { var lowered = query.toLocaleLowerCase(), mode = library.ensureState(state).sortMode; var sorted = assets.filter(function (asset) { var meta = library.peekMeta(state, asset.id); if (category !== '__all__' && (category === '__uncategorized__' ? !!meta.category : meta.category !== category)) return false; if (!lowered) return true; var series = library.findSeries(state, asset.id); return [meta.category].concat(meta.tags, series ? [series.name] : []).some(function (text) { return String(text || '').toLocaleLowerCase().indexOf(lowered) !== -1; }); }).sort(function (a, b) { return library.compareAssets(state, a, b, mode); }); var stableIndex = new Map(sorted.map(function (asset, index) { return [asset.id, index]; })); return sorted.sort(function (a, b) { var priority = activeRank(a.id) - activeRank(b.id); return priority || stableIndex.get(a.id) - stableIndex.get(b.id); }); }
-        function layoutHtml(state, list, count) { var byId = Object.create(null), emitted = new Set(), chunks = []; list.forEach(function (item) { byId[item.id] = item; }); list.forEach(function (asset) { if (emitted.has(asset.id)) return; var group = library.findSeries(state, asset.id), members = group ? group.members.map(function (id) { return byId[id]; }).filter(Boolean) : []; if (!group || members.length < 2) { emitted.add(asset.id); chunks.push(cardHtml(asset)); return; } members.forEach(function (item) { emitted.add(item.id); }); members.sort(function (a, b) { var priority = activeRank(a.id) - activeRank(b.id); return priority || group.members.indexOf(a.id) - group.members.indexOf(b.id); }); if (members.length <= count) { chunks.push('<section class="tm-avatar-series-inline" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-size:' + members.length + '">' + members.map(cardHtml).join('') + '</section>'); return; } var expanded = expandedSeriesId === group.id; chunks.push('<section class="tm-avatar-series-block' + (expanded ? ' is-expanded' : '') + '" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-cols:' + count + '"><div class="tm-avatar-series-track">' + members.map(cardHtml).join('') + '</div><div class="tm-avatar-series-controls"><button type="button" class="tm-avatar-series-control" data-avatar-series-manage="' + esc(group.id) + '" title="管理系列" aria-label="管理系列"><i class="fa-solid fa-sliders"></i></button><button type="button" class="tm-avatar-series-control" data-avatar-series-toggle="' + esc(group.id) + '" title="' + (expanded ? '收起系列' : '展开系列') + '" aria-label="' + (expanded ? '收起系列' : '展开系列') + '"><i class="fa-solid ' + (expanded ? 'fa-compress' : 'fa-expand') + '"></i></button></div></section>'); }); return chunks.join(''); }
+        function layoutHtml(state, list, count) { var byId = Object.create(null), emitted = new Set(), chunks = []; list.forEach(function (item) { byId[item.id] = item; }); list.forEach(function (asset) { if (emitted.has(asset.id)) return; var group = library.findSeries(state, asset.id), members = group ? group.members.map(function (id) { return byId[id]; }).filter(Boolean) : []; if (!group || members.length < 2) { emitted.add(asset.id); chunks.push(cardHtml(asset)); return; } members.forEach(function (item) { emitted.add(item.id); }); members.sort(function (a, b) { var priority = activeRank(a.id) - activeRank(b.id); return priority || group.members.indexOf(a.id) - group.members.indexOf(b.id); }); if (members.length <= count) { chunks.push('<section class="tm-avatar-series-inline" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-size:' + members.length + '">' + members.map(cardHtml).join('') + '</section>'); return; } var expanded = expandedSeriesId === group.id; chunks.push('<section class="tm-avatar-series-block' + (expanded ? ' is-expanded' : '') + '" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-cols:' + count + '"><div class="tm-avatar-series-track">' + members.map(cardHtml).join('') + '</div><div class="tm-avatar-series-controls"><button type="button" class="tm-avatar-series-control" data-avatar-series-manage="' + esc(group.id) + '" title="管理系列" aria-label="管理系列"><i class="fa-solid fa-sliders"></i></button><button type="button" class="tm-avatar-series-control" data-avatar-series-toggle="' + esc(group.id) + '" title="' + (expanded ? '收起系列' : '展开系列') + '" aria-label="' + (expanded ? '收起系列' : '展开系列') + '" aria-expanded="' + (expanded ? 'true' : 'false') + '"><i class="fa-solid ' + (expanded ? 'fa-compress' : 'fa-expand') + '"></i></button></div></section>'); }); return chunks.join(''); }
         function setupGridLoader() { if (gridLoader) gridLoader.disconnect(); var grid = root.querySelector('[data-avatar-grid]'); gridLoader = imageLoaderApi.createImageLoader({ root: grid, rootMargin: '320px 0px', resolveSource: function (id) { return store.getThumbnail(id); } }); gridLoader.observe(grid.querySelectorAll('.tm-avatar-page-thumb')); }
         function renderCategoryBar(state) { var bar = root.querySelector('[data-avatar-catbar]'), categories = library.ensureState(state).categories; bar.innerHTML = [{ key: '__all__', label: '全部' }, { key: '__uncategorized__', label: '未分类' }].concat(categories.map(function (name) { return { key: name, label: name }; })).map(function (item) { return '<button class="tm-catbtn' + (category === item.key ? ' on' : '') + '" data-avatar-category="' + esc(item.key) + '">' + esc(item.label) + '</button>'; }).join(''); }
         function updateBatchCount() { if (!root) return; var count = root.querySelector('[data-avatar-batch-count]'); if (count) count.textContent = String(batchSelected.size); var deleteButton = root.querySelector('[data-avatar-batch="delete"]'); if (deleteButton) deleteButton.disabled = batchDeleting || importing || exporting || batchSelected.size === 0; var exportButton = root.querySelector('[data-avatar-batch="export"]'); if (exportButton) exportButton.disabled = importing || exporting || batchSelected.size === 0 || !transfer; }
@@ -13586,6 +13612,26 @@
         function renderBatch() { var area = root.querySelector('[data-avatar-batch-area]'); root.classList.toggle('is-batch', batchMode); onBatchModeChange(batchMode); if (!batchMode) { area.innerHTML = ''; area.style.display = 'none'; return; } area.style.display = ''; if (!area.querySelector('[data-avatar-batch-count]')) area.innerHTML = '<div class="tm-batch-bar"><span class="tm-batch-info">已选 <b data-avatar-batch-count>0</b> 个</span><div class="tm-batch-divider"></div><div class="tm-batch-acts"><button class="tm-batch-btn" data-avatar-batch="all">全选</button><button class="tm-batch-btn" data-avatar-batch="none">取消</button><button class="tm-batch-btn" data-avatar-batch="category"><i class="fa-solid fa-folder"></i> 分类</button><button class="tm-batch-btn" data-avatar-batch="tags"><i class="fa-solid fa-tag"></i> 标签</button><button class="tm-batch-btn" data-avatar-batch="series"><i class="fa-solid fa-layer-group"></i> 系列</button><button class="tm-batch-btn" data-avatar-batch="export"><i class="fa-solid fa-file-zipper"></i> 导出</button><button class="tm-batch-btn danger" data-avatar-batch="delete"><i class="fa-solid fa-trash"></i> 删除</button><button class="tm-batch-btn" data-avatar-batch="exit">完成</button></div></div>'; updateBatchCount(); }
         function setBatchMode(enabled) { batchMode = enabled === true; batchSelected.clear(); batchDeleting = false; renderBatch(); syncRenderedBatchCards(); return batchMode; }
         function bindRailInteractions() { root.querySelectorAll('.tm-avatar-series-block').forEach(function (block) { var id = block.dataset.avatarSeriesId; function show() { block.classList.add('is-interacting'); if (railTimers.has(id)) global.clearTimeout(railTimers.get(id)); railTimers.set(id, global.setTimeout(function () { block.classList.remove('is-interacting'); railTimers.delete(id); }, 1700)); } block.addEventListener('pointerdown', show, { passive: true }); block.addEventListener('scroll', show, { passive: true }); block.addEventListener('focusin', show); }); }
+        function setSeriesExpanded(block, expanded) {
+            if (!block) return;
+            block.classList.toggle('is-expanded', expanded);
+            var button = block.querySelector('[data-avatar-series-toggle]');
+            if (!button) return;
+            var label = expanded ? '收起系列' : '展开系列';
+            button.title = label;
+            button.setAttribute('aria-label', label);
+            button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            var icon = button.querySelector('i');
+            if (icon) { icon.classList.toggle('fa-compress', expanded); icon.classList.toggle('fa-expand', !expanded); }
+        }
+        function toggleSeriesExpanded(button) {
+            var block = button && button.closest('.tm-avatar-series-block');
+            if (!block) return;
+            var opening = !block.classList.contains('is-expanded');
+            if (opening) root.querySelectorAll('.tm-avatar-series-block.is-expanded').forEach(function (other) { if (other !== block) setSeriesExpanded(other, false); });
+            setSeriesExpanded(block, opening);
+            expandedSeriesId = opening ? block.dataset.avatarSeriesId : '';
+        }
         function render() { if (!root) return; syncActiveAvatarIds(); var state = data(), list = matchingAssets(state), grid = root.querySelector('[data-avatar-grid]'), count = columns(); lastColumnCount = count; renderCategoryBar(state); renderBatch(); grid.innerHTML = nativeSlotHtml() + layoutHtml(state, list, count) + (!assets.length ? '<div class="tm-avatar-page-empty">点击底栏中间的＋添加头像</div>' : (!list.length ? '<div class="tm-avatar-page-empty">没有符合条件的头像</div>' : '')); root.querySelectorAll('[data-avatar-sort]').forEach(function (button) { button.classList.toggle('on', button.dataset.avatarSort === library.ensureState(state).sortMode); }); setupGridLoader(); renderImportState(); bindRailInteractions(); }
         function refresh() { var token = ++refreshToken; return store.listAssets().then(function (items) { if (!mounted || token !== refreshToken) return; assets = items || []; render(); }).catch(function (error) { reportError('library refresh failed', error); if (mounted) setNotice('头像库读取失败', 'error'); throw error; }); }
         function importFiles(files) {
@@ -13726,7 +13772,34 @@
                 setNotice('批量删除未完整完成：' + (error.message || '整理信息保存失败'), 'error');
             }).finally(function () { batchDeleting = false; updateBatchCount(); });
         }
-        function openJoinSeriesSheet(id) { var groups = Object.values(library.ensureState(data()).series.groups); if (!groups.length) { toast('请先通过批量整理创建系列', true); return; } var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>加入系列</div>' + groups.map(function (group) { return '<button class="tm-picker-row" data-avatar-join-series="' + esc(group.id) + '"><span><i class="fa-solid fa-layer-group"></i><strong>' + esc(group.name) + '</strong></span><i class="fa-solid fa-plus"></i></button>'; }).join('')); sheet.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-join-series]'); if (!button) return; var state = data(), result = library.addMember(state, button.dataset.avatarJoinSeries, id); if (!result.ok) { toast('无法加入该系列', true); return; } persist(state, '已加入系列').then(function () { closeSheet(sheet); render(); }); }); }
+        function openJoinSeriesSheet(id) {
+            var owner = library.findSeries(data(), id);
+            if (owner) { openSeriesManageSheet(owner.id); return; }
+            var groups = Object.values(library.ensureState(data()).series.groups);
+            if (!groups.length) { toast('请先选择至少两张头像创建系列', true); return; }
+            function join(seriesId) {
+                var state = data(), result = library.addMember(state, seriesId, id);
+                if (!result.ok) { toast('无法加入该系列', true); return; }
+                persist(state, '已加入系列').then(function () { batchSelected.clear(); render(); });
+            }
+            if (typeof openChoicePicker === 'function') {
+                openChoicePicker({
+                    title: '加入头像系列',
+                    icon: 'fa-layer-group',
+                    items: groups.map(function (group) { return { value: group.id, label: group.name, hint: group.members.length + ' 张头像', icon: 'fa-layer-group' }; }),
+                    searchPlaceholder: '搜索头像系列…',
+                    emptySearchText: '没有匹配的头像系列',
+                    onSelect: join,
+                });
+                return;
+            }
+            var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>加入系列</div><input type="text" class="tm-picker-search" data-avatar-series-search placeholder="搜索头像系列…" autocomplete="off"><div class="tm-picker-list" data-avatar-series-list></div>');
+            var search = sheet.querySelector('[data-avatar-series-search]'), list = sheet.querySelector('[data-avatar-series-list]');
+            function renderGroups() { var query = search.value.trim().toLocaleLowerCase(), filtered = groups.filter(function (group) { return !query || group.name.toLocaleLowerCase().indexOf(query) !== -1; }); list.innerHTML = filtered.length ? filtered.map(function (group) { return '<button class="tm-picker-row" data-avatar-join-series="' + esc(group.id) + '"><span><i class="fa-solid fa-layer-group"></i><strong>' + esc(group.name) + '</strong></span><i class="fa-solid fa-plus"></i></button>'; }).join('') : '<div class="tm-picker-empty">没有匹配的头像系列</div>'; }
+            search.addEventListener('input', renderGroups);
+            list.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-join-series]'); if (!button) return; closeSheet(sheet); join(button.dataset.avatarJoinSeries); });
+            renderGroups();
+        }
         function openSeriesManageSheet(seriesId) {
             var state = data(), group = library.ensureState(state).series.groups[seriesId];
             if (!group) return;
@@ -13758,10 +13831,10 @@
                 }
             });
         }
-        function createSeriesFromSelection() { var state = data(), sorted = assets.slice().sort(function (a, b) { return library.compareAssets(state, a, b, library.ensureState(state).sortMode); }), ids = sorted.filter(function (asset) { return batchSelected.has(asset.id); }).map(function (asset) { return asset.id; }); if (ids.length < 2) { toast('请至少选择两张头像', true); return; } if (ids.some(function (id) { return !!library.findSeries(state, id); })) { toast('所选头像中已有系列成员，请先移出原系列', true); return; } var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>创建头像系列</div><div class="tm-field"><label>系列名称</label><input type="text" data-avatar-new-series maxlength="80" placeholder="例如：情侣头像"></div><div class="tm-hint">成员顺序按当前显示顺序保存，之后可在系列管理中调整。</div><div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" data-avatar-series-cancel>取消</button><button class="tm-btn tm-btn-safe" data-avatar-series-create>创建系列</button></div>'); sheet.querySelector('[data-avatar-series-cancel]').addEventListener('click', function () { closeSheet(sheet); }); sheet.querySelector('[data-avatar-series-create]').addEventListener('click', function () { var name = sheet.querySelector('[data-avatar-new-series]').value.trim(), next = data(), result = library.createSeries(next, name, ids); if (!result.ok) { toast(name ? '无法创建系列' : '请输入系列名称', true); return; } persist(next, '已创建系列').then(function () { closeSheet(sheet); batchSelected.clear(); batchMode = false; render(); }); }); }
+        function createSeriesFromSelection() { var state = data(), sorted = assets.slice().sort(function (a, b) { return library.compareAssets(state, a, b, library.ensureState(state).sortMode); }), ids = sorted.filter(function (asset) { return batchSelected.has(asset.id); }).map(function (asset) { return asset.id; }); if (!ids.length) { toast('请先选择头像', true); return; } if (ids.length === 1) { openJoinSeriesSheet(ids[0]); return; } if (ids.some(function (id) { return !!library.findSeries(state, id); })) { toast('所选头像中已有系列成员，请先移出原系列', true); return; } var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>创建头像系列</div><div class="tm-field"><label>系列名称</label><input type="text" data-avatar-new-series maxlength="80" placeholder="例如：情侣头像"></div><div class="tm-hint">成员顺序按当前显示顺序保存，之后可在系列管理中调整。</div><div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" data-avatar-series-cancel>取消</button><button class="tm-btn tm-btn-safe" data-avatar-series-create>创建系列</button></div>'); sheet.querySelector('[data-avatar-series-cancel]').addEventListener('click', function () { closeSheet(sheet); }); sheet.querySelector('[data-avatar-series-create]').addEventListener('click', function () { var name = sheet.querySelector('[data-avatar-new-series]').value.trim(), next = data(), result = library.createSeries(next, name, ids); if (!result.ok) { toast(name ? '无法创建系列' : '请输入系列名称', true); return; } persist(next, '已创建系列').then(function () { closeSheet(sheet); batchSelected.clear(); batchMode = false; render(); }); }); }
         function applyBatchCategory() { if (!batchSelected.size) { toast('请先选择头像', true); return; } openCategoryPicker({ categories: library.ensureState(data()).categories, allowClear: true, title: '批量设置分类', onSelect: function (value) { var state = data(); batchSelected.forEach(function (id) { library.ensureMeta(state, id).category = value; }); persist(state, '已批量更新分类').then(render); } }); }
         function applyBatchTags() { if (!batchSelected.size) { toast('请先选择头像', true); return; } openTagPicker({ knownTags: library.listTags(data()), requireSelection: true, title: '批量添加标签', onApply: function (values) { var state = data(); batchSelected.forEach(function (id) { var meta = library.ensureMeta(state, id); meta.tags = Array.from(new Set(meta.tags.concat(values))); }); persist(state, '已批量添加标签').then(render); } }); }
-        function handleClick(event) { var native = event.target.closest('[data-avatar-action="native"]'); if (native) { openNativeMenu(); return; } var manage = event.target.closest('[data-avatar-series-manage]'); if (manage) { event.stopPropagation(); openSeriesManageSheet(manage.dataset.avatarSeriesManage); return; } var toggle = event.target.closest('[data-avatar-series-toggle]'); if (toggle) { event.stopPropagation(); expandedSeriesId = expandedSeriesId === toggle.dataset.avatarSeriesToggle ? '' : toggle.dataset.avatarSeriesToggle; render(); return; } var cat = event.target.closest('[data-avatar-category]'); if (cat) { category = cat.dataset.avatarCategory; render(); return; } var sort = event.target.closest('[data-avatar-sort]'); if (sort) { var state = data(); library.ensureState(state).sortMode = sort.dataset.avatarSort; persist(state).then(render); return; } var batch = event.target.closest('[data-avatar-batch]'); if (batch) { var action = batch.dataset.avatarBatch; if (batchDeleting || exporting) return; if (action === 'all') assets.forEach(function (asset) { batchSelected.add(asset.id); }); else if (action === 'none') batchSelected.clear(); else if (action === 'exit') { setBatchMode(false); return; } else if (action === 'category') { applyBatchCategory(); return; } else if (action === 'tags') { applyBatchTags(); return; } else if (action === 'series') { createSeriesFromSelection(); return; } else if (action === 'export') { exportBatchSelection().catch(function () {}); return; } else if (action === 'delete') { deleteBatchSelection(); return; } syncRenderedBatchCards(); return; } var card = event.target.closest('.tm-avatar-page-card'); if (!card || !root.contains(card)) return; var id = card.dataset.avatarId; if (batchMode) { if (batchDeleting || exporting) return; if (batchSelected.has(id)) batchSelected.delete(id); else batchSelected.add(id); syncBatchCard(card); updateBatchCount(); } else openAssetMenu(id).catch(function (error) { setNotice(error.message || '头像操作无法打开', 'error'); }); }
+        function handleClick(event) { var native = event.target.closest('[data-avatar-action="native"]'); if (native) { openNativeMenu(); return; } var manage = event.target.closest('[data-avatar-series-manage]'); if (manage) { event.stopPropagation(); openSeriesManageSheet(manage.dataset.avatarSeriesManage); return; } var toggle = event.target.closest('[data-avatar-series-toggle]'); if (toggle) { event.stopPropagation(); toggleSeriesExpanded(toggle); return; } var cat = event.target.closest('[data-avatar-category]'); if (cat) { category = cat.dataset.avatarCategory; render(); return; } var sort = event.target.closest('[data-avatar-sort]'); if (sort) { var state = data(); library.ensureState(state).sortMode = sort.dataset.avatarSort; persist(state).then(render); return; } var batch = event.target.closest('[data-avatar-batch]'); if (batch) { var action = batch.dataset.avatarBatch; if (batchDeleting || exporting) return; if (action === 'all') assets.forEach(function (asset) { batchSelected.add(asset.id); }); else if (action === 'none') batchSelected.clear(); else if (action === 'exit') { setBatchMode(false); return; } else if (action === 'category') { applyBatchCategory(); return; } else if (action === 'tags') { applyBatchTags(); return; } else if (action === 'series') { createSeriesFromSelection(); return; } else if (action === 'export') { exportBatchSelection().catch(function () {}); return; } else if (action === 'delete') { deleteBatchSelection(); return; } syncRenderedBatchCards(); return; } var card = event.target.closest('.tm-avatar-page-card'); if (!card || !root.contains(card)) return; var id = card.dataset.avatarId; if (batchMode) { if (batchDeleting || exporting) return; if (batchSelected.has(id)) batchSelected.delete(id); else batchSelected.add(id); syncBatchCard(card); updateBatchCount(); } else openAssetMenu(id).catch(function (error) { setNotice(error.message || '头像操作无法打开', 'error'); }); }
         function handleKeydown(event) { if (event.key !== 'Enter' && event.key !== ' ') return; var target = event.target.closest('.tm-avatar-page-card,.tm-avatar-native-slot'); if (!target) return; event.preventDefault(); target.click(); }
         function handleFileChange(event) { var input = event.currentTarget || fileInput, files = imageToolsApi.snapshotInputFiles(input); if (!files.length) return; var pending = importFiles(files); input.value = ''; pending.catch(function (error) { reportError('file input import rejected', error); }); }
         function mount() { if (mounted) return refresh().then(function (value) { renderImportState(); return value; }); root = getRoot(); if (!root) return Promise.reject(new Error('头像管理页面不存在')); mounted = true; ensureStyle(); fileInput = root.querySelector('[data-avatar-file]'); root.addEventListener('click', handleClick); root.addEventListener('keydown', handleKeydown); fileInput.addEventListener('change', handleFileChange); var search = root.querySelector('[data-avatar-search]'); search.addEventListener('input', function () { query = search.value.trim(); render(); }); root.querySelector('[data-avatar-search-clear]').addEventListener('click', function () { query = ''; search.value = ''; render(); search.focus(); }); if (global.ResizeObserver) { resizeObserver = new global.ResizeObserver(function () { var next = columns(); if (next !== lastColumnCount) render(); }); resizeObserver.observe(root.querySelector('[data-avatar-grid]')); } return refresh().then(function (value) { renderImportState(); return value; }); }
@@ -14141,7 +14214,7 @@
 })(window);
 /* END MODULE 24/29: src/app-shell.js */
 
-/* BEGIN MODULE 25/29: src/styles.js | sha256:3f318112b1b5b89678851f7866478c96d4eeae6a42b76ba283178fd0e9821dff */
+/* BEGIN MODULE 25/29: src/styles.js | sha256:5727741c1c1ac7cbf2ccaf4f1c4559886623e10af1c778f77a6d79d0b2e7a0ab */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -14395,6 +14468,8 @@
             '.tm-picker-row{width:100%;min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;border:1px solid rgba(127,127,127,.12);border-radius:var(--tm-control-radius,8px);background:rgba(127,127,127,.055);color:inherit;font:inherit;text-align:left;cursor:pointer;}',
             '.tm-picker-row>span{display:flex;align-items:center;gap:8px;min-width:0;}',
             '.tm-picker-row>span>i{width:18px;text-align:center;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.68;}',
+            '.tm-picker-row-copy{display:flex;min-width:0;flex-direction:column;gap:2px;}',
+            '.tm-picker-row-copy small{font-size:.7em;opacity:.48;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
             '.tm-picker-row strong{font-size:.82em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
             '.tm-picker-row>i{font-size:.72em;opacity:.38;}',
             '.tm-picker-row:hover,.tm-picker-row.is-selected{border-color:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 58%,transparent);background:color-mix(in srgb,var(--SmartThemeQuoteColor,#7c6daf) 10%,transparent);}',
@@ -15367,7 +15442,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:0aed7fa62dd170b23ec6e9db2986cb825acaa7e5aeb2d67ecd907f478e41eb44 */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:5578b464ce0988e2ab843dddce4e165ca636e27b0ce1a05d420ff15610493227 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -15808,6 +15883,7 @@
                 createActionDialog: uiSheetsApi.createActionDialog,
                 openCategoryPicker: openCategoryPicker,
                 openTagPicker: openTagPicker,
+                openChoicePicker: openChoicePicker,
                 loadUiData: load,
                 saveUiData: save,
                 library: avatarLibraryApi,
@@ -16795,6 +16871,11 @@
             delete dd.themeMeta[oldName];
             changed = true;
         }
+        if (Object.prototype.hasOwnProperty.call(dd.themeImportOrder, oldName)) {
+            dd.themeImportOrder[newName] = dd.themeImportOrder[oldName];
+            delete dd.themeImportOrder[oldName];
+            changed = true;
+        }
         if (pairsApi && pairsApi.renameThemeReferences(dd, oldName, newName) > 0) changed = true;
         if (seriesApi && seriesApi.renameThemeReferences(dd, oldName, newName) > 0) changed = true;
         if (bindingsApi && bindingsApi.renameThemeReferences(dd, oldName, newName) > 0) changed = true;
@@ -16825,6 +16906,10 @@
         themeNames.forEach(function (themeName) {
             if (dd.themeMeta[themeName]) {
                 delete dd.themeMeta[themeName];
+                changed = true;
+            }
+            if (Object.prototype.hasOwnProperty.call(dd.themeImportOrder, themeName)) {
+                delete dd.themeImportOrder[themeName];
                 changed = true;
             }
             if (bindingsApi && bindingsApi.removeThemeReferences(dd, themeName) > 0) changed = true;
@@ -17508,7 +17593,7 @@
                     mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories, opts.forceCategory);
                     var importData = load();
                     okNames.forEach(function (name) {
-                        if (!importData.themeImportOrder[name]) importData.themeImportOrder[name] = importData.nextThemeImportOrder++;
+                        importData.themeImportOrder[name] = importData.nextThemeImportOrder++;
                     });
                     save(importData);
                 }
@@ -17865,12 +17950,14 @@
                 function rank(item) {
                     var names = item && item.themeNames && item.themeNames.length ? item.themeNames : [item && item.themeName];
                     var values = names.map(function (name) { return Number(d.themeImportOrder && d.themeImportOrder[name]) || 0; }).filter(Boolean);
-                    return values.length ? Math.min.apply(Math, values) : 0;
+                    return values.length ? Math.max.apply(Math, values) : 0;
                 }
                 var ra = rank(a), rb = rank(b);
                 if (ra && rb && ra !== rb) return direction * (ra - rb);
                 if (ra !== rb) return direction * (ra ? 1 : -1);
-                return direction * a.name.localeCompare(b.name, 'zh');
+                return ra || rb
+                    ? direction * a.name.localeCompare(b.name, 'zh')
+                    : a.name.localeCompare(b.name, 'zh');
             }); break;
         }
         if (list === view.items) view.sortedByMode[mode] = sorted;
@@ -19229,8 +19316,8 @@
             '<button class="tm-sort-chip" data-sort="recent">最近使用</button>' +
             '<button class="tm-sort-chip" data-sort="freq">使用频率</button>' +
             '<button class="tm-sort-chip" data-sort="starred">收藏优先</button>' +
-            '<button class="tm-sort-chip" data-sort="import-asc">导入正序</button>' +
-            '<button class="tm-sort-chip" data-sort="import-desc">导入倒序</button>' +
+            '<button class="tm-sort-chip" data-sort="import-asc">导入时间正序</button>' +
+            '<button class="tm-sort-chip" data-sort="import-desc">导入时间倒序</button>' +
             '<span class="tm-sort-divider"></span>' +
             '<span class="tm-grid-size-label">网格</span>' +
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-out" title="缩小卡片"><i class="fa-solid fa-minus"></i></button>' +
@@ -19551,6 +19638,53 @@
 
     function buildDisclosureHtml(id, title, icon, content) {
         return '<details class="tm-disclosure" id="' + id + '"><summary><span><i class="fa-solid ' + icon + '"></i>' + title + '</span><i class="fa-solid fa-chevron-right tm-disclosure-chevron"></i></summary><div class="tm-disclosure-body">' + content + '</div></details>';
+    }
+
+    function openChoicePicker(options) {
+        options = options || {};
+        var items = (Array.isArray(options.items) ? options.items : []).map(function (item) {
+            return {
+                value: String(item && item.value || ''),
+                label: String(item && item.label || ''),
+                hint: String(item && item.hint || ''),
+                icon: String(item && item.icon || options.icon || 'fa-circle-dot'),
+            };
+        }).filter(function (item) { return item.value && item.label; });
+        var selected = String(options.selected || '');
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid ' + esc(options.icon || 'fa-list') + '"></i>' + esc(options.title || '请选择') + '</div>',
+            options.hint ? '<div class="tm-hint tm-picker-hint">' + esc(options.hint) + '</div>' : '',
+            '<input type="text" class="tm-picker-search" data-choice-picker-search placeholder="' + esc(options.searchPlaceholder || '搜索…') + '" autocomplete="off" />',
+            '<div class="tm-picker-list" data-choice-picker-list></div>',
+            '<div class="tm-edit-foot"><button type="button" class="tm-btn tm-btn-outline" data-choice-picker-cancel>取消</button></div>',
+        ].join(''));
+        var search = sheet.querySelector('[data-choice-picker-search]');
+        var list = sheet.querySelector('[data-choice-picker-list]');
+        function renderChoices() {
+            var query = search.value.trim().toLocaleLowerCase();
+            var filtered = items.filter(function (item) {
+                return !query || (item.label + '\n' + item.hint).toLocaleLowerCase().indexOf(query) !== -1;
+            });
+            list.innerHTML = filtered.length ? filtered.map(function (item) {
+                var active = item.value === selected;
+                return '<button type="button" class="tm-picker-row' + (active ? ' is-selected' : '') + '" data-choice-picker-value="' + esc(item.value) + '">' +
+                    '<span><i class="fa-solid ' + esc(item.icon) + '"></i><span class="tm-picker-row-copy"><strong>' + esc(item.label) + '</strong>' +
+                    (item.hint ? '<small>' + esc(item.hint) + '</small>' : '') + '</span></span>' +
+                    '<i class="fa-solid ' + (active ? 'fa-check' : 'fa-chevron-right') + '"></i></button>';
+            }).join('') : '<div class="tm-picker-empty">' + esc(query ? (options.emptySearchText || '没有匹配项') : (options.emptyText || '暂无可选项')) + '</div>';
+        }
+        list.addEventListener('click', function (event) {
+            var button = event.target && event.target.closest ? event.target.closest('[data-choice-picker-value]') : null;
+            if (!button || !list.contains(button)) return;
+            var value = button.dataset.choicePickerValue || '';
+            var item = items.find(function (candidate) { return candidate.value === value; });
+            closeSheet(sheet);
+            if (item && typeof options.onSelect === 'function') options.onSelect(value, item);
+        });
+        search.addEventListener('input', renderChoices);
+        sheet.querySelector('[data-choice-picker-cancel]').addEventListener('click', function () { closeSheet(sheet); });
+        renderChoices();
+        return sheet;
     }
 
     function openCategoryPicker(options) {
@@ -20574,14 +20708,15 @@
             var firstCategory = getItemMeta(d, items[0]).category || '';
             if (items.every(function (item) { return (getItemMeta(d, item).category || '') === firstCategory; })) commonCategory = firstCategory;
         }
-        var operationOptions = '<option value="new">创建新系列</option>' + groups.map(function (group) {
-            return '<option value="' + esc(group.id) + '">加入「' + esc(group.name) + '」</option>';
-        }).join('');
+        var operationItems = (items.length >= 2 ? [{ value: 'new', label: '创建新系列', hint: '使用当前选择创建一个新系列', icon: 'fa-plus' }] : []).concat(groups.map(function (group) {
+            return { value: group.id, label: '加入「' + group.name + '」', hint: group.members.length + ' 款美化', icon: 'fa-layer-group' };
+        }));
+        var operationValue = items.length < 2 && groups.length > 0 ? groups[0].id : 'new';
         var sheet = createSheet([
             '<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>保存为系列</div>',
             '<div class="tm-hint tm-series-hint">系列只收纳展示关系，不会复制或修改真实美化；解散系列也不会删除成员。成员顺序始终跟随当前排序。</div>',
             buildSeriesSelectedPreview(items),
-            '<div class="tm-field"><label>操作</label><select id="tm-series-operation">' + operationOptions + '</select></div>',
+            '<div class="tm-field"><label>操作</label><button type="button" class="tm-picker-trigger" id="tm-series-operation"><span class="tm-picker-trigger-icon"><i class="fa-solid fa-layer-group"></i></span><span class="tm-picker-trigger-copy"><strong></strong><small></small></span><i class="fa-solid fa-chevron-right tm-picker-trigger-chevron"></i></button></div>',
             '<div id="tm-series-create-fields">' +
             '<div class="tm-field"><label>系列名称</label><input type="text" id="tm-series-name" maxlength="80" value="' + esc(suggestedSeriesName(items)) + '" /></div>' +
             '<div class="tm-field"><label>展示分类</label><select class="tm-series-category-select">' + seriesCategoryOptions(d, commonCategory) + '</select></div>' +
@@ -20592,20 +20727,34 @@
         var operation = sheet.querySelector('#tm-series-operation');
         var createFields = sheet.querySelector('#tm-series-create-fields');
         var saveButton = sheet.querySelector('#tm-series-create-save');
-        if (items.length < 2 && groups.length > 0) operation.value = groups[0].id;
         function syncOperation() {
-            var creating = operation.value === 'new';
+            var creating = operationValue === 'new';
+            var selectedOperation = operationItems.find(function (item) { return item.value === operationValue; }) || operationItems[0];
+            if (selectedOperation) {
+                operation.querySelector('strong').textContent = selectedOperation.label;
+                operation.querySelector('small').textContent = selectedOperation.hint;
+            }
             createFields.style.display = creating ? '' : 'none';
             saveButton.textContent = creating ? '保存系列' : '确认加入';
         }
-        operation.addEventListener('change', syncOperation);
+        operation.addEventListener('click', function () {
+            openChoicePicker({
+                title: '选择系列操作',
+                icon: 'fa-layer-group',
+                items: operationItems,
+                selected: operationValue,
+                searchPlaceholder: '搜索系列…',
+                emptySearchText: '没有匹配的系列',
+                onSelect: function (value) { operationValue = value; syncOperation(); },
+            });
+        });
         syncOperation();
         bindSeriesCategorySelect(sheet);
         sheet.querySelector('#tm-series-create-cancel').addEventListener('click', function () { closeSheet(sheet); });
         saveButton.addEventListener('click', function () {
             var dd = load();
             var result;
-            if (operation.value === 'new') {
+            if (operationValue === 'new') {
                 if (targets.length < 2) { toast('创建系列至少需要两个美化', true); return; }
                 var name = sheet.querySelector('#tm-series-name').value.trim();
                 if (!name) { toast('请输入系列名称', true); return; }
@@ -20617,7 +20766,7 @@
                 if (category === null) { toast('请输入新分类名称', true); return; }
                 result = seriesApi.createSeries(dd, { name: name, category: category, members: targets });
             } else {
-                result = seriesApi.addMembers(dd, operation.value, targets);
+                result = seriesApi.addMembers(dd, operationValue, targets);
             }
             if (!result.ok) {
                 toast(result.reason === 'already-series' ? '其中一个美化已经属于其他系列' : '无法保存系列，请重试', true);
@@ -20629,7 +20778,7 @@
             closeSheet(sheet);
             renderCatbar();
             renderGrid();
-            toast(operation.value === 'new' ? '✅ 已创建系列' : '✅ 已加入系列');
+            toast(operationValue === 'new' ? '✅ 已创建系列' : '✅ 已加入系列');
         });
     }
 
@@ -22200,8 +22349,7 @@
             (recoveryPending
                 ? '<div class="tm-hint" style="margin-bottom:9px;color:var(--warning-color,#d97706)">检测到未完成的头像恢复事务。Avatar Manager 与普通设置保存将保持只读，完成回滚前不会加载半恢复数据。</div><button class="tm-btn tm-btn-danger" id="tm-avatar-rollback-recovery" style="width:100%;margin-bottom:9px"><i class="fa-solid fa-rotate-left"></i> 回滚未完成的恢复</button>'
                 : '<button class="tm-btn tm-btn-outline" id="tm-avatar-restore-backup" style="width:100%;margin-bottom:9px"' + (restoreDisabled ? ' disabled' : '') + '><i class="fa-solid fa-file-arrow-up"></i> 从完整备份恢复</button><input type="file" id="tm-avatar-restore-file" accept=".zip,application/zip" style="display:none">' +
-                    (authority.localOnly === true ? '<div class="tm-hint" style="margin-bottom:9px">恢复会完整替换 Avatar Manager 数据，不会合并；旧头像库将保留为事务回滚依据。</div>' : '<div class="tm-hint" style="margin-bottom:9px">本阶段仅支持经明确确认的本地存储环境恢复；后端头像库不会被修改。</div>')) +
-            '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>';
+                    (authority.localOnly === true ? '<div class="tm-hint" style="margin-bottom:9px">恢复会完整替换 Avatar Manager 数据，不会合并；旧头像库将保留为事务回滚依据。</div>' : '<div class="tm-hint" style="margin-bottom:9px">本阶段仅支持经明确确认的本地存储环境恢复；后端头像库不会被修改。</div>'));
         var extensionHtml = '<div class="tm-update-panel' + (updateState.phase === 'ready' && updateState.available ? ' has-update' : '') + '"><div class="tm-update-panel-head"><div><strong>美化管理 v' + esc(TM_VERSION) + '</strong><span class="tm-update-status">' + esc(updateView.status) + '</span></div><button type="button" class="tm-btn tm-btn-outline tm-update-action" id="tm-avatar-update-action" data-update-mode="' + esc(updateView.mode) + '"' + (updateView.disabled ? ' disabled' : '') + '><i class="fa-solid ' + (updateView.mode === 'update' ? 'fa-download' : 'fa-rotate') + '"></i> ' + esc(updateView.action) + '</button></div><div class="tm-update-detail"' + (updateView.detail ? '' : ' hidden') + '>' + esc(updateView.detail) + '</div><div class="tm-plugin-credit"><span>作者：温水</span><span>发布于毛毛雨美化群、旅程</span></div></div>';
         var sheet = createSheet(['<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>', organizeHtml, buildDisclosureHtml('tm-avatar-settings-interface', '界面显示', 'fa-display', interfaceHtml), buildDisclosureHtml('tm-avatar-settings-data', '数据管理', 'fa-database', dataHtml), extensionHtml].join(''));
         sheet.classList.add('tm-sheet-tall', 'tm-settings-sheet');
@@ -22284,7 +22432,6 @@
                 rollbackButton.disabled = false;
             });
         });
-        sheet.querySelector('#tm-clear-all-user-avatar-overrides').addEventListener('click', function () { if (!confirm('彻底恢复 User 原头像？\n这会清除全局 User 头像、所有美化专属 User 头像与候选，以及 User 原头像调整；不会删除头像库。')) return; avatarRuntime.clearAllUserOverrides().then(function () { closeSheet(sheet); toast('已彻底恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复失败', true); }); });
         sheet.querySelector('#tm-avatar-update-action').addEventListener('click', function () { var current = getExtensionUpdateState(); if (current.phase === 'ready' && current.available) openExtensionUpdateConfirmSheet(); else { this.disabled = true; checkExtensionUpdate(true).catch(function () { toast('检查更新失败；请检查网络、Git 状态或酒馆服务日志', true); }); } });
         syncExtensionUpdatePanel();
         return sheet;
@@ -22361,12 +22508,6 @@
             buildDisclosureHtml('tm-settings-interface', '界面显示', 'fa-display', interfaceSettingsHtml),
             buildDisclosureHtml('tm-settings-fab', '悬浮球', 'fa-circle-dot', fabSettingsHtml),
             buildDisclosureHtml('tm-settings-data', '数据管理', 'fa-database', dataSettingsHtml),
-            lastAppPage === 'avatars' ? [
-                '<div class="tm-divider"></div>',
-                '<div class="tm-sec-title">User 头像恢复</div>',
-                '<div class="tm-hint" style="margin-bottom:8px">用于修复旧版本遗留的固定头像。会清除全局 User 头像、所有美化专属 User 绑定与候选、User 原头像调整；不会删除头像库，也不会影响角色头像。</div>',
-                '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>',
-            ].join('') : '',
             extensionInfoHtml,
         ].join(''));
         sheet.classList.add('tm-sheet-tall', 'tm-settings-sheet');
@@ -22459,26 +22600,6 @@
         });
         sheet.querySelector('#tm-show-freq').addEventListener('change', function () {
             var dd = load(); dd.showFreq = this.checked; save(dd); renderGrid();
-        });
-        var clearAllUserAvatarOverridesButton = sheet.querySelector('#tm-clear-all-user-avatar-overrides');
-        if (clearAllUserAvatarOverridesButton) clearAllUserAvatarOverridesButton.addEventListener('click', function () {
-            if (!avatarRuntime || typeof avatarRuntime.clearAllUserOverrides !== 'function') {
-                toast('User 头像恢复模块尚未就绪', true);
-                return;
-            }
-            if (!confirm('确定彻底恢复 User 原头像吗？\n\n这会清除全局 User 头像、所有美化专属 User 绑定与候选，以及 User 原头像调整。头像库和角色头像不会被删除。')) return;
-            clearAllUserAvatarOverridesButton.disabled = true;
-            avatarRuntime.clearAllUserOverrides().then(function (result) {
-                if (avatarPageController) avatarPageController.refresh();
-                renderAvatarBottomStatus();
-                toast('已清除 ' + result.bindingsCleared + ' 项 User 头像覆盖，正在重新载入页面');
-                global.setTimeout(function () {
-                    if (global.location && typeof global.location.reload === 'function') global.location.reload();
-                }, 800);
-            }).catch(function (error) {
-                clearAllUserAvatarOverridesButton.disabled = false;
-                toast(error.message || 'User 头像恢复失败', true);
-            });
         });
         var fabFileInp = sheet.querySelector('#tm-fab-file');
         var fabResetBtn = sheet.querySelector('#tm-fab-reset');

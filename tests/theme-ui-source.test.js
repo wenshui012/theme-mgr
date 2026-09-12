@@ -54,6 +54,15 @@ test('category and tag flows use sheets without theme-manager prompt dialogs', (
     assert.doesNotMatch(tagPicker, /\.focus\s*\(/);
 });
 
+test('joining a theme series uses the searchable in-app choice picker', () => {
+    const picker = source.slice(source.indexOf('function openChoicePicker'), source.indexOf('function openCategoryPicker'));
+    const series = source.slice(source.indexOf('function openSeriesBatchSheet'), source.indexOf('function getSeriesMemberView'));
+    assert.match(picker, /data-choice-picker-search/);
+    assert.match(series, /openChoicePicker\(/);
+    assert.match(series, /searchPlaceholder: '搜索系列…'/);
+    assert.doesNotMatch(series, /<select id="tm-series-operation"/);
+});
+
 test('settings keep clear-all and reliable orphan cleanup as separate actions', () => {
     const settings = source.slice(source.indexOf('function openSettingsSheet'), source.indexOf('// ── 分类管理'));
     assert.match(settings, /id="tm-clear-orphan"/);

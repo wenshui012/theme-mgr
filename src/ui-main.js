@@ -438,6 +438,7 @@
                 createActionDialog: uiSheetsApi.createActionDialog,
                 openCategoryPicker: openCategoryPicker,
                 openTagPicker: openTagPicker,
+                openChoicePicker: openChoicePicker,
                 loadUiData: load,
                 saveUiData: save,
                 library: avatarLibraryApi,
@@ -1425,6 +1426,11 @@
             delete dd.themeMeta[oldName];
             changed = true;
         }
+        if (Object.prototype.hasOwnProperty.call(dd.themeImportOrder, oldName)) {
+            dd.themeImportOrder[newName] = dd.themeImportOrder[oldName];
+            delete dd.themeImportOrder[oldName];
+            changed = true;
+        }
         if (pairsApi && pairsApi.renameThemeReferences(dd, oldName, newName) > 0) changed = true;
         if (seriesApi && seriesApi.renameThemeReferences(dd, oldName, newName) > 0) changed = true;
         if (bindingsApi && bindingsApi.renameThemeReferences(dd, oldName, newName) > 0) changed = true;
@@ -1455,6 +1461,10 @@
         themeNames.forEach(function (themeName) {
             if (dd.themeMeta[themeName]) {
                 delete dd.themeMeta[themeName];
+                changed = true;
+            }
+            if (Object.prototype.hasOwnProperty.call(dd.themeImportOrder, themeName)) {
+                delete dd.themeImportOrder[themeName];
                 changed = true;
             }
             if (bindingsApi && bindingsApi.removeThemeReferences(dd, themeName) > 0) changed = true;
@@ -2138,7 +2148,7 @@
                     mergeImportedThemeMeta(okNames, opts.metaByName, opts.categories, opts.forceCategory);
                     var importData = load();
                     okNames.forEach(function (name) {
-                        if (!importData.themeImportOrder[name]) importData.themeImportOrder[name] = importData.nextThemeImportOrder++;
+                        importData.themeImportOrder[name] = importData.nextThemeImportOrder++;
                     });
                     save(importData);
                 }
@@ -2495,12 +2505,14 @@
                 function rank(item) {
                     var names = item && item.themeNames && item.themeNames.length ? item.themeNames : [item && item.themeName];
                     var values = names.map(function (name) { return Number(d.themeImportOrder && d.themeImportOrder[name]) || 0; }).filter(Boolean);
-                    return values.length ? Math.min.apply(Math, values) : 0;
+                    return values.length ? Math.max.apply(Math, values) : 0;
                 }
                 var ra = rank(a), rb = rank(b);
                 if (ra && rb && ra !== rb) return direction * (ra - rb);
                 if (ra !== rb) return direction * (ra ? 1 : -1);
-                return direction * a.name.localeCompare(b.name, 'zh');
+                return ra || rb
+                    ? direction * a.name.localeCompare(b.name, 'zh')
+                    : a.name.localeCompare(b.name, 'zh');
             }); break;
         }
         if (list === view.items) view.sortedByMode[mode] = sorted;
@@ -3859,8 +3871,8 @@
             '<button class="tm-sort-chip" data-sort="recent">最近使用</button>' +
             '<button class="tm-sort-chip" data-sort="freq">使用频率</button>' +
             '<button class="tm-sort-chip" data-sort="starred">收藏优先</button>' +
-            '<button class="tm-sort-chip" data-sort="import-asc">导入正序</button>' +
-            '<button class="tm-sort-chip" data-sort="import-desc">导入倒序</button>' +
+            '<button class="tm-sort-chip" data-sort="import-asc">导入时间正序</button>' +
+            '<button class="tm-sort-chip" data-sort="import-desc">导入时间倒序</button>' +
             '<span class="tm-sort-divider"></span>' +
             '<span class="tm-grid-size-label">网格</span>' +
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-out" title="缩小卡片"><i class="fa-solid fa-minus"></i></button>' +
@@ -4181,6 +4193,53 @@
 
     function buildDisclosureHtml(id, title, icon, content) {
         return '<details class="tm-disclosure" id="' + id + '"><summary><span><i class="fa-solid ' + icon + '"></i>' + title + '</span><i class="fa-solid fa-chevron-right tm-disclosure-chevron"></i></summary><div class="tm-disclosure-body">' + content + '</div></details>';
+    }
+
+    function openChoicePicker(options) {
+        options = options || {};
+        var items = (Array.isArray(options.items) ? options.items : []).map(function (item) {
+            return {
+                value: String(item && item.value || ''),
+                label: String(item && item.label || ''),
+                hint: String(item && item.hint || ''),
+                icon: String(item && item.icon || options.icon || 'fa-circle-dot'),
+            };
+        }).filter(function (item) { return item.value && item.label; });
+        var selected = String(options.selected || '');
+        var sheet = createSheet([
+            '<div class="tm-sheet-title"><i class="fa-solid ' + esc(options.icon || 'fa-list') + '"></i>' + esc(options.title || '请选择') + '</div>',
+            options.hint ? '<div class="tm-hint tm-picker-hint">' + esc(options.hint) + '</div>' : '',
+            '<input type="text" class="tm-picker-search" data-choice-picker-search placeholder="' + esc(options.searchPlaceholder || '搜索…') + '" autocomplete="off" />',
+            '<div class="tm-picker-list" data-choice-picker-list></div>',
+            '<div class="tm-edit-foot"><button type="button" class="tm-btn tm-btn-outline" data-choice-picker-cancel>取消</button></div>',
+        ].join(''));
+        var search = sheet.querySelector('[data-choice-picker-search]');
+        var list = sheet.querySelector('[data-choice-picker-list]');
+        function renderChoices() {
+            var query = search.value.trim().toLocaleLowerCase();
+            var filtered = items.filter(function (item) {
+                return !query || (item.label + '\n' + item.hint).toLocaleLowerCase().indexOf(query) !== -1;
+            });
+            list.innerHTML = filtered.length ? filtered.map(function (item) {
+                var active = item.value === selected;
+                return '<button type="button" class="tm-picker-row' + (active ? ' is-selected' : '') + '" data-choice-picker-value="' + esc(item.value) + '">' +
+                    '<span><i class="fa-solid ' + esc(item.icon) + '"></i><span class="tm-picker-row-copy"><strong>' + esc(item.label) + '</strong>' +
+                    (item.hint ? '<small>' + esc(item.hint) + '</small>' : '') + '</span></span>' +
+                    '<i class="fa-solid ' + (active ? 'fa-check' : 'fa-chevron-right') + '"></i></button>';
+            }).join('') : '<div class="tm-picker-empty">' + esc(query ? (options.emptySearchText || '没有匹配项') : (options.emptyText || '暂无可选项')) + '</div>';
+        }
+        list.addEventListener('click', function (event) {
+            var button = event.target && event.target.closest ? event.target.closest('[data-choice-picker-value]') : null;
+            if (!button || !list.contains(button)) return;
+            var value = button.dataset.choicePickerValue || '';
+            var item = items.find(function (candidate) { return candidate.value === value; });
+            closeSheet(sheet);
+            if (item && typeof options.onSelect === 'function') options.onSelect(value, item);
+        });
+        search.addEventListener('input', renderChoices);
+        sheet.querySelector('[data-choice-picker-cancel]').addEventListener('click', function () { closeSheet(sheet); });
+        renderChoices();
+        return sheet;
     }
 
     function openCategoryPicker(options) {
@@ -5204,14 +5263,15 @@
             var firstCategory = getItemMeta(d, items[0]).category || '';
             if (items.every(function (item) { return (getItemMeta(d, item).category || '') === firstCategory; })) commonCategory = firstCategory;
         }
-        var operationOptions = '<option value="new">创建新系列</option>' + groups.map(function (group) {
-            return '<option value="' + esc(group.id) + '">加入「' + esc(group.name) + '」</option>';
-        }).join('');
+        var operationItems = (items.length >= 2 ? [{ value: 'new', label: '创建新系列', hint: '使用当前选择创建一个新系列', icon: 'fa-plus' }] : []).concat(groups.map(function (group) {
+            return { value: group.id, label: '加入「' + group.name + '」', hint: group.members.length + ' 款美化', icon: 'fa-layer-group' };
+        }));
+        var operationValue = items.length < 2 && groups.length > 0 ? groups[0].id : 'new';
         var sheet = createSheet([
             '<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>保存为系列</div>',
             '<div class="tm-hint tm-series-hint">系列只收纳展示关系，不会复制或修改真实美化；解散系列也不会删除成员。成员顺序始终跟随当前排序。</div>',
             buildSeriesSelectedPreview(items),
-            '<div class="tm-field"><label>操作</label><select id="tm-series-operation">' + operationOptions + '</select></div>',
+            '<div class="tm-field"><label>操作</label><button type="button" class="tm-picker-trigger" id="tm-series-operation"><span class="tm-picker-trigger-icon"><i class="fa-solid fa-layer-group"></i></span><span class="tm-picker-trigger-copy"><strong></strong><small></small></span><i class="fa-solid fa-chevron-right tm-picker-trigger-chevron"></i></button></div>',
             '<div id="tm-series-create-fields">' +
             '<div class="tm-field"><label>系列名称</label><input type="text" id="tm-series-name" maxlength="80" value="' + esc(suggestedSeriesName(items)) + '" /></div>' +
             '<div class="tm-field"><label>展示分类</label><select class="tm-series-category-select">' + seriesCategoryOptions(d, commonCategory) + '</select></div>' +
@@ -5222,20 +5282,34 @@
         var operation = sheet.querySelector('#tm-series-operation');
         var createFields = sheet.querySelector('#tm-series-create-fields');
         var saveButton = sheet.querySelector('#tm-series-create-save');
-        if (items.length < 2 && groups.length > 0) operation.value = groups[0].id;
         function syncOperation() {
-            var creating = operation.value === 'new';
+            var creating = operationValue === 'new';
+            var selectedOperation = operationItems.find(function (item) { return item.value === operationValue; }) || operationItems[0];
+            if (selectedOperation) {
+                operation.querySelector('strong').textContent = selectedOperation.label;
+                operation.querySelector('small').textContent = selectedOperation.hint;
+            }
             createFields.style.display = creating ? '' : 'none';
             saveButton.textContent = creating ? '保存系列' : '确认加入';
         }
-        operation.addEventListener('change', syncOperation);
+        operation.addEventListener('click', function () {
+            openChoicePicker({
+                title: '选择系列操作',
+                icon: 'fa-layer-group',
+                items: operationItems,
+                selected: operationValue,
+                searchPlaceholder: '搜索系列…',
+                emptySearchText: '没有匹配的系列',
+                onSelect: function (value) { operationValue = value; syncOperation(); },
+            });
+        });
         syncOperation();
         bindSeriesCategorySelect(sheet);
         sheet.querySelector('#tm-series-create-cancel').addEventListener('click', function () { closeSheet(sheet); });
         saveButton.addEventListener('click', function () {
             var dd = load();
             var result;
-            if (operation.value === 'new') {
+            if (operationValue === 'new') {
                 if (targets.length < 2) { toast('创建系列至少需要两个美化', true); return; }
                 var name = sheet.querySelector('#tm-series-name').value.trim();
                 if (!name) { toast('请输入系列名称', true); return; }
@@ -5247,7 +5321,7 @@
                 if (category === null) { toast('请输入新分类名称', true); return; }
                 result = seriesApi.createSeries(dd, { name: name, category: category, members: targets });
             } else {
-                result = seriesApi.addMembers(dd, operation.value, targets);
+                result = seriesApi.addMembers(dd, operationValue, targets);
             }
             if (!result.ok) {
                 toast(result.reason === 'already-series' ? '其中一个美化已经属于其他系列' : '无法保存系列，请重试', true);
@@ -5259,7 +5333,7 @@
             closeSheet(sheet);
             renderCatbar();
             renderGrid();
-            toast(operation.value === 'new' ? '✅ 已创建系列' : '✅ 已加入系列');
+            toast(operationValue === 'new' ? '✅ 已创建系列' : '✅ 已加入系列');
         });
     }
 
@@ -6830,8 +6904,7 @@
             (recoveryPending
                 ? '<div class="tm-hint" style="margin-bottom:9px;color:var(--warning-color,#d97706)">检测到未完成的头像恢复事务。Avatar Manager 与普通设置保存将保持只读，完成回滚前不会加载半恢复数据。</div><button class="tm-btn tm-btn-danger" id="tm-avatar-rollback-recovery" style="width:100%;margin-bottom:9px"><i class="fa-solid fa-rotate-left"></i> 回滚未完成的恢复</button>'
                 : '<button class="tm-btn tm-btn-outline" id="tm-avatar-restore-backup" style="width:100%;margin-bottom:9px"' + (restoreDisabled ? ' disabled' : '') + '><i class="fa-solid fa-file-arrow-up"></i> 从完整备份恢复</button><input type="file" id="tm-avatar-restore-file" accept=".zip,application/zip" style="display:none">' +
-                    (authority.localOnly === true ? '<div class="tm-hint" style="margin-bottom:9px">恢复会完整替换 Avatar Manager 数据，不会合并；旧头像库将保留为事务回滚依据。</div>' : '<div class="tm-hint" style="margin-bottom:9px">本阶段仅支持经明确确认的本地存储环境恢复；后端头像库不会被修改。</div>')) +
-            '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>';
+                    (authority.localOnly === true ? '<div class="tm-hint" style="margin-bottom:9px">恢复会完整替换 Avatar Manager 数据，不会合并；旧头像库将保留为事务回滚依据。</div>' : '<div class="tm-hint" style="margin-bottom:9px">本阶段仅支持经明确确认的本地存储环境恢复；后端头像库不会被修改。</div>'));
         var extensionHtml = '<div class="tm-update-panel' + (updateState.phase === 'ready' && updateState.available ? ' has-update' : '') + '"><div class="tm-update-panel-head"><div><strong>美化管理 v' + esc(TM_VERSION) + '</strong><span class="tm-update-status">' + esc(updateView.status) + '</span></div><button type="button" class="tm-btn tm-btn-outline tm-update-action" id="tm-avatar-update-action" data-update-mode="' + esc(updateView.mode) + '"' + (updateView.disabled ? ' disabled' : '') + '><i class="fa-solid ' + (updateView.mode === 'update' ? 'fa-download' : 'fa-rotate') + '"></i> ' + esc(updateView.action) + '</button></div><div class="tm-update-detail"' + (updateView.detail ? '' : ' hidden') + '>' + esc(updateView.detail) + '</div><div class="tm-plugin-credit"><span>作者：温水</span><span>发布于毛毛雨美化群、旅程</span></div></div>';
         var sheet = createSheet(['<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>', organizeHtml, buildDisclosureHtml('tm-avatar-settings-interface', '界面显示', 'fa-display', interfaceHtml), buildDisclosureHtml('tm-avatar-settings-data', '数据管理', 'fa-database', dataHtml), extensionHtml].join(''));
         sheet.classList.add('tm-sheet-tall', 'tm-settings-sheet');
@@ -6914,7 +6987,6 @@
                 rollbackButton.disabled = false;
             });
         });
-        sheet.querySelector('#tm-clear-all-user-avatar-overrides').addEventListener('click', function () { if (!confirm('彻底恢复 User 原头像？\n这会清除全局 User 头像、所有美化专属 User 头像与候选，以及 User 原头像调整；不会删除头像库。')) return; avatarRuntime.clearAllUserOverrides().then(function () { closeSheet(sheet); toast('已彻底恢复 User 原头像'); }).catch(function (error) { toast(error.message || '恢复失败', true); }); });
         sheet.querySelector('#tm-avatar-update-action').addEventListener('click', function () { var current = getExtensionUpdateState(); if (current.phase === 'ready' && current.available) openExtensionUpdateConfirmSheet(); else { this.disabled = true; checkExtensionUpdate(true).catch(function () { toast('检查更新失败；请检查网络、Git 状态或酒馆服务日志', true); }); } });
         syncExtensionUpdatePanel();
         return sheet;
@@ -6991,12 +7063,6 @@
             buildDisclosureHtml('tm-settings-interface', '界面显示', 'fa-display', interfaceSettingsHtml),
             buildDisclosureHtml('tm-settings-fab', '悬浮球', 'fa-circle-dot', fabSettingsHtml),
             buildDisclosureHtml('tm-settings-data', '数据管理', 'fa-database', dataSettingsHtml),
-            lastAppPage === 'avatars' ? [
-                '<div class="tm-divider"></div>',
-                '<div class="tm-sec-title">User 头像恢复</div>',
-                '<div class="tm-hint" style="margin-bottom:8px">用于修复旧版本遗留的固定头像。会清除全局 User 头像、所有美化专属 User 绑定与候选、User 原头像调整；不会删除头像库，也不会影响角色头像。</div>',
-                '<button class="tm-btn tm-btn-danger" id="tm-clear-all-user-avatar-overrides" style="width:100%"><i class="fa-solid fa-rotate-left"></i> 彻底恢复 User 原头像</button>',
-            ].join('') : '',
             extensionInfoHtml,
         ].join(''));
         sheet.classList.add('tm-sheet-tall', 'tm-settings-sheet');
@@ -7089,26 +7155,6 @@
         });
         sheet.querySelector('#tm-show-freq').addEventListener('change', function () {
             var dd = load(); dd.showFreq = this.checked; save(dd); renderGrid();
-        });
-        var clearAllUserAvatarOverridesButton = sheet.querySelector('#tm-clear-all-user-avatar-overrides');
-        if (clearAllUserAvatarOverridesButton) clearAllUserAvatarOverridesButton.addEventListener('click', function () {
-            if (!avatarRuntime || typeof avatarRuntime.clearAllUserOverrides !== 'function') {
-                toast('User 头像恢复模块尚未就绪', true);
-                return;
-            }
-            if (!confirm('确定彻底恢复 User 原头像吗？\n\n这会清除全局 User 头像、所有美化专属 User 绑定与候选，以及 User 原头像调整。头像库和角色头像不会被删除。')) return;
-            clearAllUserAvatarOverridesButton.disabled = true;
-            avatarRuntime.clearAllUserOverrides().then(function (result) {
-                if (avatarPageController) avatarPageController.refresh();
-                renderAvatarBottomStatus();
-                toast('已清除 ' + result.bindingsCleared + ' 项 User 头像覆盖，正在重新载入页面');
-                global.setTimeout(function () {
-                    if (global.location && typeof global.location.reload === 'function') global.location.reload();
-                }, 800);
-            }).catch(function (error) {
-                clearAllUserAvatarOverridesButton.disabled = false;
-                toast(error.message || 'User 头像恢复失败', true);
-            });
         });
         var fabFileInp = sheet.querySelector('#tm-fab-file');
         var fabResetBtn = sheet.querySelector('#tm-fab-reset');
