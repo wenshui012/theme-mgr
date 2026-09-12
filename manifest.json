@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v4.0.5",
-  "version": "4.0.5",
+  "display_name": "美化管理 v4.5.0",
+  "version": "4.5.0",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v4.0.5: 修复 TauriTavern 纯前端环境 metadata 无法保存，保留原生酒馆严格数据安全校验"
+  "description": "v4.5.0: 新增头像管理、分范围头像绑定与原头像调整，完善备份恢复、同步安全和移动端体验"
 }
