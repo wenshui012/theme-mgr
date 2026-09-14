@@ -11298,7 +11298,7 @@
 })(window);
 /* END MODULE 21/29: src/avatar-recovery.js */
 
-/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:658de7abfa7a8717a231ec2a20db72a35a3e915c80b39700cec4180bf8a999a5 */
+/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:1ed79e8221b5da2fe56187800665484eb4688e5dcef30185cc7f21bc2d4c6217 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -11660,7 +11660,7 @@
         var supportsObjectViewBox = Boolean(win.CSS && typeof win.CSS.supports === 'function' && win.CSS.supports('object-view-box', 'inset(10%)'));
         var loadNativeImage = options.loadNativeImage || function (asset) {
             if (/^data:image\//i.test(asset.imageData)) return Promise.resolve(asset);
-            if (!fetchImage || !imageTools || typeof imageTools.readImageFile !== 'function') {
+            if (!fetchImage || !imageTools || typeof imageTools.decodeImageFile !== 'function') {
                 return Promise.reject(Object.assign(new Error('原头像图片读取组件不可用'), { code: 'AVATAR_NATIVE_READ_UNAVAILABLE' }));
             }
             return Promise.resolve(fetchImage(asset.imageData, { credentials: 'same-origin', cache: 'force-cache' })).then(function (response) {
@@ -11672,9 +11672,24 @@
                     if (blob && typeof blob.slice === 'function') blob = blob.slice(0, blob.size, mimeType);
                     else if (typeof win.Blob === 'function') blob = new win.Blob([blob], { type: mimeType });
                 }
-                return imageTools.readImageFile(blob);
-            }).then(function (dataUrl) {
-                return Object.assign({}, asset, { imageData: dataUrl });
+                return imageTools.decodeImageFile(blob, mimeType || clean(blob && blob.type));
+            }).then(function (decoded) {
+                try {
+                    if (!decoded || !/^data:image\//i.test(decoded.dataUrl || '') || !(decoded.width > 0) || !(decoded.height > 0)) {
+                        throw new Error('avatar image decode failed');
+                    }
+                    // The host entry normally points at a small portrait thumbnail
+                    // (for example 96x144), while imageData now contains the full
+                    // original. Keeping the thumbnail dimensions here makes the SVG
+                    // renderer squeeze the original into the thumbnail aspect ratio.
+                    return Object.assign({}, asset, {
+                        imageData: decoded.dataUrl,
+                        width: decoded.width,
+                        height: decoded.height,
+                    });
+                } finally {
+                    if (decoded && typeof decoded.close === 'function') decoded.close();
+                }
             }).catch(function (error) {
                 throw Object.assign(new Error('无法读取角色或 User 的原头像'), { code: 'AVATAR_NATIVE_READ_FAILED', cause: error });
             });

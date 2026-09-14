@@ -274,14 +274,19 @@ function runtimeFixture(options = {}) {
         eventSource, eventTypes: options.eventTypes || {},
     };
     const win = { document: doc, location: { href: 'http://localhost/' }, URL, CSS: { supports: () => options.objectViewBoxSupported !== false }, innerWidth: 800, innerHeight: 600, MutationObserver, setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), getComputedStyle: (el) => el.computed, confirm: () => true };
-    const mods = loadModules(win); const bundle = memoryStore(options.seed); const runtimeStore = options.store || bundle.store; const runtime = mods.createAvatarRuntime({
+    const mods = loadModules(win); const bundle = memoryStore(options.seed); const runtimeStore = options.store || bundle.store; const runtimeOptions = {
         window: win, document: doc, store: runtimeStore, getContext: () => context, getThemeName: () => theme,
         canMutate: options.canMutate,
         canStart: options.canStart,
-        loadNativeImage: options.loadNativeImage || (async (nativeAsset) => ({ ...nativeAsset, imageData: 'data:image/png;base64,AA==' })),
         preloadHostImage: options.preloadHostImage,
         overwriteHostAvatar: options.overwriteHostAvatar,
-    });
+        imageTools: options.imageTools,
+        fetch: options.fetch,
+    };
+    if (!options.useDefaultNativeImageLoader) {
+        runtimeOptions.loadNativeImage = options.loadNativeImage || (async (nativeAsset) => ({ ...nativeAsset, imageData: 'data:image/png;base64,AA==' }));
+    }
+    const runtime = mods.createAvatarRuntime(runtimeOptions);
     return { win, doc, chat, chars, user, context, eventSource: context.eventSource || eventSource, store: bundle.store, runtime, mods, setTheme: (x) => { theme = x; } };
 }
 
@@ -1729,6 +1734,32 @@ test('native image reads recover a supported MIME from the original file extensi
     assert.equal(infer('/User%20Avatars/User%20One.JPG', ''), 'image/jpeg');
     assert.equal(infer('/characters/avatar.webp', 'image/webp'), 'image/webp');
     assert.equal(infer('/characters/avatar.bin', 'application/octet-stream'), '');
+});
+
+test('native original embedding replaces thumbnail dimensions with decoded full-image dimensions', async () => {
+    let closed = 0;
+    const f = runtimeFixture({
+        useDefaultNativeImageLoader: true,
+        userSrc: '/thumbnail?type=persona&file=user.png',
+        imageTools: {
+            decodeImageFile: async () => ({
+                dataUrl: 'data:image/png;base64,full-original',
+                width: 2048,
+                height: 2048,
+                close() { closed += 1; },
+            }),
+        },
+        fetch: async () => ({ ok: true, blob: async () => new Blob(['avatar'], { type: 'image/png' }) }),
+        seed: { nativeViews: [{ targetKey: 'user:global', sourceKey: '/thumbnail?type=persona&file=user.png', view: { rotate: 3 } }] },
+    });
+    f.user.image.naturalWidth = 96;
+    f.user.image.naturalHeight = 144;
+    await f.runtime.start();
+    const source = f.user.image.getAttribute('src');
+    const svgText = decodeURIComponent(source.slice(source.indexOf(',') + 1));
+    assert.match(svgText, /<image href="data:image\/png;base64,full-original" width="2048" height="2048"/);
+    assert.doesNotMatch(svgText, /width="96" height="144"/);
+    assert.equal(closed, 1);
 });
 
 test('97 unbound User and Character thumbnails switch to preloaded original files without creating bindings', async () => {
