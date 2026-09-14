@@ -11298,7 +11298,7 @@
 })(window);
 /* END MODULE 21/29: src/avatar-recovery.js */
 
-/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:1ed79e8221b5da2fe56187800665484eb4688e5dcef30185cc7f21bc2d4c6217 */
+/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:b64cda6b1423afe32d35a16de3765c5fdcaaa30350c8e0041a614961b77fe50c */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -11902,11 +11902,28 @@
                 height: baseline && baseline.naturalHeight || Number(image && image.naturalHeight) || Math.max(1, Math.round(rect.height)),
             };
         }
+        function canonicalNativeSourceKey(target, source) {
+            source = clean(source);
+            if (!source || !target || target.kind !== 'user') return source;
+            var baseHref = doc && doc.baseURI || (win.location && win.location.href) || 'http://localhost/';
+            var originalSource = hostOriginalSourceFromThumbnail(source, baseHref) || source;
+            try {
+                var parsed = new win.URL(originalSource, baseHref);
+                var base = new win.URL(baseHref);
+                if (!/(?:^|\/)User%20Avatars\//i.test(parsed.pathname)) return originalSource;
+                // Persona refreshes append a new cache token to the thumbnail URL.
+                // The filename is the User-avatar identity; query/hash changes are not.
+                return (parsed.origin === base.origin ? '' : parsed.origin) + parsed.pathname;
+            } catch (_) {
+                return originalSource;
+            }
+        }
         function nativeSourceKey(target, entry) {
             if (target && target.kind === 'character') return clean(target.characterAvatar);
             var image = entry && entry.image;
             var baseline = baselines.get(image);
-            return clean(baseline && (baseline.src || baseline.resolvedSrc)) || clean(getAttribute(image, 'src')) || resolvedImageSource(image, '');
+            var source = clean(baseline && (baseline.src || baseline.resolvedSrc)) || clean(getAttribute(image, 'src')) || resolvedImageSource(image, '');
+            return canonicalNativeSourceKey(target, source);
         }
         function embeddedNativeAsset(entry, target) {
             var asset = nativeAssetForEntry(entry, target);
@@ -12173,7 +12190,7 @@
                         }
                         var representative = messageImages(doc, target)[0] || null;
                         var sourceKey = nativeSourceKey(target, representative);
-                        if (sourceKey && record.sourceKey !== sourceKey) {
+                        if (sourceKey && canonicalNativeSourceKey(target, record.sourceKey) !== sourceKey) {
                             return putHostSourceIntent(target.key).then(function () {
                                 return store.deleteNativeView(target.key);
                             }).then(function () { return null; });
@@ -12720,7 +12737,7 @@
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
             return Promise.all([getBindingForTarget(cap.target), store.getNativeView(cap.target.key), embeddedNativeAsset(cap.representative, cap.target)]).then(function (parts) {
                 var sourceKey = nativeSourceKey(cap.target, cap.representative);
-                var nativeView = parts[1] && parts[1].sourceKey === sourceKey ? parts[1] : null;
+                var nativeView = parts[1] && canonicalNativeSourceKey(cap.target, parts[1].sourceKey) === sourceKey ? parts[1] : null;
                 editor = {
                     mode: 'native',
                     themeKey: null,

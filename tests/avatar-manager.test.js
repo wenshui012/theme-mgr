@@ -1402,7 +1402,7 @@ test('Avatar settings expose verified backup restore and a clear mobile size war
 
 test('82 development module loading replaces stale-build scripts and uses a build cache token', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-    assert.match(source, /TM_BUILD = 'beauty-ui-update-r2'/);
+    assert.match(source, /TM_BUILD = 'beauty-ui-update-r3'/);
     assert.match(source, /existing\.dataset\.themeMgrBuild === TM_BUILD/);
     assert.match(source, /existing\.parentNode\.removeChild\(existing\)/);
     assert.match(source, /encodeURIComponent\(MODULE_LOAD_TOKEN\)/);
@@ -1760,6 +1760,23 @@ test('native original embedding replaces thumbnail dimensions with decoded full-
     assert.match(svgText, /<image href="data:image\/png;base64,full-original" width="2048" height="2048"/);
     assert.doesNotMatch(svgText, /width="96" height="144"/);
     assert.equal(closed, 1);
+});
+
+test('User native adjustment survives a persona thumbnail cache-buster change for the same file', async () => {
+    const oldThumbnail = '/thumbnail?type=persona&file=user.png&t=old';
+    const newThumbnail = '/thumbnail?type=persona&file=user.png&t=new';
+    const f = runtimeFixture({
+        userSrc: newThumbnail,
+        loadNativeImage: async (nativeAsset) => ({ ...nativeAsset, imageData: 'data:image/png;base64,full-user', width: 2048, height: 2048 }),
+        seed: { nativeViews: [{ targetKey: 'user:global', sourceKey: oldThumbnail, view: { x: .12, y: .28, scale: 2.15 } }] },
+    });
+    f.user.image.naturalWidth = 96;
+    f.user.image.naturalHeight = 144;
+    await f.runtime.start();
+    const saved = await f.store.getNativeView('user:global');
+    assert.ok(saved);
+    assert.equal(saved.view.scale, 2.15);
+    assert.match(f.user.image.getAttribute('style'), /object-view-box:inset\(/);
 });
 
 test('97 unbound User and Character thumbnails switch to preloaded original files without creating bindings', async () => {
