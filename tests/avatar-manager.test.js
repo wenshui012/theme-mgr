@@ -90,6 +90,36 @@ test('7 high resolution and thumbnail payloads stay separate', async () => {
     assert.match(result.thumbData, /384x192/);
 });
 
+test('Tauri User original baking keeps a fixed 2:3 output and derives every save from the immutable master', async () => {
+    const sourceAsset = asset('tauri-user', { width: 2048, height: 2048 });
+    const view = { x: 0.12, y: 0.28, scale: 2.15, rotate: 17, flipX: true, flipY: false };
+    const decodedInputs = [];
+    const encodedGeometries = [];
+    const options = {
+        decodeAsset: async (input) => {
+            decodedInputs.push({ imageData: input.imageData, width: input.width, height: input.height });
+            return { source: {}, width: 2048, height: 2048, close() {} };
+        },
+        encode: async (_decoded, geometry) => {
+            encodedGeometries.push(JSON.parse(JSON.stringify(geometry)));
+            return 'data:image/png;base64,tauri-user-output';
+        },
+    };
+    const first = await modules.avatarImageTools.prepareTauriUserUpload(sourceAsset, view, options);
+    const second = await modules.avatarImageTools.prepareTauriUserUpload(sourceAsset, view, options);
+    assert.equal(first.width, 800);
+    assert.equal(first.height, 1200);
+    assert.equal(first.mimeType, 'image/png');
+    assert.equal(second.width, 800);
+    assert.equal(second.height, 1200);
+    assert.deepEqual(decodedInputs, [
+        { imageData: sourceAsset.imageData, width: 2048, height: 2048 },
+        { imageData: sourceAsset.imageData, width: 2048, height: 2048 },
+    ]);
+    assert.deepEqual(encodedGeometries[1], encodedGeometries[0]);
+    assert.deepEqual(encodedGeometries[0].view, view);
+});
+
 function memoryStore(seed) {
     const adapter = modules.avatarStorage.createMemoryAdapter(seed);
     return { adapter, store: modules.createAvatarStore({ adapter }) };
@@ -280,6 +310,7 @@ function runtimeFixture(options = {}) {
         canStart: options.canStart,
         preloadHostImage: options.preloadHostImage,
         overwriteHostAvatar: options.overwriteHostAvatar,
+        bakesUserOriginalView: options.bakesUserOriginalView,
         imageTools: options.imageTools,
         fetch: options.fetch,
     };
@@ -1402,7 +1433,7 @@ test('Avatar settings expose verified backup restore and a clear mobile size war
 
 test('82 development module loading replaces stale-build scripts and uses a build cache token', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-    assert.match(source, /TM_BUILD = 'beauty-ui-update-r3'/);
+    assert.match(source, /TM_BUILD = 'beauty-ui-update-r4'/);
     assert.match(source, /existing\.dataset\.themeMgrBuild === TM_BUILD/);
     assert.match(source, /existing\.parentNode\.removeChild\(existing\)/);
     assert.match(source, /encodeURIComponent\(MODULE_LOAD_TOKEN\)/);
@@ -1628,14 +1659,15 @@ test('deferred global save never clears higher-priority chat or theme bindings',
     assert.equal((await f.store.getBinding('chat-integrity:chat-uuid-1', 'user:global')).avatarId, 'chat');
 });
 
-test('deferred original overwrite sends the complete library image, saves a chat-only native view, and leaves every binding unchanged', async () => {
+test('deferred Tauri User overwrite sends the immutable master plus absolute view and clears the display view after baking', async () => {
     const calls = [];
     const f = runtimeFixture({
         seed: { assets: [asset('replacement'), asset('global'), asset('theme')], bindings: [
             { themeKey: modules.avatarRuntime.DEFAULT_BINDING_KEY, targetKey: 'user:global', avatarId: 'global', view: {} },
             { version: 4, themeKey: 'theme-name:A', targetKey: 'user:global', avatarId: 'theme', view: {} },
         ], nativeViews: [{ targetKey: 'user:global', sourceKey: 'raw-user.png', view: { scale: 1.2 } }] },
-        overwriteHostAvatar: async input => { calls.push(input); return { ok: true }; },
+        bakesUserOriginalView: true,
+        overwriteHostAvatar: async input => { calls.push(input); return { ok: true, bakedView: true }; },
     });
     const before = JSON.stringify(await f.store.listBindings());
     await f.runtime.beginEdit({ kind: 'user', avatarId: 'replacement', bindingMode: 'deferred' });
@@ -1646,18 +1678,35 @@ test('deferred original overwrite sends the complete library image, saves a chat
     assert.equal(calls[0].asset.imageData, asset('replacement').imageData);
     assert.equal(calls[0].asset.width, asset('replacement').width);
     assert.equal(calls[0].asset.height, asset('replacement').height);
+    assert.equal(calls[0].view.scale, 1.8);
     assert.equal(JSON.stringify(await f.store.listBindings()), before);
     let nativeView = await f.store.getNativeView('user:global');
-    assert.equal(nativeView.view.scale, 1.8);
-    assert.equal(nativeView.sourceKey, 'raw-user.png');
+    assert.equal(nativeView, null);
     await f.runtime.beginEdit({ kind: 'user', avatarId: 'replacement', bindingMode: 'deferred' });
     f.runtime.setScale(1.4);
     await f.runtime.saveEdit('original');
     assert.equal(calls.length, 2);
     assert.equal(calls[1].asset.imageData, asset('replacement').imageData);
+    assert.equal(calls[1].asset.width, asset('replacement').width);
+    assert.equal(calls[1].asset.height, asset('replacement').height);
+    assert.equal(calls[1].view.scale, 1.4);
     nativeView = await f.store.getNativeView('user:global');
-    assert.equal(nativeView.view.scale, 1.4);
+    assert.equal(nativeView, null);
     assert.equal(JSON.stringify(await f.store.listBindings()), before);
+});
+
+test('deferred local SillyTavern original overwrite keeps its display-only adjustment behavior', async () => {
+    const calls = [];
+    const f = runtimeFixture({
+        seed: { assets: [asset('local-replacement')] },
+        overwriteHostAvatar: async input => { calls.push(input); return { ok: true, bakedView: false }; },
+    });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'local-replacement', bindingMode: 'deferred' });
+    f.runtime.setScale(1.6);
+    await f.runtime.saveEdit('original');
+    assert.equal(calls[0].asset.imageData, asset('local-replacement').imageData);
+    assert.equal(calls[0].view.scale, 1.6);
+    assert.equal((await f.store.getNativeView('user:global')).view.scale, 1.6);
 });
 
 test('original overwrite host failure preserves the editor, bindings, and previous native adjustment', async () => {
@@ -1699,15 +1748,15 @@ test('94 Avatar adjustment opens directly and its toolbar owns four save scopes 
     assert.doesNotMatch(runtimeSource, /↔ 水平|↕ 垂直|⌫ 解绑|保存…/);
     assert.match(panelBlock, /已绑定 ' \+ Number\(scopes\.theme/);
     assert.match(runtimeSource, /clearApplicationScope\(clearKind, clearScope\)/);
-    assert.match(runtimeSource, /缩放、位置、旋转和翻转只用于聊天头像显示，不会裁剪原图/);
-    assert.match(runtimeSource, /完整原图覆盖；调整仅用于聊天头像/);
-    assert.doesNotMatch(runtimeSource, /bakeHostAsset|bakedViewGeometry|调整会写入原头像/);
+    assert.match(runtimeSource, /TT User 会按当前调整生成固定 2:3 成品/);
+    assert.match(runtimeSource, /本地酒馆仍完整覆盖母图/);
 });
 
 test('95 host original overwrite uses SillyTavern avatar endpoints and overwrite fields', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
-    assert.doesNotMatch(source, /prepareTauriUserUpload|targetWidth = 400|targetHeight = 600/);
-    assert.match(source, /global\.fetch\(asset\.imageData\)/);
+    assert.match(source, /isTauriTavernRuntime\(\)/);
+    assert.match(source, /prepareTauriUserUpload\(asset, input\.view\)/);
+    assert.match(source, /global\.fetch\(uploadAsset\.imageData\)/);
     assert.match(source, /import\('\/scripts\/personas\.js'\)/);
     assert.match(source, /getUserAvatar\(refreshedName\)/);
     assert.match(source, /cache: 'reload'/);

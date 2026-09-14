@@ -9692,13 +9692,16 @@
 })(window);
 /* END MODULE 17/29: src/avatar-sync.js */
 
-/* BEGIN MODULE 18/29: src/avatar-image-tools.js | sha256:948c7f793383d6c5ba9cbcc2e1f358a664a488dc059e03716f2585719b4c4790 */
+/* BEGIN MODULE 18/29: src/avatar-image-tools.js | sha256:20187d2cf3de1f441122f99913630528184a4f8d0e0a02ff7a723ced551d645e */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MAIN_MAX = 2048;
     var THUMB_MAX = 384;
     var JPEG_QUALITY = 0.92;
     var THUMB_QUALITY = 0.84;
+    var TAURI_USER_WIDTH = 800;
+    var TAURI_USER_HEIGHT = 1200;
+    var TRANSFORM_EDGE_MARGIN = 1;
     var ALLOWED = { 'image/jpeg': true, 'image/png': true, 'image/webp': true };
 
     function avatarImageError(code, message, cause) {
@@ -9742,6 +9745,142 @@
         try { return Promise.resolve(canvas.toDataURL(mimeType, quality)); }
         catch (error) { return Promise.reject(error); }
         finally { canvas.width = 1; canvas.height = 1; }
+    }
+
+    function finite(value, fallback) {
+        var number = Number(value);
+        return Number.isFinite(number) ? number : fallback;
+    }
+
+    function round(value, precision) {
+        var factor = Math.pow(10, precision == null ? 5 : precision);
+        return Math.round(Number(value) * factor) / factor;
+    }
+
+    function normalizeTauriUserView(view) {
+        view = view && typeof view === 'object' ? view : {};
+        return {
+            x: round(finite(view.x, 0)),
+            y: round(finite(view.y, 0)),
+            scale: round(Math.max(0.5, Math.min(3, finite(view.scale, 1))), 3),
+            rotate: round(Math.max(-180, Math.min(180, finite(view.rotate, 0))), 2),
+            flipX: view.flipX === true,
+            flipY: view.flipY === true,
+        };
+    }
+
+    function tauriUserBakeGeometry(width, height, view) {
+        width = Math.max(1, finite(width, 1));
+        height = Math.max(1, finite(height, 1));
+        view = normalizeTauriUserView(view);
+        var radians = view.rotate * Math.PI / 180;
+        var cosine = Math.abs(Math.cos(radians));
+        var sine = Math.abs(Math.sin(radians));
+        if (cosine < 1e-12) cosine = 0;
+        if (sine < 1e-12) sine = 0;
+        var rotatedWidth = width * cosine + height * sine;
+        var rotatedHeight = width * sine + height * cosine;
+        var canvasWidth = Math.ceil(Math.max(width, rotatedWidth) + TRANSFORM_EDGE_MARGIN * 2);
+        var canvasHeight = Math.ceil(Math.max(height, rotatedHeight) + TRANSFORM_EDGE_MARGIN * 2);
+        var logicalLeft = (canvasWidth - width) / 2;
+        var logicalTop = (canvasHeight - height) / 2;
+        var visibleWidth = width / view.scale;
+        var visibleHeight = height / view.scale;
+        var crop = {
+            left: logicalLeft + (width - visibleWidth) / 2 - view.x * visibleWidth,
+            top: logicalTop + (height - visibleHeight) / 2 - view.y * visibleHeight,
+            width: visibleWidth,
+            height: visibleHeight,
+        };
+        var targetRatio = TAURI_USER_WIDTH / TAURI_USER_HEIGHT;
+        var outputCrop = Object.assign({}, crop);
+        if (crop.width / crop.height > targetRatio) {
+            outputCrop.width = crop.height * targetRatio;
+            outputCrop.left = crop.left + (crop.width - outputCrop.width) / 2;
+        } else {
+            outputCrop.height = crop.width / targetRatio;
+            outputCrop.top = crop.top + (crop.height - outputCrop.height) / 2;
+        }
+        return {
+            targetWidth: TAURI_USER_WIDTH,
+            targetHeight: TAURI_USER_HEIGHT,
+            sourceWidth: width,
+            sourceHeight: height,
+            canvasWidth: canvasWidth,
+            canvasHeight: canvasHeight,
+            centerX: canvasWidth / 2,
+            centerY: canvasHeight / 2,
+            crop: outputCrop,
+            view: view,
+        };
+    }
+
+    function decodeAvatarAsset(asset) {
+        var sharedImageTools = ns.imageTools;
+        if (!global.fetch || !sharedImageTools || typeof sharedImageTools.decodeImageFile !== 'function') {
+            return Promise.reject(avatarImageError('AVATAR_IMAGE_TOOLS_UNAVAILABLE', '图片处理组件不可用'));
+        }
+        var match = String(asset && asset.imageData || '').match(/^data:(image\/(?:jpeg|png|webp));base64,/i);
+        if (!match) return Promise.reject(avatarImageError('AVATAR_READ_FAILED', '头像母图数据无效'));
+        return global.fetch(asset.imageData).then(function (response) {
+            if (!response || !response.ok || typeof response.blob !== 'function') throw new Error('avatar data decode failed');
+            return response.blob();
+        }).then(function (blob) {
+            return sharedImageTools.decodeImageFile(blob, match[1].toLowerCase());
+        });
+    }
+
+    function encodeTauriUserCanvas(decoded, geometry) {
+        var canvas = global.document.createElement('canvas');
+        canvas.width = geometry.targetWidth;
+        canvas.height = geometry.targetHeight;
+        var context = canvas.getContext('2d', { alpha: true });
+        if (!context) return Promise.reject(new Error('无法创建头像兼容画布'));
+        var crop = geometry.crop;
+        var scaleX = geometry.targetWidth / crop.width;
+        var scaleY = geometry.targetHeight / crop.height;
+        try {
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            context.setTransform(scaleX, 0, 0, scaleY, -crop.left * scaleX, -crop.top * scaleY);
+            context.translate(geometry.centerX, geometry.centerY);
+            context.rotate(geometry.view.rotate * Math.PI / 180);
+            context.scale(geometry.view.flipX ? -1 : 1, geometry.view.flipY ? -1 : 1);
+            context.drawImage(decoded.source, -geometry.sourceWidth / 2, -geometry.sourceHeight / 2, geometry.sourceWidth, geometry.sourceHeight);
+            return Promise.resolve(canvas.toDataURL('image/png'));
+        } catch (error) {
+            return Promise.reject(error);
+        } finally {
+            canvas.width = 1;
+            canvas.height = 1;
+        }
+    }
+
+    function prepareTauriUserUpload(asset, view, options) {
+        options = options || {};
+        var decodeAsset = options.decodeAsset || decodeAvatarAsset;
+        var encode = options.encode || encodeTauriUserCanvas;
+        var decoded;
+        return Promise.resolve().then(function () {
+            return decodeAsset(asset);
+        }).then(function (value) {
+            decoded = value;
+            if (!decoded || !(decoded.width > 0) || !(decoded.height > 0)) throw new Error('头像母图解码失败');
+            var geometry = tauriUserBakeGeometry(decoded.width, decoded.height, view);
+            return Promise.resolve(encode(decoded, geometry)).then(function (imageData) {
+                if (!/^data:image\/png;base64,/i.test(String(imageData || ''))) throw new Error('头像兼容图片生成失败');
+                return Object.assign({}, asset, {
+                    imageData: imageData,
+                    mimeType: 'image/png',
+                    width: TAURI_USER_WIDTH,
+                    height: TAURI_USER_HEIGHT,
+                });
+            });
+        }).catch(function (error) {
+            if (error && error.code) throw error;
+            throw avatarImageError('TAURI_USER_AVATAR_BAKE_FAILED', 'TT User 头像兼容处理失败', error);
+        }).finally(function () {
+            if (decoded && typeof decoded.close === 'function') decoded.close();
+        });
     }
 
     ns.createAvatarImageProcessor = function (options) {
@@ -9805,10 +9944,15 @@
         THUMB_MAX: THUMB_MAX,
         JPEG_QUALITY: JPEG_QUALITY,
         THUMB_QUALITY: THUMB_QUALITY,
+        TAURI_USER_WIDTH: TAURI_USER_WIDTH,
+        TAURI_USER_HEIGHT: TAURI_USER_HEIGHT,
         fit: fit,
         fileBaseName: fileBaseName,
         outputMime: outputMime,
         avatarImageError: avatarImageError,
+        normalizeTauriUserView: normalizeTauriUserView,
+        tauriUserBakeGeometry: tauriUserBakeGeometry,
+        prepareTauriUserUpload: prepareTauriUserUpload,
     };
 })(window);
 /* END MODULE 18/29: src/avatar-image-tools.js */
@@ -11298,7 +11442,7 @@
 })(window);
 /* END MODULE 21/29: src/avatar-recovery.js */
 
-/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:b64cda6b1423afe32d35a16de3765c5fdcaaa30350c8e0041a614961b77fe50c */
+/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:5101c7f1cef319d24ffe7f88a89377565040f273b9cc9b809f1ad66e4b295297 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -11646,6 +11790,7 @@
         var getThemeName = options.getThemeName || function () { return ''; };
         var onError = options.onError || function () {};
         var overwriteHostAvatar = options.overwriteHostAvatar;
+        var bakesUserOriginalView = options.bakesUserOriginalView === true;
         var preloadHostImage = options.preloadHostImage || function (source) {
             return new Promise(function (resolve) {
                 if (typeof win.Image !== 'function') { resolve(''); return; }
@@ -12560,12 +12705,15 @@
             if (!panel) return;
             var scopes = status && status.scopes || {};
             if (mode === 'save') {
+                var originalHint = editor.target.kind === 'user' && bakesUserOriginalView
+                    ? 'TT User 会按当前调整生成固定 2:3 成品；本地酒馆仍完整覆盖母图'
+                    : '完整原图覆盖；调整仅用于聊天头像';
                 panel.innerHTML = '<div class="tm-avatar-editor-scope-title"><span>保存头像</span><small>选择应用范围</small></div>' +
                     '<div class="tm-avatar-editor-priority">显示优先级：当前聊天 ＞ 当前美化 ＞ 全局 ＞ SillyTavern 原头像。保存到低权重范围不会清除高权重绑定。</div>' +
                     scopeOptionHtml('save-chat', '绑定当前聊天', '最高优先级，仅当前聊天使用', scopes.chat, false, '当前已设置') +
                     scopeOptionHtml('save-theme', '绑定当前美化', '可以继续添加头像及其调整数据', scopes.theme, false, '已绑定 ' + Number(scopes.theme && scopes.theme.count || 1) + ' 张头像') +
                     scopeOptionHtml('save-global', editor.target.kind === 'user' ? '覆盖 User 全局头像' : '覆盖该角色全局头像', '作为没有聊天或美化绑定时的默认头像', scopes.global, false, '当前已设置') +
-                    scopeOptionHtml('save-original', editor.target.kind === 'user' ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', '完整原图覆盖；调整仅用于聊天头像', scopes.original, false);
+                    scopeOptionHtml('save-original', editor.target.kind === 'user' ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', originalHint, scopes.original, false);
             } else {
                 panel.innerHTML = '<div class="tm-avatar-editor-scope-title"><span>解除头像绑定</span><small>只清除所选范围</small></div>' +
                     '<div class="tm-avatar-editor-priority">清除后立即退出调整，并按聊天 ＞ 美化 ＞ 全局 ＞ 原头像回退。</div>' +
@@ -12957,8 +13105,11 @@
                     sourceKey: nativeSourceKey(originalEditor.target, originalEditor.representative),
                     view: originalView,
                 };
-                return writeHostOriginal(originalEditor.target.kind, originalEditor.target, originalEditor.asset, originalContext).then(function (result) {
-                    var saveDisplayView = originalViewChanged
+                return writeHostOriginal(originalEditor.target.kind, originalEditor.target, originalEditor.asset, originalContext, originalView).then(function (result) {
+                    var bakedUserView = originalEditor.target.kind === 'user' && result && result.bakedView === true;
+                    var saveDisplayView = bakedUserView
+                        ? store.deleteNativeView(originalEditor.target.key)
+                        : originalViewChanged
                         ? store.putNativeView(originalNativeRecord)
                         : store.deleteNativeView(originalEditor.target.key);
                     return Promise.resolve(saveDisplayView).then(function (nativeView) {
@@ -13149,9 +13300,9 @@
             sequence += 1;
             return store.deleteBinding(scopeKey, cap.target.key).then(reconcile);
         }
-        function writeHostOriginal(kind, target, avatarAsset, context) {
+        function writeHostOriginal(kind, target, avatarAsset, context, view) {
             if (typeof overwriteHostAvatar !== 'function') return Promise.reject(Object.assign(new Error('当前环境不支持覆盖原头像'), { code: 'HOST_AVATAR_WRITE_UNAVAILABLE' }));
-            return Promise.resolve(overwriteHostAvatar({ kind: kind, target: clone(target), asset: clone(avatarAsset), context: context }));
+            return Promise.resolve(overwriteHostAvatar({ kind: kind, target: clone(target), asset: clone(avatarAsset), view: normalizeView(view), context: context }));
         }
         function overwriteOriginal(kind, avatarId) {
             var mutationError = requireMutable();
@@ -13165,7 +13316,12 @@
             var target = clone(cap.target);
             return getAsset(avatarId).then(function (avatarAsset) {
                 if (!avatarAsset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
-                return writeHostOriginal(kind, target, avatarAsset, context);
+                return writeHostOriginal(kind, target, avatarAsset, context, normalizeView(null));
+            }).then(function (result) {
+                if (kind === 'user' && result && result.bakedView === true) {
+                    return store.deleteNativeView(target.key).then(function () { return result; });
+                }
+                return result;
             }).then(function (result) {
                 invalidateHostSourceCache();
                 sequence += 1;
@@ -15539,7 +15695,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:30e210bb015b7393c214f04cdec506063d576f86fc3d490918d046ebaab7beaf */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:adba6ad735d9e0ee14af02f449b731b3074b209f98cdf9555e26674193b16a62 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -15636,6 +15792,10 @@
     var pendingOpenAfterReady = false;
     var pendingOpenAfterAvatarCancel = false;
 
+    function isTauriTavernRuntime() {
+        return Boolean(global.__TAURITAVERN__ || typeof global.__TAURITAVERN_BACKGROUND_PATH__ === 'function');
+    }
+
     function overwriteSillyTavernAvatar(input) {
         input = input || {};
         var context = input.context || {};
@@ -15647,22 +15807,36 @@
         var modulePromise = kind === 'user'
             ? Promise.all([import('/script.js'), import('/scripts/personas.js')])
             : Promise.resolve([null, null]);
+        var bakedView = kind === 'user' && isTauriTavernRuntime();
+        var uploadAssetPromise;
+        if (bakedView) {
+            if (!modules.avatarImageTools || typeof modules.avatarImageTools.prepareTauriUserUpload !== 'function') {
+                return Promise.reject(Object.assign(new Error('TT User 头像兼容处理组件不可用'), { code: 'HOST_AVATAR_IMAGE_TOOLS_UNAVAILABLE' }));
+            }
+            uploadAssetPromise = modules.avatarImageTools.prepareTauriUserUpload(asset, input.view);
+        } else {
+            uploadAssetPromise = Promise.resolve(asset);
+        }
         return Promise.all([
             modulePromise,
-            global.fetch(asset.imageData).then(function (response) {
+            uploadAssetPromise,
+        ]).then(function (prepared) {
+            var uploadAsset = prepared[1];
+            return global.fetch(uploadAsset.imageData).then(function (response) {
                 if (!response.ok) throw new Error('avatar data decode failed');
                 return response.blob();
-            }),
-        ]).then(function (parts) {
+            }).then(function (blob) { return [prepared[0], uploadAsset, blob]; });
+        }).then(function (parts) {
             var stModule = parts[0][0];
             var personasModule = parts[0][1];
-            var blob = parts[1];
+            var uploadAsset = parts[1];
+            var blob = parts[2];
             var targetName = kind === 'user'
                 ? String(stModule && stModule.user_avatar || '').trim()
                 : String(input.target && input.target.characterAvatar || '').trim();
             if (!targetName) throw Object.assign(new Error(kind === 'user' ? '无法识别当前人设头像' : '无法识别当前角色卡'), { code: 'HOST_AVATAR_TARGET_UNAVAILABLE' });
-            var extension = /image\/jpeg/i.test(blob.type || asset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || asset.mimeType) ? '.webp' : '.png');
-            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || asset.mimeType || 'image/png' });
+            var extension = /image\/jpeg/i.test(blob.type || uploadAsset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || uploadAsset.mimeType) ? '.webp' : '.png');
+            var file = new global.File([blob], String(uploadAsset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || uploadAsset.mimeType || 'image/png' });
             var form = new global.FormData();
             form.append('avatar', file);
             if (kind === 'user') form.append('overwrite_name', targetName);
@@ -15703,7 +15877,7 @@
                         ? Promise.resolve(getCharacters()).catch(function () {})
                         : Promise.resolve();
                     return Promise.all([refreshPersonas, refreshCharacters]).then(function () {
-                        return { ok: true, kind: kind, targetName: refreshedName };
+                        return { ok: true, kind: kind, targetName: refreshedName, bakedView: bakedView };
                     });
                 });
             });
@@ -15979,6 +16153,7 @@
                 },
                 getThemeName: getCurrentThemeName,
                 overwriteHostAvatar: overwriteSillyTavernAvatar,
+                bakesUserOriginalView: isTauriTavernRuntime(),
                 onError: function (error) {
                     console.warn('[头像管理] runtime 失败:', error);
                     toast(error && error.message ? error.message : '头像运行时失败', true);

@@ -49,6 +49,52 @@ async function waitForIdle(page) {
         await page.goto(origin);
         await page.setContent('<!doctype html><html><head></head><body><section class="tm-app-page tm-app-page-avatars" data-tm-page="avatars"></section></body></html>');
         for (const name of MODULES) await page.addScriptTag({ path: path.join(ROOT, 'src', name) });
+        const tauriBake = await page.evaluate(async () => {
+            const source = document.createElement('canvas');
+            source.width = 600;
+            source.height = 600;
+            const sourceContext = source.getContext('2d');
+            sourceContext.clearRect(0, 0, 600, 600);
+            sourceContext.fillStyle = '#ef233c';
+            sourceContext.beginPath();
+            sourceContext.arc(300, 300, 100, 0, Math.PI * 2);
+            sourceContext.fill();
+            const master = {
+                id: 'tauri-bake-master', name: 'tauri-bake-master', imageData: source.toDataURL('image/png'),
+                mimeType: 'image/png', width: 600, height: 600,
+            };
+            const view = { x: 0.05, y: -0.05, scale: 1.35, rotate: 17, flipX: true, flipY: false };
+            const first = await window.ThemeMgrModules.avatarImageTools.prepareTauriUserUpload(master, view);
+            const second = await window.ThemeMgrModules.avatarImageTools.prepareTauriUserUpload(master, view);
+            const image = new Image();
+            image.src = first.imageData;
+            await image.decode();
+            const output = document.createElement('canvas');
+            output.width = first.width;
+            output.height = first.height;
+            const outputContext = output.getContext('2d');
+            outputContext.drawImage(image, 0, 0);
+            const pixels = outputContext.getImageData(0, 0, output.width, output.height).data;
+            let left = output.width, right = -1, top = output.height, bottom = -1;
+            for (let y = 0; y < output.height; y++) {
+                for (let x = 0; x < output.width; x++) {
+                    const offset = (y * output.width + x) * 4;
+                    if (pixels[offset] > 200 && pixels[offset + 1] < 80 && pixels[offset + 2] < 100 && pixels[offset + 3] > 200) {
+                        left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+                    }
+                }
+            }
+            return {
+                width: first.width,
+                height: first.height,
+                deterministic: first.imageData === second.imageData,
+                redWidth: right - left + 1,
+                redHeight: bottom - top + 1,
+            };
+        });
+        assert(tauriBake.width === 800 && tauriBake.height === 1200, 'Tauri User bake did not produce a fixed 800x1200 output');
+        assert(tauriBake.deterministic, 'repeated Tauri User baking accumulated a different result');
+        assert(Math.abs(tauriBake.redWidth - tauriBake.redHeight) <= 2, 'Tauri User bake stretched a circular source');
         await page.evaluate(async () => {
             const modules = window.ThemeMgrModules;
             const dbName = `tm-avatar-import-${Date.now()}-${Math.random()}`;
@@ -157,6 +203,7 @@ async function waitForIdle(page) {
             sequentialBatch: batchState.success,
             decodeFailureVisible: true,
             idbFailureVisible: true,
+            tauriUserBake: tauriBake,
             persisted: persistence.count,
         }, null, 2));
     } finally {

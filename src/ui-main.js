@@ -94,6 +94,10 @@
     var pendingOpenAfterReady = false;
     var pendingOpenAfterAvatarCancel = false;
 
+    function isTauriTavernRuntime() {
+        return Boolean(global.__TAURITAVERN__ || typeof global.__TAURITAVERN_BACKGROUND_PATH__ === 'function');
+    }
+
     function overwriteSillyTavernAvatar(input) {
         input = input || {};
         var context = input.context || {};
@@ -105,22 +109,36 @@
         var modulePromise = kind === 'user'
             ? Promise.all([import('/script.js'), import('/scripts/personas.js')])
             : Promise.resolve([null, null]);
+        var bakedView = kind === 'user' && isTauriTavernRuntime();
+        var uploadAssetPromise;
+        if (bakedView) {
+            if (!modules.avatarImageTools || typeof modules.avatarImageTools.prepareTauriUserUpload !== 'function') {
+                return Promise.reject(Object.assign(new Error('TT User 头像兼容处理组件不可用'), { code: 'HOST_AVATAR_IMAGE_TOOLS_UNAVAILABLE' }));
+            }
+            uploadAssetPromise = modules.avatarImageTools.prepareTauriUserUpload(asset, input.view);
+        } else {
+            uploadAssetPromise = Promise.resolve(asset);
+        }
         return Promise.all([
             modulePromise,
-            global.fetch(asset.imageData).then(function (response) {
+            uploadAssetPromise,
+        ]).then(function (prepared) {
+            var uploadAsset = prepared[1];
+            return global.fetch(uploadAsset.imageData).then(function (response) {
                 if (!response.ok) throw new Error('avatar data decode failed');
                 return response.blob();
-            }),
-        ]).then(function (parts) {
+            }).then(function (blob) { return [prepared[0], uploadAsset, blob]; });
+        }).then(function (parts) {
             var stModule = parts[0][0];
             var personasModule = parts[0][1];
-            var blob = parts[1];
+            var uploadAsset = parts[1];
+            var blob = parts[2];
             var targetName = kind === 'user'
                 ? String(stModule && stModule.user_avatar || '').trim()
                 : String(input.target && input.target.characterAvatar || '').trim();
             if (!targetName) throw Object.assign(new Error(kind === 'user' ? '无法识别当前人设头像' : '无法识别当前角色卡'), { code: 'HOST_AVATAR_TARGET_UNAVAILABLE' });
-            var extension = /image\/jpeg/i.test(blob.type || asset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || asset.mimeType) ? '.webp' : '.png');
-            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || asset.mimeType || 'image/png' });
+            var extension = /image\/jpeg/i.test(blob.type || uploadAsset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || uploadAsset.mimeType) ? '.webp' : '.png');
+            var file = new global.File([blob], String(uploadAsset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || uploadAsset.mimeType || 'image/png' });
             var form = new global.FormData();
             form.append('avatar', file);
             if (kind === 'user') form.append('overwrite_name', targetName);
@@ -161,7 +179,7 @@
                         ? Promise.resolve(getCharacters()).catch(function () {})
                         : Promise.resolve();
                     return Promise.all([refreshPersonas, refreshCharacters]).then(function () {
-                        return { ok: true, kind: kind, targetName: refreshedName };
+                        return { ok: true, kind: kind, targetName: refreshedName, bakedView: bakedView };
                     });
                 });
             });
@@ -437,6 +455,7 @@
                 },
                 getThemeName: getCurrentThemeName,
                 overwriteHostAvatar: overwriteSillyTavernAvatar,
+                bakesUserOriginalView: isTauriTavernRuntime(),
                 onError: function (error) {
                     console.warn('[头像管理] runtime 失败:', error);
                     toast(error && error.message ? error.message : '头像运行时失败', true);

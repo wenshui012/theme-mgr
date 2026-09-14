@@ -345,6 +345,7 @@
         var getThemeName = options.getThemeName || function () { return ''; };
         var onError = options.onError || function () {};
         var overwriteHostAvatar = options.overwriteHostAvatar;
+        var bakesUserOriginalView = options.bakesUserOriginalView === true;
         var preloadHostImage = options.preloadHostImage || function (source) {
             return new Promise(function (resolve) {
                 if (typeof win.Image !== 'function') { resolve(''); return; }
@@ -1259,12 +1260,15 @@
             if (!panel) return;
             var scopes = status && status.scopes || {};
             if (mode === 'save') {
+                var originalHint = editor.target.kind === 'user' && bakesUserOriginalView
+                    ? 'TT User 会按当前调整生成固定 2:3 成品；本地酒馆仍完整覆盖母图'
+                    : '完整原图覆盖；调整仅用于聊天头像';
                 panel.innerHTML = '<div class="tm-avatar-editor-scope-title"><span>保存头像</span><small>选择应用范围</small></div>' +
                     '<div class="tm-avatar-editor-priority">显示优先级：当前聊天 ＞ 当前美化 ＞ 全局 ＞ SillyTavern 原头像。保存到低权重范围不会清除高权重绑定。</div>' +
                     scopeOptionHtml('save-chat', '绑定当前聊天', '最高优先级，仅当前聊天使用', scopes.chat, false, '当前已设置') +
                     scopeOptionHtml('save-theme', '绑定当前美化', '可以继续添加头像及其调整数据', scopes.theme, false, '已绑定 ' + Number(scopes.theme && scopes.theme.count || 1) + ' 张头像') +
                     scopeOptionHtml('save-global', editor.target.kind === 'user' ? '覆盖 User 全局头像' : '覆盖该角色全局头像', '作为没有聊天或美化绑定时的默认头像', scopes.global, false, '当前已设置') +
-                    scopeOptionHtml('save-original', editor.target.kind === 'user' ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', '完整原图覆盖；调整仅用于聊天头像', scopes.original, false);
+                    scopeOptionHtml('save-original', editor.target.kind === 'user' ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', originalHint, scopes.original, false);
             } else {
                 panel.innerHTML = '<div class="tm-avatar-editor-scope-title"><span>解除头像绑定</span><small>只清除所选范围</small></div>' +
                     '<div class="tm-avatar-editor-priority">清除后立即退出调整，并按聊天 ＞ 美化 ＞ 全局 ＞ 原头像回退。</div>' +
@@ -1656,8 +1660,11 @@
                     sourceKey: nativeSourceKey(originalEditor.target, originalEditor.representative),
                     view: originalView,
                 };
-                return writeHostOriginal(originalEditor.target.kind, originalEditor.target, originalEditor.asset, originalContext).then(function (result) {
-                    var saveDisplayView = originalViewChanged
+                return writeHostOriginal(originalEditor.target.kind, originalEditor.target, originalEditor.asset, originalContext, originalView).then(function (result) {
+                    var bakedUserView = originalEditor.target.kind === 'user' && result && result.bakedView === true;
+                    var saveDisplayView = bakedUserView
+                        ? store.deleteNativeView(originalEditor.target.key)
+                        : originalViewChanged
                         ? store.putNativeView(originalNativeRecord)
                         : store.deleteNativeView(originalEditor.target.key);
                     return Promise.resolve(saveDisplayView).then(function (nativeView) {
@@ -1848,9 +1855,9 @@
             sequence += 1;
             return store.deleteBinding(scopeKey, cap.target.key).then(reconcile);
         }
-        function writeHostOriginal(kind, target, avatarAsset, context) {
+        function writeHostOriginal(kind, target, avatarAsset, context, view) {
             if (typeof overwriteHostAvatar !== 'function') return Promise.reject(Object.assign(new Error('当前环境不支持覆盖原头像'), { code: 'HOST_AVATAR_WRITE_UNAVAILABLE' }));
-            return Promise.resolve(overwriteHostAvatar({ kind: kind, target: clone(target), asset: clone(avatarAsset), context: context }));
+            return Promise.resolve(overwriteHostAvatar({ kind: kind, target: clone(target), asset: clone(avatarAsset), view: normalizeView(view), context: context }));
         }
         function overwriteOriginal(kind, avatarId) {
             var mutationError = requireMutable();
@@ -1864,7 +1871,12 @@
             var target = clone(cap.target);
             return getAsset(avatarId).then(function (avatarAsset) {
                 if (!avatarAsset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
-                return writeHostOriginal(kind, target, avatarAsset, context);
+                return writeHostOriginal(kind, target, avatarAsset, context, normalizeView(null));
+            }).then(function (result) {
+                if (kind === 'user' && result && result.bakedView === true) {
+                    return store.deleteNativeView(target.key).then(function () { return result; });
+                }
+                return result;
             }).then(function (result) {
                 invalidateHostSourceCache();
                 sequence += 1;
