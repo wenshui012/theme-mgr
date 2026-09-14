@@ -9,17 +9,60 @@
         var esc = opts.esc;
         var createSheet = opts.createSheet;
         var closeSheet = opts.closeSheet;
+        var setBeforeClose = opts.setBeforeClose;
         var toast = opts.toast;
         var renderGrid = opts.renderGrid;
         var setControlValue = opts.setControlValue;
         var themeRuntime = opts.themeRuntime;
+        var imageLoaderApi = opts.imageLoader || ns.imageLoader;
         var loadBoundBackgroundModules = typeof opts.loadBackgroundModules === 'function'
             ? opts.loadBackgroundModules
             : function () { return Promise.all([import('/scripts/backgrounds.js'), import('/script.js')]); };
         var backgroundListCache = null;
+        var backgroundThumbnailCache = new Map();
+        var BACKGROUND_THUMBNAIL_CACHE_LIMIT = 64;
+
+        function getBackgroundPath(backgroundName) {
+            if (typeof global.__TAURITAVERN_BACKGROUND_PATH__ === 'function') {
+                try { return global.__TAURITAVERN_BACKGROUND_PATH__(backgroundName); }
+                catch (error) { console.warn('[美化管理] TauriTavern 背景路径转换失败:', error); }
+            }
+            return 'backgrounds/' + encodeURIComponent(backgroundName);
+        }
 
         function getBackgroundCssUrl(backgroundName) {
-            return 'url("backgrounds/' + encodeURIComponent(backgroundName) + '")';
+            return 'url("' + getBackgroundPath(backgroundName) + '")';
+        }
+
+        function blobToDataUrl(blob) {
+            if (typeof global.FileReader !== 'function') return Promise.reject(new Error('FileReader unavailable'));
+            return new Promise(function (resolve, reject) {
+                var reader = new global.FileReader();
+                reader.onload = function () { resolve(typeof reader.result === 'string' ? reader.result : ''); };
+                reader.onerror = function () { reject(reader.error || new Error('background thumbnail read failed')); };
+                reader.onabort = function () { reject(reader.error || new Error('background thumbnail read aborted')); };
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        function getBackgroundThumbnailSource(backgroundName) {
+            if (backgroundThumbnailCache.has(backgroundName)) return backgroundThumbnailCache.get(backgroundName);
+            var promise = Promise.resolve().then(function () {
+                return global.fetch('/thumbnail?type=bg&file=' + encodeURIComponent(backgroundName), { cache: 'force-cache' });
+            }).then(function (response) {
+                if (!response || !response.ok || typeof response.blob !== 'function') throw new Error('background thumbnail unavailable');
+                return response.blob();
+            }).then(blobToDataUrl).then(function (source) {
+                if (!source) throw new Error('background thumbnail is empty');
+                return source;
+            }).catch(function () {
+                return getBackgroundPath(backgroundName);
+            });
+            backgroundThumbnailCache.set(backgroundName, promise);
+            while (backgroundThumbnailCache.size > BACKGROUND_THUMBNAIL_CACHE_LIMIT) {
+                backgroundThumbnailCache.delete(backgroundThumbnailCache.keys().next().value);
+            }
+            return promise;
         }
 
         function getBackgroundList(cb, force) {
@@ -133,8 +176,17 @@
             var list = sheet.querySelector('#tm-bg-picker-list');
             var searchInp = sheet.querySelector('#tm-bg-search');
             var backgroundsCache = [];
+            var thumbnailLoader = null;
+
+            if (typeof setBeforeClose === 'function') {
+                setBeforeClose(sheet, function () {
+                    if (thumbnailLoader) thumbnailLoader.disconnect();
+                    return true;
+                });
+            }
 
             function choose(name) {
+                if (thumbnailLoader) thumbnailLoader.disconnect();
                 if (onPick) onPick(name);
                 closeSheet(sheet);
             }
@@ -150,6 +202,7 @@
             }
 
             function renderBackgrounds() {
+                if (thumbnailLoader) thumbnailLoader.disconnect();
                 applyBgSize();
                 var query = (searchInp.value || '').trim().toLowerCase();
                 var backgrounds = query ? backgroundsCache.filter(function (name) {
@@ -160,7 +213,7 @@
                     '<div class="tm-bg-picker-name">不绑定背景</div><i class="fa-solid fa-circle-check"></i></div>';
                 backgrounds.forEach(function (name) {
                     html += '<div class="tm-bg-picker-card' + (selectedName === name ? ' on' : '') + '" data-bg="' + esc(name) + '" tabindex="0">' +
-                        '<div class="tm-bg-picker-thumb" style="background-image:' + esc(getBackgroundCssUrl(name)) + '"></div>' +
+                        '<div class="tm-bg-picker-thumb"><img src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-background-name="' + esc(name) + '" alt="" loading="lazy"></div>' +
                         '<div class="tm-bg-picker-name">' + esc(name) + '</div>' +
                         '<button class="tm-bg-rename" title="重命名背景" data-bg="' + esc(name) + '"><i class="fa-solid fa-pen"></i></button>' +
                         '<i class="fa-solid fa-circle-check"></i></div>';
@@ -169,6 +222,13 @@
                     html += '<div class="tm-empty"><i class="fa-regular fa-image"></i><span>' + (query ? '没有匹配的背景' : '还没有可绑定的 ST 壁纸') + '</span></div>';
                 }
                 list.innerHTML = html;
+                thumbnailLoader = imageLoaderApi.createImageLoader({
+                    root: list,
+                    rootMargin: '240px 0px',
+                    getKey: function (image) { return image.dataset.backgroundName || ''; },
+                    resolveSource: function (name) { return getBackgroundThumbnailSource(name); },
+                });
+                thumbnailLoader.observe(list.querySelectorAll('img[data-background-name]'));
                 list.querySelectorAll('.tm-bg-picker-card').forEach(function (card) {
                     card.addEventListener('click', function () { choose(card.dataset.bg || ''); });
                     card.addEventListener('keydown', function (event) { if (event.key === 'Enter') choose(card.dataset.bg || ''); });

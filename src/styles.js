@@ -378,6 +378,7 @@
             '.tm-bg-picker-card:hover{background:rgba(127,127,127,.11);}',
             '.tm-bg-picker-card.on{border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-bg-picker-thumb{width:100%;aspect-ratio:4/3;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(127,127,127,.12);border:1px solid rgba(127,127,127,.12);display:flex;align-items:center;justify-content:center;overflow:hidden;}',
+            '.tm-bg-picker-thumb img{display:block;width:100%;height:100%;object-fit:cover;}',
             '.tm-bg-picker-thumb.empty{background:repeating-linear-gradient(45deg,rgba(127,127,127,.08),rgba(127,127,127,.08) 8px,rgba(127,127,127,.16) 8px,rgba(127,127,127,.16) 16px);}',
             '.tm-bg-picker-thumb i{opacity:.38;font-size:1.6em;}',
             '.tm-bg-picker-name{font-size:.75em;font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',

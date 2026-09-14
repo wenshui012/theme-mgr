@@ -90,6 +90,28 @@ test('7 high resolution and thumbnail payloads stay separate', async () => {
     assert.match(result.thumbData, /384x192/);
 });
 
+test('TauriTavern User upload padding preserves a non-2:3 image without stretching it', async () => {
+    const draws = [];
+    const image = { naturalWidth: 800, naturalHeight: 600, width: 800, height: 600, onload: null, onerror: null };
+    Object.defineProperty(image, 'src', {
+        set(value) { this._src = value; if (value) queueMicrotask(() => this.onload && this.onload()); },
+        get() { return this._src || ''; },
+    });
+    const canvas = {
+        width: 0,
+        height: 0,
+        getContext() { return { clearRect() {}, drawImage(...args) { draws.push(args); } }; },
+        toDataURL(type) { return `data:${type};base64,padded`; },
+    };
+    const result = await modules.avatarImageTools.prepareTauriUserUpload(asset('wide', { width: 800, height: 600 }), {
+        createImage: () => image,
+        createCanvas: () => canvas,
+    });
+    assert.equal(result.imageData, 'data:image/png;base64,padded');
+    assert.equal(result.padded, true);
+    assert.deepEqual(draws[0].slice(1), [0, 150, 400, 300]);
+});
+
 function memoryStore(seed) {
     const adapter = modules.avatarStorage.createMemoryAdapter(seed);
     return { adapter, store: modules.createAvatarStore({ adapter }) };
@@ -273,7 +295,7 @@ function runtimeFixture(options = {}) {
         getCurrentChatId() { return this.chatId; },
         eventSource, eventTypes: options.eventTypes || {},
     };
-    const win = { document: doc, location: { href: 'http://localhost/' }, URL, innerWidth: 800, innerHeight: 600, MutationObserver, setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), getComputedStyle: (el) => el.computed, confirm: () => true };
+    const win = { document: doc, location: { href: 'http://localhost/' }, URL, CSS: { supports: () => options.objectViewBoxSupported !== false }, innerWidth: 800, innerHeight: 600, MutationObserver, setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), getComputedStyle: (el) => el.computed, confirm: () => true };
     const mods = loadModules(win); const bundle = memoryStore(options.seed); const runtimeStore = options.store || bundle.store; const runtime = mods.createAvatarRuntime({
         window: win, document: doc, store: runtimeStore, getContext: () => context, getThemeName: () => theme,
         canMutate: options.canMutate,
@@ -344,6 +366,16 @@ test('23 Cancel restores the previous binding rather than raw avatar', async () 
 test('24 Save persists the formal default binding', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'user',avatarId:'a'}); const result=await f.runtime.saveEdit(); assert.equal(result.binding.avatarId,'a'); assert.equal((await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'user:global')).avatarId,'a'); });
 test('25 normalized view yields proportionate pixels across avatar sizes', () => { assert.deepEqual({ ...modules.avatarRuntime.pixelsForView({x:.2,y:.1,scale:1.5},{getBoundingClientRect:()=>({x:0,y:0,width:50,height:80,left:0,top:0,right:50,bottom:80})}) },{x:10,y:8,scale:1.5}); });
 test('26 theme transform and avatar box stay fixed while only image content is cropped', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); const beforeTransform=f.chars[0].image.computed.transform; const beforeRect=f.chars[0].image.getBoundingClientRect(); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); f.runtime.setScale(1.5); assert.equal(f.chars[0].image.computed.transform,beforeTransform); assert.deepEqual(f.chars[0].image.getBoundingClientRect(),beforeRect); assert.match(f.chars[0].image.getAttribute('style'),/object-view-box:inset\(/); assert.equal(f.chars[0].image.animations.length,0); });
+test('WebKit fallback bakes avatar crop into SVG without rejecting the edit', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset()] }, objectViewBoxSupported: false });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'a' });
+    f.runtime.setScale(1.5);
+    const source = f.user.image.getAttribute('src');
+    assert.match(source, /^data:image\/svg\+xml/);
+    assert.match(decodeURIComponent(source), /viewBox="[^"]+"/);
+    assert.match(f.user.image.getAttribute('style'), /object-view-box:none!important/);
+    assert.equal(f.runtime.getState().state, 'editing');
+});
 test('27 mask and clip properties are not rewritten', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.equal(f.chars[0].image.computed.clipPath,'circle(48%)'); assert.equal(f.chars[0].image.computed.maskImage,'url(mask.png)'); });
 test('28 a newly rendered message is reapplied on reconcile', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{version:1,themeKey:'theme-name:A',targetKey:'character:char.png',avatarId:'a',view:{}}]}}); await f.runtime.start(); const next=message('character',{x:20,y:350,width:60,height:60},'raw-new'); f.chat.appendChild(next.mes); await f.runtime.reconcile(); assert.match(next.image.getAttribute('src'),/main-a/); });
 test('29 a fresh runtime restores persisted bindings after reload', async () => { const seed={assets:[asset()],bindings:[{version:1,themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{}}]}; const f=runtimeFixture({seed}); await f.runtime.start(); assert.match(f.user.image.getAttribute('src'),/main-a/); });
@@ -1691,6 +1723,8 @@ test('94 Avatar adjustment opens directly and its toolbar owns four save scopes 
 
 test('95 host original overwrite uses SillyTavern avatar endpoints and overwrite fields', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+    assert.match(source, /kind === 'user' && isTauriTavernRuntime\(\)/);
+    assert.match(source, /prepareTauriUserUpload\(asset\)/);
     assert.match(source, /form\.append\('overwrite_name', targetName\)/);
     assert.match(source, /\/api\/avatars\/upload/);
     assert.match(source, /form\.append\('avatar_url', targetName\)/);

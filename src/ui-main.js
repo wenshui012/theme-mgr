@@ -94,6 +94,10 @@
     var pendingOpenAfterReady = false;
     var pendingOpenAfterAvatarCancel = false;
 
+    function isTauriTavernRuntime() {
+        return Boolean(global.__TAURITAVERN__ || typeof global.__TAURITAVERN_BACKGROUND_PATH__ === 'function');
+    }
+
     function overwriteSillyTavernAvatar(input) {
         input = input || {};
         var context = input.context || {};
@@ -103,21 +107,27 @@
             return Promise.reject(Object.assign(new Error('头像主图数据无效'), { code: 'HOST_AVATAR_IMAGE_INVALID' }));
         }
         var modulePromise = kind === 'user' ? import('/script.js') : Promise.resolve(null);
+        var uploadAssetPromise = kind === 'user' && isTauriTavernRuntime()
+            ? modules.avatarImageTools.prepareTauriUserUpload(asset)
+            : Promise.resolve(asset);
         return Promise.all([
             modulePromise,
-            global.fetch(asset.imageData).then(function (response) {
-                if (!response.ok) throw new Error('avatar data decode failed');
-                return response.blob();
+            uploadAssetPromise.then(function (uploadAsset) {
+                return global.fetch(uploadAsset.imageData).then(function (response) {
+                    if (!response.ok) throw new Error('avatar data decode failed');
+                    return response.blob();
+                }).then(function (blob) { return { asset: uploadAsset, blob: blob }; });
             }),
         ]).then(function (parts) {
             var stModule = parts[0];
-            var blob = parts[1];
+            var uploadAsset = parts[1].asset;
+            var blob = parts[1].blob;
             var targetName = kind === 'user'
                 ? String(stModule && stModule.user_avatar || '').trim()
                 : String(input.target && input.target.characterAvatar || '').trim();
             if (!targetName) throw Object.assign(new Error(kind === 'user' ? '无法识别当前人设头像' : '无法识别当前角色卡'), { code: 'HOST_AVATAR_TARGET_UNAVAILABLE' });
-            var extension = /image\/jpeg/i.test(blob.type || asset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || asset.mimeType) ? '.webp' : '.png');
-            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || asset.mimeType || 'image/png' });
+            var extension = /image\/jpeg/i.test(blob.type || uploadAsset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || uploadAsset.mimeType) ? '.webp' : '.png');
+            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || uploadAsset.mimeType || 'image/png' });
             var form = new global.FormData();
             form.append('avatar', file);
             if (kind === 'user') form.append('overwrite_name', targetName);
@@ -324,10 +334,12 @@
                 esc: esc,
                 createSheet: createSheet,
                 closeSheet: closeSheet,
+                setBeforeClose: uiSheetsApi.setBeforeClose,
                 toast: toast,
                 renderGrid: renderGrid,
                 setControlValue: setControlValue,
                 themeRuntime: themeRuntime,
+                imageLoader: modules.imageLoader,
             });
             storageApi = modules.createStorage({
                 DB_NAME: DB_NAME,

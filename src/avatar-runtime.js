@@ -242,33 +242,30 @@
         view = normalizeView(view);
         return { x: view.x * rect.width, y: view.y * rect.height, scale: view.scale };
     }
-    function objectViewBoxForView(view) {
+    function cropGeometryForView(view, geometry) {
         view = normalizeView(view);
-        var geometry = arguments[1];
-        if (geometry && Number(geometry.canvasWidth) > 0 && Number(geometry.canvasHeight) > 0) {
-            var canvasWidth = Number(geometry.canvasWidth);
-            var canvasHeight = Number(geometry.canvasHeight);
-            var logicalWidth = Number(geometry.logicalWidth) || canvasWidth;
-            var logicalHeight = Number(geometry.logicalHeight) || canvasHeight;
-            var logicalLeft = Number.isFinite(Number(geometry.logicalLeft)) ? Number(geometry.logicalLeft) : (canvasWidth - logicalWidth) / 2;
-            var logicalTop = Number.isFinite(Number(geometry.logicalTop)) ? Number(geometry.logicalTop) : (canvasHeight - logicalHeight) / 2;
-            var visibleWidth = logicalWidth / view.scale;
-            var visibleHeight = logicalHeight / view.scale;
-            var leftPixels = logicalLeft + (logicalWidth - visibleWidth) / 2 - view.x * visibleWidth;
-            var topPixels = logicalTop + (logicalHeight - visibleHeight) / 2 - view.y * visibleHeight;
-            var rightPixels = canvasWidth - leftPixels - visibleWidth;
-            var bottomPixels = canvasHeight - topPixels - visibleHeight;
-            return 'inset(' + [topPixels / canvasHeight, rightPixels / canvasWidth, bottomPixels / canvasHeight, leftPixels / canvasWidth].map(function (value) {
-                return round(value * 100, 4) + '%';
-            }).join(' ') + ')';
-        }
-        var visible = 1 / view.scale;
-        var centerInset = (1 - visible) / 2;
-        var left = centerInset - view.x / view.scale;
-        var top = centerInset - view.y / view.scale;
-        var right = 1 - visible - left;
-        var bottom = 1 - visible - top;
-        return 'inset(' + [top, right, bottom, left].map(function (value) { return round(value * 100, 4) + '%'; }).join(' ') + ')';
+        geometry = geometry && Number(geometry.canvasWidth) > 0 && Number(geometry.canvasHeight) > 0
+            ? geometry
+            : { canvasWidth: 1, canvasHeight: 1, logicalWidth: 1, logicalHeight: 1, logicalLeft: 0, logicalTop: 0 };
+        var canvasWidth = Number(geometry.canvasWidth);
+        var canvasHeight = Number(geometry.canvasHeight);
+        var logicalWidth = Number(geometry.logicalWidth) || canvasWidth;
+        var logicalHeight = Number(geometry.logicalHeight) || canvasHeight;
+        var logicalLeft = Number.isFinite(Number(geometry.logicalLeft)) ? Number(geometry.logicalLeft) : (canvasWidth - logicalWidth) / 2;
+        var logicalTop = Number.isFinite(Number(geometry.logicalTop)) ? Number(geometry.logicalTop) : (canvasHeight - logicalHeight) / 2;
+        var visibleWidth = logicalWidth / view.scale;
+        var visibleHeight = logicalHeight / view.scale;
+        var left = logicalLeft + (logicalWidth - visibleWidth) / 2 - view.x * visibleWidth;
+        var top = logicalTop + (logicalHeight - visibleHeight) / 2 - view.y * visibleHeight;
+        return { left: left, top: top, width: visibleWidth, height: visibleHeight, canvasWidth: canvasWidth, canvasHeight: canvasHeight };
+    }
+    function objectViewBoxForView(view) {
+        var crop = cropGeometryForView(view, arguments[1]);
+        var right = crop.canvasWidth - crop.left - crop.width;
+        var bottom = crop.canvasHeight - crop.top - crop.height;
+        return 'inset(' + [crop.top / crop.canvasHeight, right / crop.canvasWidth, bottom / crop.canvasHeight, crop.left / crop.canvasWidth].map(function (value) {
+            return round(value * 100, 4) + '%';
+        }).join(' ') + ')';
     }
     function transformedSourceGeometry(asset, view) {
         view = normalizeView(view);
@@ -359,6 +356,7 @@
         };
         var imageTools = options.imageTools || ns.imageTools;
         var fetchImage = options.fetch || (typeof win.fetch === 'function' ? win.fetch.bind(win) : null);
+        var supportsObjectViewBox = Boolean(win.CSS && typeof win.CSS.supports === 'function' && win.CSS.supports('object-view-box', 'inset(10%)'));
         var loadNativeImage = options.loadNativeImage || function (asset) {
             if (/^data:image\//i.test(asset.imageData)) return Promise.resolve(asset);
             if (!fetchImage || !imageTools || typeof imageTools.readImageFile !== 'function') {
@@ -524,21 +522,30 @@
             }
             return cached;
         }
-        function sourceForView(asset, view, geometryOverride) {
+        function sourceForView(asset, view, geometryOverride, bakeCrop) {
             view = normalizeView(view);
-            if (!geometryOverride && !view.rotate && !view.flipX && !view.flipY) return { source: asset.imageData, geometry: null };
-            var signature = [geometryOverride ? 'envelope' : 'exact', view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1].join(':');
+            var needsBakedCrop = bakeCrop && Boolean(geometryOverride || view.x || view.y || view.scale !== 1 || view.rotate || view.flipX || view.flipY);
+            if (!geometryOverride && !view.rotate && !view.flipX && !view.flipY && !needsBakedCrop) return { source: asset.imageData, geometry: null, bakedCrop: false };
+            var signature = [geometryOverride ? 'envelope' : 'exact', view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1,
+                needsBakedCrop ? view.x : '', needsBakedCrop ? view.y : '', needsBakedCrop ? view.scale : ''].join(':');
             var cached = ensureSourceCache(asset);
             if (cached.sources.has(signature)) return cached.sources.get(signature);
             var geometry = geometryOverride || transformedSourceGeometry(asset, view);
             var centerX = round(geometry.canvasWidth / 2, 3);
             var centerY = round(geometry.canvasHeight / 2, 3);
             var transform = 'translate(' + centerX + ' ' + centerY + ') rotate(' + view.rotate + ') scale(' + (view.flipX ? -1 : 1) + ' ' + (view.flipY ? -1 : 1) + ') translate(' + round(-cached.width / 2, 3) + ' ' + round(-cached.height / 2, 3) + ')';
-            var prefix = '<svg xmlns="http://www.w3.org/2000/svg" width="' + geometry.canvasWidth + '" height="' + geometry.canvasHeight + '" viewBox="0 0 ' + geometry.canvasWidth + ' ' + geometry.canvasHeight + '"><image href="';
+            var crop = needsBakedCrop ? cropGeometryForView(view, geometry) : null;
+            var outputWidth = crop ? crop.width : geometry.canvasWidth;
+            var outputHeight = crop ? crop.height : geometry.canvasHeight;
+            var viewBox = crop
+                ? [crop.left, crop.top, crop.width, crop.height]
+                : [0, 0, geometry.canvasWidth, geometry.canvasHeight];
+            var prefix = '<svg xmlns="http://www.w3.org/2000/svg" width="' + round(outputWidth, 3) + '" height="' + round(outputHeight, 3) + '" viewBox="' + viewBox.map(function (value) { return round(value, 3); }).join(' ') + '"><image href="';
             var suffix = '" width="' + cached.width + '" height="' + cached.height + '" transform="' + transform + '"/></svg>';
             var source = {
                 source: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(prefix) + cached.encodedHref + encodeURIComponent(suffix),
                 geometry: geometry,
+                bakedCrop: Boolean(crop),
             };
             if (cached.sources.size >= SOURCE_CACHE_LIMIT) cached.sources.delete(cached.sources.keys().next().value);
             cached.sources.set(signature, source);
@@ -639,17 +646,14 @@
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
             syncRuntimeAttribute(image, 'srcset', null);
             var sourceAsset = preview ? editorPreviewAsset(asset) : asset;
-            var renderedSource = sourceForView(sourceAsset, view, preview ? editorPreviewGeometry(sourceAsset) : null);
+            var renderedSource = sourceForView(sourceAsset, view, preview ? editorPreviewGeometry(sourceAsset) : null, !supportsObjectViewBox);
             syncRuntimeAttribute(image, 'src', renderedSource.source);
             // Some theme CSS uses `content: url(...)` on avatar images. That
             // replaces the replaced element's rendered content and wins over
             // the new src, leaving a stale avatar visible even though the DOM
             // and binding store point at the selected asset.
             setImportantStyle(image, 'content', 'normal');
-            if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
-                throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
-            }
-            setImportantStyle(image, 'object-view-box', objectViewBoxForView(view, renderedSource.geometry));
+            setImportantStyle(image, 'object-view-box', supportsObjectViewBox ? objectViewBoxForView(view, renderedSource.geometry) : 'none');
             record.targetKey = targetKey || '';
             activeImages.add(image);
         }
@@ -1089,7 +1093,7 @@
                 avatarOverflow: avatarStyle.overflow,
                 parentClips: clips(avatarStyle),
                 themeInlineStyleBaseline: (baselines.get(entry.image) || {}).style || null,
-                strategy: 'css-object-view-box-content-crop',
+                strategy: supportsObjectViewBox ? 'css-object-view-box-content-crop' : 'svg-view-box-content-crop',
                 coordinateModel: 'normalized-avatar-content-transform',
                 objectViewBox: entry.image.style && entry.image.style.getPropertyValue ? entry.image.style.getPropertyValue('object-view-box') : '',
             };

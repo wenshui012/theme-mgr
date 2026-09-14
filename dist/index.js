@@ -9692,7 +9692,7 @@
 })(window);
 /* END MODULE 17/29: src/avatar-sync.js */
 
-/* BEGIN MODULE 18/29: src/avatar-image-tools.js | sha256:948c7f793383d6c5ba9cbcc2e1f358a664a488dc059e03716f2585719b4c4790 */
+/* BEGIN MODULE 18/29: src/avatar-image-tools.js | sha256:63f593b02be8fadb7ceb0f674a5c2bd1553b9dbed748d47d958a91584c4c2d34 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MAIN_MAX = 2048;
@@ -9742,6 +9742,66 @@
         try { return Promise.resolve(canvas.toDataURL(mimeType, quality)); }
         catch (error) { return Promise.reject(error); }
         finally { canvas.width = 1; canvas.height = 1; }
+    }
+
+    function prepareTauriUserUpload(asset, options) {
+        asset = asset && typeof asset === 'object' ? asset : {};
+        options = options || {};
+        var imageData = String(asset.imageData || '');
+        if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(imageData)) {
+            return Promise.reject(avatarImageError('HOST_AVATAR_IMAGE_INVALID', '头像主图数据无效'));
+        }
+        var width = Math.max(1, Number(asset.width) || 1);
+        var height = Math.max(1, Number(asset.height) || 1);
+        var targetWidth = 400;
+        var targetHeight = 600;
+        if (Math.abs(width / height - targetWidth / targetHeight) < 0.000001) {
+            return Promise.resolve({ imageData: imageData, mimeType: asset.mimeType || '', width: width, height: height, padded: false });
+        }
+        var createImage = options.createImage || function () { return new global.Image(); };
+        var createCanvas = options.createCanvas || function () { return global.document.createElement('canvas'); };
+        return new Promise(function (resolve, reject) {
+            var image;
+            try { image = createImage(); }
+            catch (error) { reject(avatarImageError('HOST_AVATAR_PREPARE_FAILED', '无法创建头像兼容图片', error)); return; }
+            image.onload = function () {
+                var sourceWidth = Math.max(1, Number(image.naturalWidth || image.width) || width);
+                var sourceHeight = Math.max(1, Number(image.naturalHeight || image.height) || height);
+                var canvas;
+                try {
+                    canvas = createCanvas();
+                    canvas.width = targetWidth;
+                    canvas.height = targetHeight;
+                    var context = canvas.getContext('2d', { alpha: true });
+                    if (!context) throw new Error('2d canvas unavailable');
+                    context.clearRect(0, 0, targetWidth, targetHeight);
+                    var scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+                    var drawWidth = sourceWidth * scale;
+                    var drawHeight = sourceHeight * scale;
+                    context.drawImage(image, (targetWidth - drawWidth) / 2, (targetHeight - drawHeight) / 2, drawWidth, drawHeight);
+                    resolve({
+                        imageData: canvas.toDataURL('image/png'),
+                        mimeType: 'image/png',
+                        width: targetWidth,
+                        height: targetHeight,
+                        padded: true,
+                    });
+                } catch (error) {
+                    reject(avatarImageError('HOST_AVATAR_PREPARE_FAILED', '无法生成 TauriTavern User 头像兼容图片', error));
+                } finally {
+                    image.onload = null;
+                    image.onerror = null;
+                    image.src = '';
+                    if (canvas) { canvas.width = 1; canvas.height = 1; }
+                }
+            };
+            image.onerror = function () {
+                image.onload = null;
+                image.onerror = null;
+                reject(avatarImageError('HOST_AVATAR_PREPARE_FAILED', '无法读取待覆盖的 User 头像'));
+            };
+            image.src = imageData;
+        });
     }
 
     ns.createAvatarImageProcessor = function (options) {
@@ -9808,6 +9868,7 @@
         fit: fit,
         fileBaseName: fileBaseName,
         outputMime: outputMime,
+        prepareTauriUserUpload: prepareTauriUserUpload,
         avatarImageError: avatarImageError,
     };
 })(window);
@@ -11298,7 +11359,7 @@
 })(window);
 /* END MODULE 21/29: src/avatar-recovery.js */
 
-/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:2f0f17bc4e7d99915005e6ac5c79d166c4db30174e8919e0edb7e9673cf49c98 */
+/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:658de7abfa7a8717a231ec2a20db72a35a3e915c80b39700cec4180bf8a999a5 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -11543,33 +11604,30 @@
         view = normalizeView(view);
         return { x: view.x * rect.width, y: view.y * rect.height, scale: view.scale };
     }
-    function objectViewBoxForView(view) {
+    function cropGeometryForView(view, geometry) {
         view = normalizeView(view);
-        var geometry = arguments[1];
-        if (geometry && Number(geometry.canvasWidth) > 0 && Number(geometry.canvasHeight) > 0) {
-            var canvasWidth = Number(geometry.canvasWidth);
-            var canvasHeight = Number(geometry.canvasHeight);
-            var logicalWidth = Number(geometry.logicalWidth) || canvasWidth;
-            var logicalHeight = Number(geometry.logicalHeight) || canvasHeight;
-            var logicalLeft = Number.isFinite(Number(geometry.logicalLeft)) ? Number(geometry.logicalLeft) : (canvasWidth - logicalWidth) / 2;
-            var logicalTop = Number.isFinite(Number(geometry.logicalTop)) ? Number(geometry.logicalTop) : (canvasHeight - logicalHeight) / 2;
-            var visibleWidth = logicalWidth / view.scale;
-            var visibleHeight = logicalHeight / view.scale;
-            var leftPixels = logicalLeft + (logicalWidth - visibleWidth) / 2 - view.x * visibleWidth;
-            var topPixels = logicalTop + (logicalHeight - visibleHeight) / 2 - view.y * visibleHeight;
-            var rightPixels = canvasWidth - leftPixels - visibleWidth;
-            var bottomPixels = canvasHeight - topPixels - visibleHeight;
-            return 'inset(' + [topPixels / canvasHeight, rightPixels / canvasWidth, bottomPixels / canvasHeight, leftPixels / canvasWidth].map(function (value) {
-                return round(value * 100, 4) + '%';
-            }).join(' ') + ')';
-        }
-        var visible = 1 / view.scale;
-        var centerInset = (1 - visible) / 2;
-        var left = centerInset - view.x / view.scale;
-        var top = centerInset - view.y / view.scale;
-        var right = 1 - visible - left;
-        var bottom = 1 - visible - top;
-        return 'inset(' + [top, right, bottom, left].map(function (value) { return round(value * 100, 4) + '%'; }).join(' ') + ')';
+        geometry = geometry && Number(geometry.canvasWidth) > 0 && Number(geometry.canvasHeight) > 0
+            ? geometry
+            : { canvasWidth: 1, canvasHeight: 1, logicalWidth: 1, logicalHeight: 1, logicalLeft: 0, logicalTop: 0 };
+        var canvasWidth = Number(geometry.canvasWidth);
+        var canvasHeight = Number(geometry.canvasHeight);
+        var logicalWidth = Number(geometry.logicalWidth) || canvasWidth;
+        var logicalHeight = Number(geometry.logicalHeight) || canvasHeight;
+        var logicalLeft = Number.isFinite(Number(geometry.logicalLeft)) ? Number(geometry.logicalLeft) : (canvasWidth - logicalWidth) / 2;
+        var logicalTop = Number.isFinite(Number(geometry.logicalTop)) ? Number(geometry.logicalTop) : (canvasHeight - logicalHeight) / 2;
+        var visibleWidth = logicalWidth / view.scale;
+        var visibleHeight = logicalHeight / view.scale;
+        var left = logicalLeft + (logicalWidth - visibleWidth) / 2 - view.x * visibleWidth;
+        var top = logicalTop + (logicalHeight - visibleHeight) / 2 - view.y * visibleHeight;
+        return { left: left, top: top, width: visibleWidth, height: visibleHeight, canvasWidth: canvasWidth, canvasHeight: canvasHeight };
+    }
+    function objectViewBoxForView(view) {
+        var crop = cropGeometryForView(view, arguments[1]);
+        var right = crop.canvasWidth - crop.left - crop.width;
+        var bottom = crop.canvasHeight - crop.top - crop.height;
+        return 'inset(' + [crop.top / crop.canvasHeight, right / crop.canvasWidth, bottom / crop.canvasHeight, crop.left / crop.canvasWidth].map(function (value) {
+            return round(value * 100, 4) + '%';
+        }).join(' ') + ')';
     }
     function transformedSourceGeometry(asset, view) {
         view = normalizeView(view);
@@ -11660,6 +11718,7 @@
         };
         var imageTools = options.imageTools || ns.imageTools;
         var fetchImage = options.fetch || (typeof win.fetch === 'function' ? win.fetch.bind(win) : null);
+        var supportsObjectViewBox = Boolean(win.CSS && typeof win.CSS.supports === 'function' && win.CSS.supports('object-view-box', 'inset(10%)'));
         var loadNativeImage = options.loadNativeImage || function (asset) {
             if (/^data:image\//i.test(asset.imageData)) return Promise.resolve(asset);
             if (!fetchImage || !imageTools || typeof imageTools.readImageFile !== 'function') {
@@ -11825,21 +11884,30 @@
             }
             return cached;
         }
-        function sourceForView(asset, view, geometryOverride) {
+        function sourceForView(asset, view, geometryOverride, bakeCrop) {
             view = normalizeView(view);
-            if (!geometryOverride && !view.rotate && !view.flipX && !view.flipY) return { source: asset.imageData, geometry: null };
-            var signature = [geometryOverride ? 'envelope' : 'exact', view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1].join(':');
+            var needsBakedCrop = bakeCrop && Boolean(geometryOverride || view.x || view.y || view.scale !== 1 || view.rotate || view.flipX || view.flipY);
+            if (!geometryOverride && !view.rotate && !view.flipX && !view.flipY && !needsBakedCrop) return { source: asset.imageData, geometry: null, bakedCrop: false };
+            var signature = [geometryOverride ? 'envelope' : 'exact', view.rotate, view.flipX ? -1 : 1, view.flipY ? -1 : 1,
+                needsBakedCrop ? view.x : '', needsBakedCrop ? view.y : '', needsBakedCrop ? view.scale : ''].join(':');
             var cached = ensureSourceCache(asset);
             if (cached.sources.has(signature)) return cached.sources.get(signature);
             var geometry = geometryOverride || transformedSourceGeometry(asset, view);
             var centerX = round(geometry.canvasWidth / 2, 3);
             var centerY = round(geometry.canvasHeight / 2, 3);
             var transform = 'translate(' + centerX + ' ' + centerY + ') rotate(' + view.rotate + ') scale(' + (view.flipX ? -1 : 1) + ' ' + (view.flipY ? -1 : 1) + ') translate(' + round(-cached.width / 2, 3) + ' ' + round(-cached.height / 2, 3) + ')';
-            var prefix = '<svg xmlns="http://www.w3.org/2000/svg" width="' + geometry.canvasWidth + '" height="' + geometry.canvasHeight + '" viewBox="0 0 ' + geometry.canvasWidth + ' ' + geometry.canvasHeight + '"><image href="';
+            var crop = needsBakedCrop ? cropGeometryForView(view, geometry) : null;
+            var outputWidth = crop ? crop.width : geometry.canvasWidth;
+            var outputHeight = crop ? crop.height : geometry.canvasHeight;
+            var viewBox = crop
+                ? [crop.left, crop.top, crop.width, crop.height]
+                : [0, 0, geometry.canvasWidth, geometry.canvasHeight];
+            var prefix = '<svg xmlns="http://www.w3.org/2000/svg" width="' + round(outputWidth, 3) + '" height="' + round(outputHeight, 3) + '" viewBox="' + viewBox.map(function (value) { return round(value, 3); }).join(' ') + '"><image href="';
             var suffix = '" width="' + cached.width + '" height="' + cached.height + '" transform="' + transform + '"/></svg>';
             var source = {
                 source: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(prefix) + cached.encodedHref + encodeURIComponent(suffix),
                 geometry: geometry,
+                bakedCrop: Boolean(crop),
             };
             if (cached.sources.size >= SOURCE_CACHE_LIMIT) cached.sources.delete(cached.sources.keys().next().value);
             cached.sources.set(signature, source);
@@ -11940,17 +12008,14 @@
             if (record.animation) { try { record.animation.cancel(); } catch (_) {} }
             syncRuntimeAttribute(image, 'srcset', null);
             var sourceAsset = preview ? editorPreviewAsset(asset) : asset;
-            var renderedSource = sourceForView(sourceAsset, view, preview ? editorPreviewGeometry(sourceAsset) : null);
+            var renderedSource = sourceForView(sourceAsset, view, preview ? editorPreviewGeometry(sourceAsset) : null, !supportsObjectViewBox);
             syncRuntimeAttribute(image, 'src', renderedSource.source);
             // Some theme CSS uses `content: url(...)` on avatar images. That
             // replaces the replaced element's rendered content and wins over
             // the new src, leaving a stale avatar visible even though the DOM
             // and binding store point at the selected asset.
             setImportantStyle(image, 'content', 'normal');
-            if (win.CSS && typeof win.CSS.supports === 'function' && !win.CSS.supports('object-view-box', 'inset(10%)')) {
-                throw Object.assign(new Error('当前浏览器暂不支持框内头像调整，请更新 WebView'), { code: 'CONTENT_CROP_UNSUPPORTED' });
-            }
-            setImportantStyle(image, 'object-view-box', objectViewBoxForView(view, renderedSource.geometry));
+            setImportantStyle(image, 'object-view-box', supportsObjectViewBox ? objectViewBoxForView(view, renderedSource.geometry) : 'none');
             record.targetKey = targetKey || '';
             activeImages.add(image);
         }
@@ -12390,7 +12455,7 @@
                 avatarOverflow: avatarStyle.overflow,
                 parentClips: clips(avatarStyle),
                 themeInlineStyleBaseline: (baselines.get(entry.image) || {}).style || null,
-                strategy: 'css-object-view-box-content-crop',
+                strategy: supportsObjectViewBox ? 'css-object-view-box-content-crop' : 'svg-view-box-content-crop',
                 coordinateModel: 'normalized-avatar-content-transform',
                 objectViewBox: entry.image.style && entry.image.style.getPropertyValue ? entry.image.style.getPropertyValue('object-view-box') : '',
             };
@@ -14214,7 +14279,7 @@
 })(window);
 /* END MODULE 24/29: src/app-shell.js */
 
-/* BEGIN MODULE 25/29: src/styles.js | sha256:5727741c1c1ac7cbf2ccaf4f1c4559886623e10af1c778f77a6d79d0b2e7a0ab */
+/* BEGIN MODULE 25/29: src/styles.js | sha256:0a6c17b12362efd9b01ffb2940818bbeafb4eca5baf7d803cae6cd0c66badd4e */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -14595,6 +14660,7 @@
             '.tm-bg-picker-card:hover{background:rgba(127,127,127,.11);}',
             '.tm-bg-picker-card.on{border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-bg-picker-thumb{width:100%;aspect-ratio:4/3;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(127,127,127,.12);border:1px solid rgba(127,127,127,.12);display:flex;align-items:center;justify-content:center;overflow:hidden;}',
+            '.tm-bg-picker-thumb img{display:block;width:100%;height:100%;object-fit:cover;}',
             '.tm-bg-picker-thumb.empty{background:repeating-linear-gradient(45deg,rgba(127,127,127,.08),rgba(127,127,127,.08) 8px,rgba(127,127,127,.16) 8px,rgba(127,127,127,.16) 16px);}',
             '.tm-bg-picker-thumb i{opacity:.38;font-size:1.6em;}',
             '.tm-bg-picker-name{font-size:.75em;font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
@@ -14724,7 +14790,7 @@
 })(window);
 /* END MODULE 25/29: src/styles.js */
 
-/* BEGIN MODULE 26/29: src/backgrounds.js | sha256:1fd2cbfd9c593b56cb3936d579ddd59569883a1419aa28cee9f9a5ed824321b8 */
+/* BEGIN MODULE 26/29: src/backgrounds.js | sha256:71450ae3f316f06aa59543d7f6dc592099a27eaf3829fc2b0ded2dacc41f64b6 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -14736,17 +14802,60 @@
         var esc = opts.esc;
         var createSheet = opts.createSheet;
         var closeSheet = opts.closeSheet;
+        var setBeforeClose = opts.setBeforeClose;
         var toast = opts.toast;
         var renderGrid = opts.renderGrid;
         var setControlValue = opts.setControlValue;
         var themeRuntime = opts.themeRuntime;
+        var imageLoaderApi = opts.imageLoader || ns.imageLoader;
         var loadBoundBackgroundModules = typeof opts.loadBackgroundModules === 'function'
             ? opts.loadBackgroundModules
             : function () { return Promise.all([import('/scripts/backgrounds.js'), import('/script.js')]); };
         var backgroundListCache = null;
+        var backgroundThumbnailCache = new Map();
+        var BACKGROUND_THUMBNAIL_CACHE_LIMIT = 64;
+
+        function getBackgroundPath(backgroundName) {
+            if (typeof global.__TAURITAVERN_BACKGROUND_PATH__ === 'function') {
+                try { return global.__TAURITAVERN_BACKGROUND_PATH__(backgroundName); }
+                catch (error) { console.warn('[美化管理] TauriTavern 背景路径转换失败:', error); }
+            }
+            return 'backgrounds/' + encodeURIComponent(backgroundName);
+        }
 
         function getBackgroundCssUrl(backgroundName) {
-            return 'url("backgrounds/' + encodeURIComponent(backgroundName) + '")';
+            return 'url("' + getBackgroundPath(backgroundName) + '")';
+        }
+
+        function blobToDataUrl(blob) {
+            if (typeof global.FileReader !== 'function') return Promise.reject(new Error('FileReader unavailable'));
+            return new Promise(function (resolve, reject) {
+                var reader = new global.FileReader();
+                reader.onload = function () { resolve(typeof reader.result === 'string' ? reader.result : ''); };
+                reader.onerror = function () { reject(reader.error || new Error('background thumbnail read failed')); };
+                reader.onabort = function () { reject(reader.error || new Error('background thumbnail read aborted')); };
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        function getBackgroundThumbnailSource(backgroundName) {
+            if (backgroundThumbnailCache.has(backgroundName)) return backgroundThumbnailCache.get(backgroundName);
+            var promise = Promise.resolve().then(function () {
+                return global.fetch('/thumbnail?type=bg&file=' + encodeURIComponent(backgroundName), { cache: 'force-cache' });
+            }).then(function (response) {
+                if (!response || !response.ok || typeof response.blob !== 'function') throw new Error('background thumbnail unavailable');
+                return response.blob();
+            }).then(blobToDataUrl).then(function (source) {
+                if (!source) throw new Error('background thumbnail is empty');
+                return source;
+            }).catch(function () {
+                return getBackgroundPath(backgroundName);
+            });
+            backgroundThumbnailCache.set(backgroundName, promise);
+            while (backgroundThumbnailCache.size > BACKGROUND_THUMBNAIL_CACHE_LIMIT) {
+                backgroundThumbnailCache.delete(backgroundThumbnailCache.keys().next().value);
+            }
+            return promise;
         }
 
         function getBackgroundList(cb, force) {
@@ -14860,8 +14969,17 @@
             var list = sheet.querySelector('#tm-bg-picker-list');
             var searchInp = sheet.querySelector('#tm-bg-search');
             var backgroundsCache = [];
+            var thumbnailLoader = null;
+
+            if (typeof setBeforeClose === 'function') {
+                setBeforeClose(sheet, function () {
+                    if (thumbnailLoader) thumbnailLoader.disconnect();
+                    return true;
+                });
+            }
 
             function choose(name) {
+                if (thumbnailLoader) thumbnailLoader.disconnect();
                 if (onPick) onPick(name);
                 closeSheet(sheet);
             }
@@ -14877,6 +14995,7 @@
             }
 
             function renderBackgrounds() {
+                if (thumbnailLoader) thumbnailLoader.disconnect();
                 applyBgSize();
                 var query = (searchInp.value || '').trim().toLowerCase();
                 var backgrounds = query ? backgroundsCache.filter(function (name) {
@@ -14887,7 +15006,7 @@
                     '<div class="tm-bg-picker-name">不绑定背景</div><i class="fa-solid fa-circle-check"></i></div>';
                 backgrounds.forEach(function (name) {
                     html += '<div class="tm-bg-picker-card' + (selectedName === name ? ' on' : '') + '" data-bg="' + esc(name) + '" tabindex="0">' +
-                        '<div class="tm-bg-picker-thumb" style="background-image:' + esc(getBackgroundCssUrl(name)) + '"></div>' +
+                        '<div class="tm-bg-picker-thumb"><img src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-background-name="' + esc(name) + '" alt="" loading="lazy"></div>' +
                         '<div class="tm-bg-picker-name">' + esc(name) + '</div>' +
                         '<button class="tm-bg-rename" title="重命名背景" data-bg="' + esc(name) + '"><i class="fa-solid fa-pen"></i></button>' +
                         '<i class="fa-solid fa-circle-check"></i></div>';
@@ -14896,6 +15015,13 @@
                     html += '<div class="tm-empty"><i class="fa-regular fa-image"></i><span>' + (query ? '没有匹配的背景' : '还没有可绑定的 ST 壁纸') + '</span></div>';
                 }
                 list.innerHTML = html;
+                thumbnailLoader = imageLoaderApi.createImageLoader({
+                    root: list,
+                    rootMargin: '240px 0px',
+                    getKey: function (image) { return image.dataset.backgroundName || ''; },
+                    resolveSource: function (name) { return getBackgroundThumbnailSource(name); },
+                });
+                thumbnailLoader.observe(list.querySelectorAll('img[data-background-name]'));
                 list.querySelectorAll('.tm-bg-picker-card').forEach(function (card) {
                     card.addEventListener('click', function () { choose(card.dataset.bg || ''); });
                     card.addEventListener('keydown', function (event) { if (event.key === 'Enter') choose(card.dataset.bg || ''); });
@@ -15442,7 +15568,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:0a8cc883eabdd7614f25a2c36c0e7a4b7ec6cfa50e71847108ca61a1c3cb91bb */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:6264dbcb8a911f524f38949e5da03d2db424823cf93bdefa7bd0fb46866fd12c */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -15539,6 +15665,10 @@
     var pendingOpenAfterReady = false;
     var pendingOpenAfterAvatarCancel = false;
 
+    function isTauriTavernRuntime() {
+        return Boolean(global.__TAURITAVERN__ || typeof global.__TAURITAVERN_BACKGROUND_PATH__ === 'function');
+    }
+
     function overwriteSillyTavernAvatar(input) {
         input = input || {};
         var context = input.context || {};
@@ -15548,21 +15678,27 @@
             return Promise.reject(Object.assign(new Error('头像主图数据无效'), { code: 'HOST_AVATAR_IMAGE_INVALID' }));
         }
         var modulePromise = kind === 'user' ? import('/script.js') : Promise.resolve(null);
+        var uploadAssetPromise = kind === 'user' && isTauriTavernRuntime()
+            ? modules.avatarImageTools.prepareTauriUserUpload(asset)
+            : Promise.resolve(asset);
         return Promise.all([
             modulePromise,
-            global.fetch(asset.imageData).then(function (response) {
-                if (!response.ok) throw new Error('avatar data decode failed');
-                return response.blob();
+            uploadAssetPromise.then(function (uploadAsset) {
+                return global.fetch(uploadAsset.imageData).then(function (response) {
+                    if (!response.ok) throw new Error('avatar data decode failed');
+                    return response.blob();
+                }).then(function (blob) { return { asset: uploadAsset, blob: blob }; });
             }),
         ]).then(function (parts) {
             var stModule = parts[0];
-            var blob = parts[1];
+            var uploadAsset = parts[1].asset;
+            var blob = parts[1].blob;
             var targetName = kind === 'user'
                 ? String(stModule && stModule.user_avatar || '').trim()
                 : String(input.target && input.target.characterAvatar || '').trim();
             if (!targetName) throw Object.assign(new Error(kind === 'user' ? '无法识别当前人设头像' : '无法识别当前角色卡'), { code: 'HOST_AVATAR_TARGET_UNAVAILABLE' });
-            var extension = /image\/jpeg/i.test(blob.type || asset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || asset.mimeType) ? '.webp' : '.png');
-            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || asset.mimeType || 'image/png' });
+            var extension = /image\/jpeg/i.test(blob.type || uploadAsset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || uploadAsset.mimeType) ? '.webp' : '.png');
+            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || uploadAsset.mimeType || 'image/png' });
             var form = new global.FormData();
             form.append('avatar', file);
             if (kind === 'user') form.append('overwrite_name', targetName);
@@ -15769,10 +15905,12 @@
                 esc: esc,
                 createSheet: createSheet,
                 closeSheet: closeSheet,
+                setBeforeClose: uiSheetsApi.setBeforeClose,
                 toast: toast,
                 renderGrid: renderGrid,
                 setControlValue: setControlValue,
                 themeRuntime: themeRuntime,
+                imageLoader: modules.imageLoader,
             });
             storageApi = modules.createStorage({
                 DB_NAME: DB_NAME,
