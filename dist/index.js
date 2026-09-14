@@ -9692,7 +9692,7 @@
 })(window);
 /* END MODULE 17/29: src/avatar-sync.js */
 
-/* BEGIN MODULE 18/29: src/avatar-image-tools.js | sha256:63f593b02be8fadb7ceb0f674a5c2bd1553b9dbed748d47d958a91584c4c2d34 */
+/* BEGIN MODULE 18/29: src/avatar-image-tools.js | sha256:948c7f793383d6c5ba9cbcc2e1f358a664a488dc059e03716f2585719b4c4790 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MAIN_MAX = 2048;
@@ -9742,66 +9742,6 @@
         try { return Promise.resolve(canvas.toDataURL(mimeType, quality)); }
         catch (error) { return Promise.reject(error); }
         finally { canvas.width = 1; canvas.height = 1; }
-    }
-
-    function prepareTauriUserUpload(asset, options) {
-        asset = asset && typeof asset === 'object' ? asset : {};
-        options = options || {};
-        var imageData = String(asset.imageData || '');
-        if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(imageData)) {
-            return Promise.reject(avatarImageError('HOST_AVATAR_IMAGE_INVALID', '头像主图数据无效'));
-        }
-        var width = Math.max(1, Number(asset.width) || 1);
-        var height = Math.max(1, Number(asset.height) || 1);
-        var targetWidth = 400;
-        var targetHeight = 600;
-        if (Math.abs(width / height - targetWidth / targetHeight) < 0.000001) {
-            return Promise.resolve({ imageData: imageData, mimeType: asset.mimeType || '', width: width, height: height, padded: false });
-        }
-        var createImage = options.createImage || function () { return new global.Image(); };
-        var createCanvas = options.createCanvas || function () { return global.document.createElement('canvas'); };
-        return new Promise(function (resolve, reject) {
-            var image;
-            try { image = createImage(); }
-            catch (error) { reject(avatarImageError('HOST_AVATAR_PREPARE_FAILED', '无法创建头像兼容图片', error)); return; }
-            image.onload = function () {
-                var sourceWidth = Math.max(1, Number(image.naturalWidth || image.width) || width);
-                var sourceHeight = Math.max(1, Number(image.naturalHeight || image.height) || height);
-                var canvas;
-                try {
-                    canvas = createCanvas();
-                    canvas.width = targetWidth;
-                    canvas.height = targetHeight;
-                    var context = canvas.getContext('2d', { alpha: true });
-                    if (!context) throw new Error('2d canvas unavailable');
-                    context.clearRect(0, 0, targetWidth, targetHeight);
-                    var scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
-                    var drawWidth = sourceWidth * scale;
-                    var drawHeight = sourceHeight * scale;
-                    context.drawImage(image, (targetWidth - drawWidth) / 2, (targetHeight - drawHeight) / 2, drawWidth, drawHeight);
-                    resolve({
-                        imageData: canvas.toDataURL('image/png'),
-                        mimeType: 'image/png',
-                        width: targetWidth,
-                        height: targetHeight,
-                        padded: true,
-                    });
-                } catch (error) {
-                    reject(avatarImageError('HOST_AVATAR_PREPARE_FAILED', '无法生成 TauriTavern User 头像兼容图片', error));
-                } finally {
-                    image.onload = null;
-                    image.onerror = null;
-                    image.src = '';
-                    if (canvas) { canvas.width = 1; canvas.height = 1; }
-                }
-            };
-            image.onerror = function () {
-                image.onload = null;
-                image.onerror = null;
-                reject(avatarImageError('HOST_AVATAR_PREPARE_FAILED', '无法读取待覆盖的 User 头像'));
-            };
-            image.src = imageData;
-        });
     }
 
     ns.createAvatarImageProcessor = function (options) {
@@ -9868,7 +9808,6 @@
         fit: fit,
         fileBaseName: fileBaseName,
         outputMime: outputMime,
-        prepareTauriUserUpload: prepareTauriUserUpload,
         avatarImageError: avatarImageError,
     };
 })(window);
@@ -15568,7 +15507,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:6264dbcb8a911f524f38949e5da03d2db424823cf93bdefa7bd0fb46866fd12c */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:30e210bb015b7393c214f04cdec506063d576f86fc3d490918d046ebaab7beaf */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -15665,10 +15604,6 @@
     var pendingOpenAfterReady = false;
     var pendingOpenAfterAvatarCancel = false;
 
-    function isTauriTavernRuntime() {
-        return Boolean(global.__TAURITAVERN__ || typeof global.__TAURITAVERN_BACKGROUND_PATH__ === 'function');
-    }
-
     function overwriteSillyTavernAvatar(input) {
         input = input || {};
         var context = input.context || {};
@@ -15677,28 +15612,25 @@
         if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(String(asset.imageData || ''))) {
             return Promise.reject(Object.assign(new Error('头像主图数据无效'), { code: 'HOST_AVATAR_IMAGE_INVALID' }));
         }
-        var modulePromise = kind === 'user' ? import('/script.js') : Promise.resolve(null);
-        var uploadAssetPromise = kind === 'user' && isTauriTavernRuntime()
-            ? modules.avatarImageTools.prepareTauriUserUpload(asset)
-            : Promise.resolve(asset);
+        var modulePromise = kind === 'user'
+            ? Promise.all([import('/script.js'), import('/scripts/personas.js')])
+            : Promise.resolve([null, null]);
         return Promise.all([
             modulePromise,
-            uploadAssetPromise.then(function (uploadAsset) {
-                return global.fetch(uploadAsset.imageData).then(function (response) {
-                    if (!response.ok) throw new Error('avatar data decode failed');
-                    return response.blob();
-                }).then(function (blob) { return { asset: uploadAsset, blob: blob }; });
+            global.fetch(asset.imageData).then(function (response) {
+                if (!response.ok) throw new Error('avatar data decode failed');
+                return response.blob();
             }),
         ]).then(function (parts) {
-            var stModule = parts[0];
-            var uploadAsset = parts[1].asset;
-            var blob = parts[1].blob;
+            var stModule = parts[0][0];
+            var personasModule = parts[0][1];
+            var blob = parts[1];
             var targetName = kind === 'user'
                 ? String(stModule && stModule.user_avatar || '').trim()
                 : String(input.target && input.target.characterAvatar || '').trim();
             if (!targetName) throw Object.assign(new Error(kind === 'user' ? '无法识别当前人设头像' : '无法识别当前角色卡'), { code: 'HOST_AVATAR_TARGET_UNAVAILABLE' });
-            var extension = /image\/jpeg/i.test(blob.type || uploadAsset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || uploadAsset.mimeType) ? '.webp' : '.png');
-            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || uploadAsset.mimeType || 'image/png' });
+            var extension = /image\/jpeg/i.test(blob.type || asset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || asset.mimeType) ? '.webp' : '.png');
+            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || asset.mimeType || 'image/png' });
             var form = new global.FormData();
             form.append('avatar', file);
             if (kind === 'user') form.append('overwrite_name', targetName);
@@ -15714,18 +15646,33 @@
                 body: form,
             }).then(function (response) {
                 if (!response.ok) throw Object.assign(new Error((kind === 'user' ? '人设头像' : '角色卡卡面') + '覆盖失败（HTTP ' + response.status + '）'), { code: 'HOST_AVATAR_WRITE_FAILED', status: response.status });
-                var thumbnailUrl = typeof context.getThumbnailUrl === 'function'
-                    ? context.getThumbnailUrl(kind === 'user' ? 'persona' : 'avatar', targetName)
-                    : '';
-                var refreshThumbnail = thumbnailUrl ? global.fetch(thumbnailUrl, { cache: 'reload' }).catch(function () {}) : Promise.resolve();
-                var getCharacters = typeof context.getCharacters === 'function'
-                    ? context.getCharacters
-                    : stModule && stModule.getCharacters;
-                var refreshCharacters = kind === 'character' && typeof getCharacters === 'function'
-                    ? Promise.resolve(getCharacters()).catch(function () {})
-                    : Promise.resolve();
-                return Promise.all([refreshThumbnail, refreshCharacters]).then(function () {
-                    return { ok: true, kind: kind, targetName: targetName };
+                var responseData = kind === 'user' && typeof response.json === 'function'
+                    ? Promise.resolve(response.json()).catch(function () { return {}; })
+                    : Promise.resolve({});
+                return responseData.then(function (data) {
+                    var refreshedName = String(data && data.path || targetName).trim() || targetName;
+                    var thumbnailUrl = typeof context.getThumbnailUrl === 'function'
+                        ? context.getThumbnailUrl(kind === 'user' ? 'persona' : 'avatar', refreshedName)
+                        : '';
+                    var refreshThumbnail = thumbnailUrl ? global.fetch(thumbnailUrl, { cache: 'reload' }).catch(function () {}) : Promise.resolve();
+                    var originalUrl = kind === 'user' && personasModule && typeof personasModule.getUserAvatar === 'function'
+                        ? personasModule.getUserAvatar(refreshedName)
+                        : '';
+                    var refreshOriginal = originalUrl ? global.fetch(originalUrl, { cache: 'reload' }).catch(function () {}) : Promise.resolve();
+                    var refreshPersonas = kind === 'user' && personasModule && typeof personasModule.getUserAvatars === 'function'
+                        ? Promise.all([refreshOriginal, refreshThumbnail]).then(function () {
+                            return personasModule.getUserAvatars(true, refreshedName);
+                        }).catch(function () {})
+                        : Promise.all([refreshOriginal, refreshThumbnail]);
+                    var getCharacters = typeof context.getCharacters === 'function'
+                        ? context.getCharacters
+                        : stModule && stModule.getCharacters;
+                    var refreshCharacters = kind === 'character' && typeof getCharacters === 'function'
+                        ? Promise.resolve(getCharacters()).catch(function () {})
+                        : Promise.resolve();
+                    return Promise.all([refreshPersonas, refreshCharacters]).then(function () {
+                        return { ok: true, kind: kind, targetName: refreshedName };
+                    });
                 });
             });
         }).catch(function (error) {

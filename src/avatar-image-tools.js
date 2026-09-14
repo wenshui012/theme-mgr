@@ -49,66 +49,6 @@
         finally { canvas.width = 1; canvas.height = 1; }
     }
 
-    function prepareTauriUserUpload(asset, options) {
-        asset = asset && typeof asset === 'object' ? asset : {};
-        options = options || {};
-        var imageData = String(asset.imageData || '');
-        if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(imageData)) {
-            return Promise.reject(avatarImageError('HOST_AVATAR_IMAGE_INVALID', '头像主图数据无效'));
-        }
-        var width = Math.max(1, Number(asset.width) || 1);
-        var height = Math.max(1, Number(asset.height) || 1);
-        var targetWidth = 400;
-        var targetHeight = 600;
-        if (Math.abs(width / height - targetWidth / targetHeight) < 0.000001) {
-            return Promise.resolve({ imageData: imageData, mimeType: asset.mimeType || '', width: width, height: height, padded: false });
-        }
-        var createImage = options.createImage || function () { return new global.Image(); };
-        var createCanvas = options.createCanvas || function () { return global.document.createElement('canvas'); };
-        return new Promise(function (resolve, reject) {
-            var image;
-            try { image = createImage(); }
-            catch (error) { reject(avatarImageError('HOST_AVATAR_PREPARE_FAILED', '无法创建头像兼容图片', error)); return; }
-            image.onload = function () {
-                var sourceWidth = Math.max(1, Number(image.naturalWidth || image.width) || width);
-                var sourceHeight = Math.max(1, Number(image.naturalHeight || image.height) || height);
-                var canvas;
-                try {
-                    canvas = createCanvas();
-                    canvas.width = targetWidth;
-                    canvas.height = targetHeight;
-                    var context = canvas.getContext('2d', { alpha: true });
-                    if (!context) throw new Error('2d canvas unavailable');
-                    context.clearRect(0, 0, targetWidth, targetHeight);
-                    var scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
-                    var drawWidth = sourceWidth * scale;
-                    var drawHeight = sourceHeight * scale;
-                    context.drawImage(image, (targetWidth - drawWidth) / 2, (targetHeight - drawHeight) / 2, drawWidth, drawHeight);
-                    resolve({
-                        imageData: canvas.toDataURL('image/png'),
-                        mimeType: 'image/png',
-                        width: targetWidth,
-                        height: targetHeight,
-                        padded: true,
-                    });
-                } catch (error) {
-                    reject(avatarImageError('HOST_AVATAR_PREPARE_FAILED', '无法生成 TauriTavern User 头像兼容图片', error));
-                } finally {
-                    image.onload = null;
-                    image.onerror = null;
-                    image.src = '';
-                    if (canvas) { canvas.width = 1; canvas.height = 1; }
-                }
-            };
-            image.onerror = function () {
-                image.onload = null;
-                image.onerror = null;
-                reject(avatarImageError('HOST_AVATAR_PREPARE_FAILED', '无法读取待覆盖的 User 头像'));
-            };
-            image.src = imageData;
-        });
-    }
-
     ns.createAvatarImageProcessor = function (options) {
         options = options || {};
         var sharedImageTools = options.imageTools || ns.imageTools;
@@ -173,7 +113,6 @@
         fit: fit,
         fileBaseName: fileBaseName,
         outputMime: outputMime,
-        prepareTauriUserUpload: prepareTauriUserUpload,
         avatarImageError: avatarImageError,
     };
 })(window);

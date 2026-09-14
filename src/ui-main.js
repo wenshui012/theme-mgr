@@ -94,10 +94,6 @@
     var pendingOpenAfterReady = false;
     var pendingOpenAfterAvatarCancel = false;
 
-    function isTauriTavernRuntime() {
-        return Boolean(global.__TAURITAVERN__ || typeof global.__TAURITAVERN_BACKGROUND_PATH__ === 'function');
-    }
-
     function overwriteSillyTavernAvatar(input) {
         input = input || {};
         var context = input.context || {};
@@ -106,28 +102,25 @@
         if (!/^data:image\/(?:jpeg|png|webp);base64,/i.test(String(asset.imageData || ''))) {
             return Promise.reject(Object.assign(new Error('头像主图数据无效'), { code: 'HOST_AVATAR_IMAGE_INVALID' }));
         }
-        var modulePromise = kind === 'user' ? import('/script.js') : Promise.resolve(null);
-        var uploadAssetPromise = kind === 'user' && isTauriTavernRuntime()
-            ? modules.avatarImageTools.prepareTauriUserUpload(asset)
-            : Promise.resolve(asset);
+        var modulePromise = kind === 'user'
+            ? Promise.all([import('/script.js'), import('/scripts/personas.js')])
+            : Promise.resolve([null, null]);
         return Promise.all([
             modulePromise,
-            uploadAssetPromise.then(function (uploadAsset) {
-                return global.fetch(uploadAsset.imageData).then(function (response) {
-                    if (!response.ok) throw new Error('avatar data decode failed');
-                    return response.blob();
-                }).then(function (blob) { return { asset: uploadAsset, blob: blob }; });
+            global.fetch(asset.imageData).then(function (response) {
+                if (!response.ok) throw new Error('avatar data decode failed');
+                return response.blob();
             }),
         ]).then(function (parts) {
-            var stModule = parts[0];
-            var uploadAsset = parts[1].asset;
-            var blob = parts[1].blob;
+            var stModule = parts[0][0];
+            var personasModule = parts[0][1];
+            var blob = parts[1];
             var targetName = kind === 'user'
                 ? String(stModule && stModule.user_avatar || '').trim()
                 : String(input.target && input.target.characterAvatar || '').trim();
             if (!targetName) throw Object.assign(new Error(kind === 'user' ? '无法识别当前人设头像' : '无法识别当前角色卡'), { code: 'HOST_AVATAR_TARGET_UNAVAILABLE' });
-            var extension = /image\/jpeg/i.test(blob.type || uploadAsset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || uploadAsset.mimeType) ? '.webp' : '.png');
-            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || uploadAsset.mimeType || 'image/png' });
+            var extension = /image\/jpeg/i.test(blob.type || asset.mimeType) ? '.jpg' : (/image\/webp/i.test(blob.type || asset.mimeType) ? '.webp' : '.png');
+            var file = new global.File([blob], String(asset.name || 'avatar').replace(/[\\/:*?"<>|]/g, '_') + extension, { type: blob.type || asset.mimeType || 'image/png' });
             var form = new global.FormData();
             form.append('avatar', file);
             if (kind === 'user') form.append('overwrite_name', targetName);
@@ -143,18 +136,33 @@
                 body: form,
             }).then(function (response) {
                 if (!response.ok) throw Object.assign(new Error((kind === 'user' ? '人设头像' : '角色卡卡面') + '覆盖失败（HTTP ' + response.status + '）'), { code: 'HOST_AVATAR_WRITE_FAILED', status: response.status });
-                var thumbnailUrl = typeof context.getThumbnailUrl === 'function'
-                    ? context.getThumbnailUrl(kind === 'user' ? 'persona' : 'avatar', targetName)
-                    : '';
-                var refreshThumbnail = thumbnailUrl ? global.fetch(thumbnailUrl, { cache: 'reload' }).catch(function () {}) : Promise.resolve();
-                var getCharacters = typeof context.getCharacters === 'function'
-                    ? context.getCharacters
-                    : stModule && stModule.getCharacters;
-                var refreshCharacters = kind === 'character' && typeof getCharacters === 'function'
-                    ? Promise.resolve(getCharacters()).catch(function () {})
-                    : Promise.resolve();
-                return Promise.all([refreshThumbnail, refreshCharacters]).then(function () {
-                    return { ok: true, kind: kind, targetName: targetName };
+                var responseData = kind === 'user' && typeof response.json === 'function'
+                    ? Promise.resolve(response.json()).catch(function () { return {}; })
+                    : Promise.resolve({});
+                return responseData.then(function (data) {
+                    var refreshedName = String(data && data.path || targetName).trim() || targetName;
+                    var thumbnailUrl = typeof context.getThumbnailUrl === 'function'
+                        ? context.getThumbnailUrl(kind === 'user' ? 'persona' : 'avatar', refreshedName)
+                        : '';
+                    var refreshThumbnail = thumbnailUrl ? global.fetch(thumbnailUrl, { cache: 'reload' }).catch(function () {}) : Promise.resolve();
+                    var originalUrl = kind === 'user' && personasModule && typeof personasModule.getUserAvatar === 'function'
+                        ? personasModule.getUserAvatar(refreshedName)
+                        : '';
+                    var refreshOriginal = originalUrl ? global.fetch(originalUrl, { cache: 'reload' }).catch(function () {}) : Promise.resolve();
+                    var refreshPersonas = kind === 'user' && personasModule && typeof personasModule.getUserAvatars === 'function'
+                        ? Promise.all([refreshOriginal, refreshThumbnail]).then(function () {
+                            return personasModule.getUserAvatars(true, refreshedName);
+                        }).catch(function () {})
+                        : Promise.all([refreshOriginal, refreshThumbnail]);
+                    var getCharacters = typeof context.getCharacters === 'function'
+                        ? context.getCharacters
+                        : stModule && stModule.getCharacters;
+                    var refreshCharacters = kind === 'character' && typeof getCharacters === 'function'
+                        ? Promise.resolve(getCharacters()).catch(function () {})
+                        : Promise.resolve();
+                    return Promise.all([refreshPersonas, refreshCharacters]).then(function () {
+                        return { ok: true, kind: kind, targetName: refreshedName };
+                    });
                 });
             });
         }).catch(function (error) {

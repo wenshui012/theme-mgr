@@ -90,28 +90,6 @@ test('7 high resolution and thumbnail payloads stay separate', async () => {
     assert.match(result.thumbData, /384x192/);
 });
 
-test('TauriTavern User upload padding preserves a non-2:3 image without stretching it', async () => {
-    const draws = [];
-    const image = { naturalWidth: 800, naturalHeight: 600, width: 800, height: 600, onload: null, onerror: null };
-    Object.defineProperty(image, 'src', {
-        set(value) { this._src = value; if (value) queueMicrotask(() => this.onload && this.onload()); },
-        get() { return this._src || ''; },
-    });
-    const canvas = {
-        width: 0,
-        height: 0,
-        getContext() { return { clearRect() {}, drawImage(...args) { draws.push(args); } }; },
-        toDataURL(type) { return `data:${type};base64,padded`; },
-    };
-    const result = await modules.avatarImageTools.prepareTauriUserUpload(asset('wide', { width: 800, height: 600 }), {
-        createImage: () => image,
-        createCanvas: () => canvas,
-    });
-    assert.equal(result.imageData, 'data:image/png;base64,padded');
-    assert.equal(result.padded, true);
-    assert.deepEqual(draws[0].slice(1), [0, 150, 400, 300]);
-});
-
 function memoryStore(seed) {
     const adapter = modules.avatarStorage.createMemoryAdapter(seed);
     return { adapter, store: modules.createAvatarStore({ adapter }) };
@@ -1723,8 +1701,12 @@ test('94 Avatar adjustment opens directly and its toolbar owns four save scopes 
 
 test('95 host original overwrite uses SillyTavern avatar endpoints and overwrite fields', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
-    assert.match(source, /kind === 'user' && isTauriTavernRuntime\(\)/);
-    assert.match(source, /prepareTauriUserUpload\(asset\)/);
+    assert.doesNotMatch(source, /prepareTauriUserUpload|targetWidth = 400|targetHeight = 600/);
+    assert.match(source, /global\.fetch\(asset\.imageData\)/);
+    assert.match(source, /import\('\/scripts\/personas\.js'\)/);
+    assert.match(source, /getUserAvatar\(refreshedName\)/);
+    assert.match(source, /cache: 'reload'/);
+    assert.match(source, /getUserAvatars\(true, refreshedName\)/);
     assert.match(source, /form\.append\('overwrite_name', targetName\)/);
     assert.match(source, /\/api\/avatars\/upload/);
     assert.match(source, /form\.append\('avatar_url', targetName\)/);
