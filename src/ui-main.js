@@ -605,7 +605,7 @@
             var max = name === 'rotationStepDegrees' ? 180 : 100;
             d.avatarEditorPreferences[name] = Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : avatarEditorDefaults[name];
         });
-        delete d.avatarEditorPreferences.manualInput;
+        d.avatarEditorPreferences.manualInput = d.avatarEditorPreferences.manualInput === true;
         d.avatarEditorPreferences.quickImportToLibrary = d.avatarEditorPreferences.quickImportToLibrary !== false;
         if (avatarLibraryApi) avatarLibraryApi.ensureState(d);
         var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
@@ -665,7 +665,7 @@
             followThemePreviewShape: false,
             simplifyGridText: false,
             autoHideHeader: false,
-            avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, quickImportToLibrary: true },
+            avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, manualInput: false, quickImportToLibrary: true },
             dayNight: { version: 1, pairs: Object.create(null) },
             series: { version: 1, groups: Object.create(null) },
             bindings: { version: 2, characters: Object.create(null), chats: Object.create(null), manualTheme: '', manualTarget: null },

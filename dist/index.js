@@ -11442,7 +11442,7 @@
 })(window);
 /* END MODULE 21/29: src/avatar-recovery.js */
 
-/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:4d8692719af4138a9eb5baef6fd88c68635e70ed17ae9960f041f5bf8f3ad3b1 */
+/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:0f0917880dbefc456e34dcf8414fc11adb478f5a3847f55d04591d753c7ad365 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -11471,6 +11471,7 @@
         scaleStepPercent: 1,
         positionStepPercent: 1,
         rotationStepDegrees: 1,
+        manualInput: false,
         quickImportToLibrary: true,
     };
 
@@ -11619,6 +11620,7 @@
             scaleStepPercent: number('scaleStepPercent', DEFAULT_EDITOR_PREFERENCES.scaleStepPercent, 0.1, 100),
             positionStepPercent: number('positionStepPercent', DEFAULT_EDITOR_PREFERENCES.positionStepPercent, 0.1, 100),
             rotationStepDegrees: number('rotationStepDegrees', DEFAULT_EDITOR_PREFERENCES.rotationStepDegrees, 0.1, 180),
+            manualInput: value.manualInput === true,
             quickImportToLibrary: value.quickImportToLibrary !== false,
         };
     }
@@ -11943,6 +11945,7 @@
         var temporaryUserOverride = null;
         var hostSourceTargets = new Set();
         var importingEditorAvatar = false;
+        var appliedThemeKey = null;
 
         function editorPreferences() {
             try { return normalizeEditorPreferences(getEditorPreferences()); }
@@ -12491,7 +12494,12 @@
             return Promise.resolve(store.ready).then(function () { return resolveRuntimeDesired(requestedThemeKey, requestedChatKey); }).then(function (desired) {
                 if (request !== sequence || editor || requestedThemeKey !== currentThemeKey() || requestedChatKey !== currentChatBindingKey()) return { superseded: true };
                 bindingPlans = desired.plans;
-                try { applyDesired(desired.items); observeChat(); }
+                try {
+                    if (appliedThemeKey !== null && appliedThemeKey !== requestedThemeKey) restoreAll();
+                    applyDesired(desired.items);
+                    appliedThemeKey = requestedThemeKey;
+                    observeChat();
+                }
                 catch (error) { restoreAll(); onError(error); return { ok: false, error: error }; }
                 return { ok: true, count: desired.items.length };
             }).catch(function (error) { if (request === sequence) onError(error); return { ok: false, error: error }; });
@@ -12652,6 +12660,7 @@
             reconcileTimer = null;
             started = false;
             bindingPlans = [];
+            appliedThemeKey = null;
             temporaryUserOverride = null;
             hostSourceTargets.clear();
             hostImageCache.clear();
@@ -12754,7 +12763,7 @@
                 ':host{--tm-avatar-accent:var(--SmartThemeQuoteColor,#7c6daf);--tm-avatar-text:var(--SmartThemeBodyColor,#eee);--tm-avatar-bg:var(--SmartThemeBlurTintColor,var(--SmartThemeBackgroundColor,#16161a))}',
                 '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
                 '.tm-avatar-editor-tools{display:flex;justify-content:flex-end;gap:5px}.tm-avatar-editor-tools button{display:inline-flex;align-items:center;gap:5px}.tm-avatar-editor-settings[hidden]{display:none}.tm-avatar-editor-settings{display:grid;grid-template-columns:1fr 88px;gap:7px 10px;align-items:center;padding:8px;border:1px solid rgba(127,127,127,.24);border-radius:10px;background:rgba(127,127,127,.07)}.tm-avatar-editor-settings label{display:contents}.tm-avatar-editor-settings input[type=number]{box-sizing:border-box;width:100%;min-width:0;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);color:inherit;padding:5px}.tm-avatar-editor-setting-toggle{grid-column:1/-1;display:flex!important;align-items:center;justify-content:space-between;gap:8px}.tm-avatar-editor-setting-toggle input{width:auto!important}.tm-avatar-editor-import-note{grid-column:1/-1;font-size:10px;line-height:1.35;opacity:.68}',
-                '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 58px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}.tm-avatar-editor-number-wrap{display:flex;align-items:center;gap:2px;box-sizing:border-box;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);padding:0 5px;font-variant-numeric:tabular-nums}.tm-avatar-editor-number{box-sizing:border-box;border:0!important;background:transparent!important;color:inherit;padding:5px 0;text-align:right;outline:none;-moz-appearance:textfield}.tm-avatar-editor-number::-webkit-inner-spin-button,.tm-avatar-editor-number::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}.tm-avatar-editor-number-wrap span{opacity:.7}',
+                '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 58px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}.tm-avatar-editor-number-wrap{display:none;align-items:center;gap:2px;box-sizing:border-box;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);padding:0 5px;font-variant-numeric:tabular-nums}.tm-avatar-editor-value{display:block;box-sizing:border-box;padding:6px 5px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.tm-avatar-editor-bar.is-manual .tm-avatar-editor-number-wrap{display:flex}.tm-avatar-editor-bar.is-manual .tm-avatar-editor-value{display:none}.tm-avatar-editor-number{box-sizing:border-box;border:0!important;background:transparent!important;color:inherit;padding:5px 0;text-align:right;outline:none;-moz-appearance:textfield}.tm-avatar-editor-number::-webkit-inner-spin-button,.tm-avatar-editor-number::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}.tm-avatar-editor-number-wrap span{opacity:.7}',
                 'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}button:disabled{cursor:default;opacity:.38}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-bind{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}.tm-avatar-editor-bind span{font-weight:650}.tm-avatar-editor-bind small{font-size:10px;opacity:.62;text-align:right}.tm-avatar-editor-bind.is-active{border-color:var(--tm-avatar-accent);background:color-mix(in srgb,var(--tm-avatar-accent) 18%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-scope-panel[hidden]{display:none}.tm-avatar-editor-scope-panel{display:flex;flex-direction:column;gap:5px;padding:7px;border:1px solid color-mix(in srgb,var(--tm-avatar-accent) 34%,transparent);border-radius:10px;background:rgba(127,127,127,.08)}.tm-avatar-editor-scope-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:1px 2px 4px;font-weight:700}.tm-avatar-editor-scope-title small{font-size:10px;font-weight:500;opacity:.64}.tm-avatar-editor-priority{padding:0 2px 4px;font-size:10px;line-height:1.35;opacity:.68}.tm-avatar-editor-scope-option{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:38px;text-align:left;white-space:normal}.tm-avatar-editor-scope-option span{display:flex;min-width:0;flex-direction:column;gap:2px}.tm-avatar-editor-scope-option strong{font-size:12px}.tm-avatar-editor-scope-option small{font-size:10px;opacity:.64}.tm-avatar-editor-scope-option em{font-size:9px;font-style:normal;opacity:.72}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(6,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
                 '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:8px;font-size:12px}.tm-avatar-editor-controls{gap:3px}.tm-avatar-editor-row{grid-template-columns:30px 30px minmax(88px,1fr) 54px 30px;gap:4px;min-height:32px}button{min-height:30px;padding:4px 6px}.tm-avatar-editor-footer{gap:4px}}',
             ].join('');
@@ -12768,13 +12777,14 @@
                 '<label><span>大小每次增加（%）</span><input type="number" min="0.1" max="100" step="0.1" value="' + preferences.scaleStepPercent + '" data-editor-pref="scaleStepPercent"></label>' +
                 '<label><span>位置每次增加（%）</span><input type="number" min="0.1" max="100" step="0.1" value="' + preferences.positionStepPercent + '" data-editor-pref="positionStepPercent"></label>' +
                 '<label><span>倾斜每次增加（°）</span><input type="number" min="0.1" max="180" step="0.1" value="' + preferences.rotationStepDegrees + '" data-editor-pref="rotationStepDegrees"></label>' +
+                '<label class="tm-avatar-editor-setting-toggle"><span>手动输入调整数值</span><input type="checkbox" data-editor-pref="manualInput"' + (preferences.manualInput ? ' checked' : '') + '></label>' +
                 '<label class="tm-avatar-editor-setting-toggle"><span>导入头像时保存到头像库</span><input type="checkbox" data-editor-pref="quickImportToLibrary"' + (preferences.quickImportToLibrary ? ' checked' : '') + '></label>' +
                 '<div class="tm-avatar-editor-import-note">关闭“保存到头像库”后，导入图只在本次调整中使用；保存时会覆盖对应的 SillyTavern 原头像。</div></div>' +
                 '<div class="tm-avatar-editor-controls">' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">大小</span><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="-1" aria-label="缩小">−</button><input class="tm-avatar-editor-range" type="range" min="0.5" max="3" step="0.001" value="1" data-view="scale" aria-label="调整大小"><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="50" max="300" step="0.1" value="100" data-view-number="scale" aria-label="输入大小百分比"><span>%</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="1" aria-label="放大">+</button></div>' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">左右</span><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="-1" aria-label="向左移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="x" aria-label="左右位置"><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="x" aria-label="输入左右百分比"><span>%</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="1" aria-label="向右移动">+</button></div>' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">上下</span><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="-1" aria-label="向上移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="y" aria-label="上下位置"><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="y" aria-label="输入上下百分比"><span>%</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="1" aria-label="向下移动">+</button></div>' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input class="tm-avatar-editor-range" type="range" min="-180" max="180" step="0.1" value="0" data-view="rotate" aria-label="倾斜角度"><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="-180" max="180" step="0.1" value="0" data-view-number="rotate" aria-label="输入倾斜角度"><span>°</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">大小</span><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="-1" aria-label="缩小">−</button><input class="tm-avatar-editor-range" type="range" min="0.5" max="3" step="0.001" value="1" data-view="scale" aria-label="调整大小"><output class="tm-avatar-editor-value" data-view-value="scale">100%</output><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="50" max="300" step="0.1" value="100" data-view-number="scale" aria-label="输入大小百分比"><span>%</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="1" aria-label="放大">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">左右</span><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="-1" aria-label="向左移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="x" aria-label="左右位置"><output class="tm-avatar-editor-value" data-view-value="x">0%</output><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="x" aria-label="输入左右百分比"><span>%</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="1" aria-label="向右移动">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">上下</span><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="-1" aria-label="向上移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="y" aria-label="上下位置"><output class="tm-avatar-editor-value" data-view-value="y">0%</output><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="y" aria-label="输入上下百分比"><span>%</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="1" aria-label="向下移动">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input class="tm-avatar-editor-range" type="range" min="-180" max="180" step="0.1" value="0" data-view="rotate" aria-label="倾斜角度"><output class="tm-avatar-editor-value" data-view-value="rotate">0°</output><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="-180" max="180" step="0.1" value="0" data-view-number="rotate" aria-label="输入倾斜角度"><span>°</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
                 '</div>' + (editor.mode === 'library' && editor.target.kind === 'user' && editor.bindingMode === 'adaptive'
                     ? '<button type="button" class="tm-avatar-editor-bind" data-action="bind-theme" aria-pressed="false"><span>绑定到当前美化</span><small data-bind-theme-hint></small></button>'
                     : '') + '<div class="tm-avatar-editor-scope-panel" data-scope-panel hidden></div><div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">垂直</button><button type="button" data-action="reset">重置</button>' + (editor.mode === 'library' ? '<button type="button" data-action="clear-bindings" title="解除头像绑定">解绑</button>' : '') + '<button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
@@ -12792,6 +12802,8 @@
         }
         function updateToolbar() {
             if (!toolbar || !editor) return;
+            var preferences = editorPreferences();
+            toolbar.classList.toggle('is-manual', preferences.manualInput === true);
             ['import-avatar', 'open-avatar-manager', 'save'].forEach(function (action) {
                 var actionButton = toolbar.querySelector('[data-action="' + action + '"]');
                 if (actionButton) actionButton.disabled = importingEditorAvatar;
@@ -12799,8 +12811,11 @@
             ['scale', 'x', 'y', 'rotate'].forEach(function (name) {
                 var input = toolbar.querySelector('[data-view="' + name + '"]');
                 var numberInput = toolbar.querySelector('[data-view-number="' + name + '"]');
+                var valueOutput = toolbar.querySelector('[data-view-value="' + name + '"]');
+                var displayValue = name === 'rotate' ? round(editor.view[name], 2) : round(editor.view[name] * 100, 2);
                 if (input) input.value = editor.view[name];
-                if (numberInput) numberInput.value = name === 'rotate' ? editor.view[name] : round(editor.view[name] * 100, 2);
+                if (numberInput) numberInput.value = displayValue;
+                if (valueOutput) valueOutput.textContent = displayValue + (name === 'rotate' ? '°' : '%');
             });
             ['flipX', 'flipY'].forEach(function (name) {
                 var action = name === 'flipX' ? 'flip-x' : 'flip-y';
@@ -13373,12 +13388,13 @@
         function persistEditorPreference(input) {
             var preferences = editorPreferences();
             var name = input.getAttribute('data-editor-pref');
-            if (name === 'quickImportToLibrary') preferences[name] = input.checked === true;
+            if (name === 'quickImportToLibrary' || name === 'manualInput') preferences[name] = input.checked === true;
             else preferences[name] = Number(input.value);
             preferences = normalizeEditorPreferences(preferences);
-            if (name in preferences) input.value = preferences[name];
-            updateToolbar();
-            return Promise.resolve(saveEditorPreferences(preferences)).catch(onError);
+            if (name === 'quickImportToLibrary' || name === 'manualInput') input.checked = preferences[name] === true;
+            else if (name in preferences) input.value = preferences[name];
+            if (name === 'manualInput' && toolbar) toolbar.classList.toggle('is-manual', preferences.manualInput === true);
+            return Promise.resolve(saveEditorPreferences(preferences)).then(function () { updateToolbar(); }).catch(onError);
         }
         function onToolbarClick(event) {
             var stepButton = event.target && event.target.closest ? event.target.closest('[data-step-view]') : null;
@@ -13926,7 +13942,7 @@
 })(window);
 /* END MODULE 22/29: src/avatar-runtime.js */
 
-/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:801198ad1268a3b310f4e99165dfbad22a6c89e3827b910a4e16d353358986a2 */
+/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:a67708adc5bd77c9361e76eece16b0647ca57857af6242965634f5fe92b22bb1 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -13944,13 +13960,13 @@
         '.tm-app-page-avatars{display:block;place-items:initial;min-width:0;overflow:hidden;padding:0}',
         '.tm-avatar-page{height:100%;min-width:0;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden}',
         '.tm-avatar-page-notice{flex:0 0 auto;margin:9px 14px 0;padding:8px 10px;border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));border-radius:var(--tm-control-radius,8px);background:var(--tm-control-bg,rgba(127,127,127,.06));color:inherit;font-size:.8em}.tm-avatar-page-notice[data-kind="loading"] i{display:inline-block;margin-right:6px;animation:tm-spin 1s linear infinite}.tm-avatar-page-notice[data-kind="error"]{border-color:currentColor}',
-        '.tm-avatar-page-grid{min-width:0;min-height:0;flex:1 1 auto;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));grid-auto-flow:row dense;grid-auto-rows:max-content;align-content:start;align-items:start;gap:9px;padding:12px}',
-        '.tm-avatar-page-card,.tm-avatar-native-slot{min-width:0;width:100%;height:auto;aspect-ratio:1;align-self:start;position:relative;overflow:hidden;border:var(--tm-card-border-style,2px solid var(--tm-card-border,transparent));border-radius:var(--tm-card-radius,10px);background:var(--tm-card-bg,rgba(127,127,127,.06));box-shadow:var(--tm-card-shadow,none)}.tm-avatar-page-card{width:100%;aspect-ratio:1;align-self:start;cursor:pointer}.tm-avatar-page-card:focus-visible,.tm-avatar-native-slot:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf);outline-offset:2px}',
-        '.tm-avatar-page-thumb{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;background:var(--tm-control-bg,rgba(127,127,127,.1))}',
+        '.tm-avatar-page-grid{min-width:0;min-height:0;flex:1 1 auto;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));grid-auto-flow:row dense;grid-auto-rows:max-content;align-content:start;align-items:start;gap:9px;padding:12px;touch-action:pan-x pan-y!important;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch}',
+        '.tm-avatar-page-card,.tm-avatar-native-slot{min-width:0;width:100%;height:auto;aspect-ratio:1;align-self:start;position:relative;overflow:hidden;border:var(--tm-card-border-style,2px solid var(--tm-card-border,transparent));border-radius:var(--tm-card-radius,10px);background:var(--tm-card-bg,rgba(127,127,127,.06));box-shadow:var(--tm-card-shadow,none);touch-action:pan-x pan-y!important}.tm-avatar-page-card{width:100%;aspect-ratio:1;align-self:start;cursor:pointer;content-visibility:auto;contain-intrinsic-size:112px 112px}.tm-avatar-page-card:focus-visible,.tm-avatar-native-slot:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf);outline-offset:2px}',
+        '.tm-avatar-page-thumb{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;background:var(--tm-control-bg,rgba(127,127,127,.1));touch-action:pan-x pan-y!important;-webkit-user-drag:none}',
         '.tm-avatar-native-slot{display:grid;place-items:center;cursor:pointer;color:inherit}.tm-avatar-native-slot>i{font-size:2.15em;opacity:.16}.tm-avatar-native-slot:hover>i{opacity:.27;color:var(--SmartThemeQuoteColor,#7c6daf)}',
         '.tm-avatar-card-active,.tm-avatar-card-check{position:absolute;right:7px;top:7px;z-index:2;width:23px;height:23px;place-items:center;border-radius:50%;background:rgba(0,0,0,.52);color:#fff;border:1px solid rgba(255,255,255,.55)}.tm-avatar-card-active{display:grid;font-size:.68em}.tm-avatar-card-check{display:none}.tm-avatar-page.is-batch .tm-avatar-card-active{display:none}.tm-avatar-page.is-batch .tm-avatar-card-check{display:grid}.tm-avatar-page-card.is-active{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-avatar-page-card.batch-sel{border-color:var(--SmartThemeQuoteColor,#7c6daf)}.tm-avatar-page-card.batch-sel .tm-avatar-card-check{background:var(--SmartThemeQuoteColor,#7c6daf)}',
         '.tm-avatar-page-loading,.tm-avatar-page-empty{grid-column:1/-1;align-self:center;justify-self:center;text-align:center}.tm-avatar-page-loading{padding:24px 16px;opacity:.55}.tm-avatar-page-empty{padding:18px 12px;font-size:.78em;opacity:.48}',
-        '.tm-avatar-series-inline{grid-column:span var(--tm-avatar-series-size,2);min-width:0;display:grid;grid-template-columns:repeat(var(--tm-avatar-series-size,2),minmax(0,1fr));gap:9px}.tm-avatar-series-block{grid-column:1/-1;min-width:0;position:relative;overflow:hidden}.tm-avatar-series-track{display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - (var(--tm-avatar-series-cols,3) - 1)*9px)/var(--tm-avatar-series-cols,3));gap:9px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}.tm-avatar-series-track::-webkit-scrollbar{display:none}.tm-avatar-series-block.is-expanded{overflow:visible}.tm-avatar-series-block.is-expanded .tm-avatar-series-track{grid-auto-flow:row;grid-auto-columns:initial;grid-template-columns:repeat(var(--tm-avatar-series-cols,3),minmax(0,1fr));overflow:visible}',
+        '.tm-avatar-series-inline{grid-column:span var(--tm-avatar-series-size,2);min-width:0;display:grid;grid-template-columns:repeat(var(--tm-avatar-series-size,2),minmax(0,1fr));gap:9px}.tm-avatar-series-block{grid-column:1/-1;min-width:0;position:relative;overflow:hidden}.tm-avatar-series-track{display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - (var(--tm-avatar-series-cols,3) - 1)*9px)/var(--tm-avatar-series-cols,3));gap:9px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x pan-y!important}.tm-avatar-series-track::-webkit-scrollbar{display:none}.tm-avatar-series-block.is-expanded{overflow:visible}.tm-avatar-series-block.is-expanded .tm-avatar-series-track{grid-auto-flow:row;grid-auto-columns:initial;grid-template-columns:repeat(var(--tm-avatar-series-cols,3),minmax(0,1fr));overflow:visible}',
         '.tm-avatar-series-controls{position:absolute;right:6px;top:6px;z-index:4;display:flex;align-items:center;gap:4px;opacity:0;visibility:hidden;transform:translateY(-3px);transition:.18s;pointer-events:none}.tm-avatar-series-block.is-interacting .tm-avatar-series-controls,.tm-avatar-series-controls:focus-within{opacity:1;visibility:visible;transform:none;pointer-events:auto}.tm-avatar-series-control{width:32px!important;height:32px!important;min-width:32px!important;min-height:32px!important;box-sizing:border-box!important;display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important;line-height:1!important;border:1px solid rgba(255,255,255,.28);border-radius:9px;background:rgba(0,0,0,.58);color:#fff;cursor:pointer}.tm-avatar-series-control>i{display:block!important;width:1em!important;height:1em!important;margin:0!important;padding:0!important;line-height:1!important;text-align:center!important;vertical-align:0!important}.tm-avatar-series-control>i::before{display:block;line-height:1}',
         '.tm-avatar-manage-summary{display:flex;align-items:center;gap:10px;margin-bottom:10px}.tm-avatar-manage-thumb{width:54px;height:54px;border-radius:10px;object-fit:cover;background:rgba(127,127,127,.1)}.tm-avatar-manage-summary>span{display:flex;min-width:0;flex-direction:column;gap:3px}.tm-avatar-manage-summary small{opacity:.5}.tm-avatar-category-actions{display:flex;gap:4px}.tm-avatar-category-actions button{width:30px;height:30px;padding:0}',
         '@media(max-width:430px){.tm-avatar-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:10px}.tm-avatar-page-notice{margin:8px 10px 0}.tm-avatar-series-track{gap:7px;grid-auto-columns:calc((100% - (var(--tm-avatar-series-cols,3) - 1)*7px)/var(--tm-avatar-series-cols,3))}}'
@@ -14040,7 +14056,7 @@
         function nativeSlotHtml() { return '<button type="button" class="tm-avatar-native-slot" data-avatar-action="native" aria-label="调整原头像"><i class="fa-regular fa-circle-user" aria-hidden="true"></i></button>'; }
         function activeRank(id) { var index = activeAvatarIds.indexOf(id); return index === -1 ? Number.MAX_SAFE_INTEGER : index; }
         function syncActiveAvatarIds() { var current = runtime && typeof runtime.getActiveAvatarIds === 'function' ? runtime.getActiveAvatarIds() : {}; activeAvatarIds = [current && current.user, current && current.character].filter(function (id, index, list) { return id && list.indexOf(id) === index; }); }
-        function cardHtml(asset) { var selected = batchSelected.has(asset.id), active = activeRank(asset.id) !== Number.MAX_SAFE_INTEGER; return '<article class="tm-avatar-page-card' + (active ? ' is-active' : '') + (selected ? ' batch-sel' : '') + '" data-avatar-id="' + esc(asset.id) + '" tabindex="0" role="button" aria-label="使用头像 ' + esc(asset.name) + '"><img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" alt="">' + (active ? '<span class="tm-avatar-card-active" title="当前正在使用"><i class="fa-solid fa-check"></i></span>' : '') + '<span class="tm-avatar-card-check"><i class="fa-solid ' + (selected ? 'fa-check' : 'fa-plus') + '"></i></span></article>'; }
+        function cardHtml(asset) { var selected = batchSelected.has(asset.id), active = activeRank(asset.id) !== Number.MAX_SAFE_INTEGER; return '<article class="tm-avatar-page-card' + (active ? ' is-active' : '') + (selected ? ' batch-sel' : '') + '" data-avatar-id="' + esc(asset.id) + '" tabindex="0" role="button" aria-label="使用头像 ' + esc(asset.name) + '"><img class="tm-avatar-page-thumb" src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-image-key="' + esc(asset.id) + '" alt="" draggable="false" decoding="async">' + (active ? '<span class="tm-avatar-card-active" title="当前正在使用"><i class="fa-solid fa-check"></i></span>' : '') + '<span class="tm-avatar-card-check"><i class="fa-solid ' + (selected ? 'fa-check' : 'fa-plus') + '"></i></span></article>'; }
         function countGridTracks(value) { value = String(value || '').trim(); if (/^repeat\(\s*auto-(?:fill|fit)/i.test(value)) return 0; var repeat = value.match(/^repeat\(\s*(\d+)/i); if (repeat) return Number(repeat[1]); var depth = 0, count = 0, token = false; value.split('').forEach(function (character) { if (/\s/.test(character) && depth === 0) { if (token) { count += 1; token = false; } return; } token = true; if (character === '(') depth += 1; else if (character === ')' && depth > 0) depth -= 1; }); return count + (token ? 1 : 0); }
         function columns() { var grid = root && root.querySelector('[data-avatar-grid]'), width = grid && grid.clientWidth || 0; if (grid && typeof global.getComputedStyle === 'function') { var template = global.getComputedStyle(grid).gridTemplateColumns, actual = template && template !== 'none' ? countGridTracks(template) : 0; if (actual > 0) return actual; } if (width <= 430) return 3; return Math.max(1, Math.floor((Math.max(112, width - 24) + 9) / 121)); }
         function matchingAssets(state) { var lowered = query.toLocaleLowerCase(), mode = library.ensureState(state).sortMode; var sorted = assets.filter(function (asset) { var meta = library.peekMeta(state, asset.id); if (category !== '__all__' && (category === '__uncategorized__' ? !!meta.category : meta.category !== category)) return false; if (!lowered) return true; var series = library.findSeries(state, asset.id); return [meta.category].concat(meta.tags, series ? [series.name] : []).some(function (text) { return String(text || '').toLocaleLowerCase().indexOf(lowered) !== -1; }); }).sort(function (a, b) { return library.compareAssets(state, a, b, mode); }); var stableIndex = new Map(sorted.map(function (asset, index) { return [asset.id, index]; })); return sorted.sort(function (a, b) { var priority = activeRank(a.id) - activeRank(b.id); return priority || stableIndex.get(a.id) - stableIndex.get(b.id); }); }
@@ -15944,7 +15960,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:7394af7db6cf7654cf323b64f1c63760284c5ce4b3c0eeb686e215b5eea9fb31 */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:180600ea931eec5b44dd73a40d94d6f5b68b9d002e83404508f022d2dc21c2b0 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16552,7 +16568,7 @@
             var max = name === 'rotationStepDegrees' ? 180 : 100;
             d.avatarEditorPreferences[name] = Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : avatarEditorDefaults[name];
         });
-        delete d.avatarEditorPreferences.manualInput;
+        d.avatarEditorPreferences.manualInput = d.avatarEditorPreferences.manualInput === true;
         d.avatarEditorPreferences.quickImportToLibrary = d.avatarEditorPreferences.quickImportToLibrary !== false;
         if (avatarLibraryApi) avatarLibraryApi.ensureState(d);
         var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
@@ -16612,7 +16628,7 @@
             followThemePreviewShape: false,
             simplifyGridText: false,
             autoHideHeader: false,
-            avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, quickImportToLibrary: true },
+            avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, manualInput: false, quickImportToLibrary: true },
             dayNight: { version: 1, pairs: Object.create(null) },
             series: { version: 1, groups: Object.create(null) },
             bindings: { version: 2, characters: Object.create(null), chats: Object.create(null), manualTheme: '', manualTarget: null },

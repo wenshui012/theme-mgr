@@ -370,7 +370,7 @@ function pageFixture(seed = [], bindings = [], options = {}) {
     return { page, doc, pageRoot, store, uiData, lastDialog: () => lastDialog, stats: () => ({ disconnected, observed }) };
 }
 test('11 Avatar Page mount and unmount own their loader and style', async () => { const f=pageFixture(); await f.page.mount(); assert.equal(f.page.getState().mounted,true); f.page.unmount(); assert.equal(f.page.getState().mounted,false); assert.ok(f.stats().disconnected >= 1); });
-test('12 avatar grid uses thumbnail lazy loader rather than main image', async () => { const f=pageFixture([asset()]); await f.page.mount(); assert.match(f.pageRoot.grid.innerHTML,/placeholder/); assert.doesNotMatch(f.pageRoot.grid.innerHTML,/main-a/); assert.ok(f.stats().observed >= 1); });
+test('12 avatar grid uses thumbnail lazy loader rather than main image', async () => { const f=pageFixture([asset()]); await f.page.mount(); assert.match(f.pageRoot.grid.innerHTML,/placeholder/); assert.match(f.pageRoot.grid.innerHTML,/draggable="false"/); assert.doesNotMatch(f.pageRoot.grid.innerHTML,/main-a/); assert.ok(f.stats().observed >= 1); });
 test('13 successful import renders the new card without a selection footer', async () => { const f=pageFixture(); await f.page.mount(); await f.page.importFiles([{name:'new',type:'image/jpeg'}]); assert.equal(f.page.getState().count,1); assert.doesNotMatch(f.pageRoot.grid.innerHTML,/tm-avatar-page-actions/); });
 test('14 current character target uses stable character avatar key', () => assert.equal(modules.avatarRuntime.getContextInfo({characters:[{avatar:'x.png'}],characterId:0}).character.key,'character:x.png'));
 test('15 User target uses a stable non-DOM global key', () => assert.equal(modules.avatarRuntime.getContextInfo({name1:'U'}).user.key,'user:global'));
@@ -386,8 +386,9 @@ test('message floors resolve group characters by original_avatar rather than dis
 });
 test('avatar editor preferences clamp steps and default quick imports to the library', () => {
     assert.deepEqual({ ...modules.avatarRuntime.normalizeEditorPreferences({ scaleStepPercent: 500, positionStepPercent: 0, rotationStepDegrees: 2.5 }) }, {
-        scaleStepPercent: 100, positionStepPercent: 0.1, rotationStepDegrees: 2.5, quickImportToLibrary: true,
+        scaleStepPercent: 100, positionStepPercent: 0.1, rotationStepDegrees: 2.5, manualInput: false, quickImportToLibrary: true,
     });
+    assert.equal(modules.avatarRuntime.normalizeEditorPreferences({ manualInput: true }).manualInput, true);
 });
 test('an in-panel library import restores chat and theme scope keys from a native floor edit', async () => {
     const imported = asset('imported');
@@ -989,6 +990,25 @@ test('53 persisted native character adjustment reapplies after reload and across
     assert.match(f.chars[0].image.getAttribute('style'), /object-view-box:inset\(16\.6667% 20\.8333% 0% -4\.1667%\)!important/);
     assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
 });
+test('theme changes release the previous native avatar shape before sampling the new theme', async () => {
+    const f = runtimeFixture({ seed: { nativeViews: [
+        { targetKey: 'character:char.png', sourceKey: 'char.png', view: { scale: 1.2 } },
+    ] } });
+    await f.runtime.start();
+    assert.match(f.chars[0].image.getAttribute('style'), /border-radius:50%!important/);
+    f.chars.forEach((entry) => {
+        entry.image.computed.borderRadius = '0px';
+        entry.image.computed.clipPath = 'none';
+        entry.image.computed.webkitMaskImage = 'none';
+        entry.image.computed.maskImage = 'none';
+    });
+    f.setTheme('Square');
+    await f.runtime.reconcile();
+    assert.match(f.chars[0].image.getAttribute('style'), /border-radius:0px!important/);
+    assert.doesNotMatch(f.chars[0].image.getAttribute('style'), /border-radius:50%!important/);
+    assert.doesNotMatch(f.chars[0].image.getAttribute('style'), /clip-path:circle/);
+    assert.doesNotMatch(f.chars[0].image.getAttribute('style'), /mask-image:url\(mask\.png\)/);
+});
 test('54 a different character avatar identity does not inherit the previous original-image adjustment', async () => {
     const context = { characters: [{ avatar: 'new-char.png', name: 'Char' }], characterId: 0, groupId: null, name1: 'User', eventSource: { on() {}, removeListener() {} }, eventTypes: {} };
     const f = runtimeFixture({ context, seed: { nativeViews: [
@@ -1147,6 +1167,8 @@ test('64 avatar grids use definite square items without implicit-row compression
     assert.match(css, /grid-auto-rows:max-content/);
     assert.match(css, /align-items:start/);
     assert.match(css, /tm-avatar-page-card\{[^}]*width:100%[^}]*aspect-ratio:1[^}]*align-self:start/);
+    assert.match(css, /tm-avatar-page-grid\{[^}]*touch-action:pan-x pan-y!important/);
+    assert.match(css, /tm-avatar-page-card\{[^}]*content-visibility:auto[^}]*contain-intrinsic-size:112px 112px/);
     assert.match(css, /tm-avatar-page-thumb\{[^}]*position:absolute[^}]*inset:0/);
 });
 
@@ -1813,8 +1835,11 @@ test('94 Avatar adjustment opens directly and its toolbar owns four save scopes 
     assert.match(runtimeSource, /data-action="open-avatar-manager"/);
     assert.match(runtimeSource, /data-action="import-avatar"/);
     assert.match(runtimeSource, /data-editor-pref="quickImportToLibrary"/);
+    assert.match(runtimeSource, /data-editor-pref="manualInput"/);
     assert.match(runtimeSource, /data-view-number="scale"/);
-    assert.doesNotMatch(runtimeSource, /manualInput|is-manual|手动输入调整数值/);
+    assert.match(runtimeSource, /data-view-value="scale"/);
+    assert.match(runtimeSource, /tm-avatar-editor-bar\.is-manual \.tm-avatar-editor-number-wrap\{display:flex\}/);
+    assert.doesNotMatch(runtimeSource, /is-manual \.tm-avatar-editor-range\{display:none\}/);
     assert.match(runtimeSource, /TT User 会按当前调整生成固定 2:3 成品/);
     assert.match(runtimeSource, /本地酒馆仍完整覆盖母图/);
 });
