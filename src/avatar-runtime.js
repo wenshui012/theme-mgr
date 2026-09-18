@@ -21,6 +21,14 @@
     var THEME_USER_CANDIDATE_PREFIX = USER_TARGET_KEY + ':theme-avatar:';
     var THEME_CHARACTER_CANDIDATE_PREFIX = 'theme-avatar-candidate:';
     var CHAT_BINDING_PREFIX = 'chat-integrity:';
+    var MESSAGE_BUTTON_CLASS = 'tm-avatar-message-edit';
+    var DEFAULT_EDITOR_PREFERENCES = {
+        scaleStepPercent: 1,
+        positionStepPercent: 1,
+        rotationStepDegrees: 1,
+        manualInput: false,
+        quickImportToLibrary: true,
+    };
 
     function clone(value) { return value == null ? value : JSON.parse(JSON.stringify(value)); }
     function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -119,6 +127,24 @@
                 ? clean(context.getCurrentChatId())
                 : clean(context.chatId);
         } catch (_) { chatId = clean(context.chatId); }
+        var characterTargets = characters.map(function (item) {
+            var avatar = item && clean(item.avatar);
+            if (!avatar) return null;
+            return {
+                kind: 'character',
+                key: 'character:' + avatar,
+                label: clean(item.name) || avatar,
+                characterAvatar: avatar,
+            };
+        }).filter(Boolean);
+        if (isGroup && Array.isArray(context.chat)) {
+            var activeGroupAvatars = new Set(context.chat.map(function (message) {
+                return message && message.is_user !== true ? clean(message.original_avatar) : '';
+            }).filter(Boolean));
+            if (activeGroupAvatars.size) characterTargets = characterTargets.filter(function (target) {
+                return activeGroupAvatars.has(target.characterAvatar);
+            });
+        }
         return {
             isGroup: isGroup,
             chatKey: chatKey,
@@ -130,6 +156,7 @@
                 label: characterName || characterAvatar,
                 characterAvatar: characterAvatar,
             } : null,
+            characters: characterTargets,
             user: {
                 kind: 'user',
                 key: 'user:global',
@@ -137,18 +164,55 @@
             },
         };
     }
+    function normalizeEditorPreferences(value) {
+        value = value && typeof value === 'object' ? value : {};
+        function number(name, fallback, min, max) {
+            var result = Number(value[name]);
+            if (!Number.isFinite(result)) result = fallback;
+            return round(Math.max(min, Math.min(max, result)), 2);
+        }
+        return {
+            scaleStepPercent: number('scaleStepPercent', DEFAULT_EDITOR_PREFERENCES.scaleStepPercent, 0.1, 100),
+            positionStepPercent: number('positionStepPercent', DEFAULT_EDITOR_PREFERENCES.positionStepPercent, 0.1, 100),
+            rotationStepDegrees: number('rotationStepDegrees', DEFAULT_EDITOR_PREFERENCES.rotationStepDegrees, 0.1, 180),
+            manualInput: value.manualInput === true,
+            quickImportToLibrary: value.quickImportToLibrary !== false,
+        };
+    }
+    function messageRecord(context, message) {
+        var index = Number.parseInt(clean(getAttribute(message, 'mesid')), 10);
+        return Number.isInteger(index) && context && Array.isArray(context.chat) ? context.chat[index] || null : null;
+    }
+    function targetForMessage(context, message) {
+        context = context || {};
+        if (!message) return null;
+        var record = messageRecord(context, message);
+        var isUser = record ? record.is_user === true : clean(getAttribute(message, 'is_user')).toLowerCase() === 'true';
+        var isSystem = record ? record.is_system === true : clean(getAttribute(message, 'is_system')).toLowerCase() === 'true';
+        if (isSystem) return null;
+        var info = getContextInfo(context);
+        if (isUser) return info.user;
+        if (!info.isGroup) return info.character;
+        var avatar = clean(record && record.original_avatar);
+        if (!avatar) return null;
+        return info.characters.find(function (target) { return target.characterAvatar === avatar; }) || null;
+    }
+    function messageMatchesTarget(context, message, target) {
+        var resolved = targetForMessage(context, message);
+        return Boolean(resolved && target && resolved.key === target.key);
+    }
     function directImage(avatar) {
         if (!avatar || typeof avatar.querySelector !== 'function') return null;
         try { return avatar.querySelector(':scope > img') || avatar.querySelector('img'); }
         catch (_) { return avatar.querySelector('img'); }
     }
-    function messageImages(doc, target) {
+    function messageImages(doc, target, context) {
         var chat = doc && doc.getElementById && doc.getElementById('chat');
         if (!chat || !target || typeof chat.querySelectorAll !== 'function') return [];
         return Array.prototype.slice.call(chat.querySelectorAll('.mes')).map(function (message) {
             var isUser = clean(getAttribute(message, 'is_user')).toLowerCase() === 'true';
             var isSystem = clean(getAttribute(message, 'is_system')).toLowerCase() === 'true';
-            var match = target.kind === 'user' ? isUser : (!isUser && !isSystem);
+            var match = context ? messageMatchesTarget(context, message, target) : (target.kind === 'user' ? isUser : (!isUser && !isSystem));
             if (!match) return null;
             var avatar = message.querySelector('.avatar');
             var image = directImage(avatar);
@@ -345,6 +409,11 @@
         var getThemeName = options.getThemeName || function () { return ''; };
         var onError = options.onError || function () {};
         var overwriteHostAvatar = options.overwriteHostAvatar;
+        var openAvatarManager = options.openAvatarManager;
+        var importAvatarFileToLibrary = options.importAvatarFileToLibrary;
+        var processAvatarFile = options.processAvatarFile;
+        var getEditorPreferences = options.getEditorPreferences || function () { return DEFAULT_EDITOR_PREFERENCES; };
+        var saveEditorPreferences = options.saveEditorPreferences || function () { return Promise.resolve(); };
         var bakesUserOriginalView = options.bakesUserOriginalView === true;
         var preloadHostImage = options.preloadHostImage || function (source) {
             return new Promise(function (resolve) {
@@ -430,6 +499,12 @@
         var dragOrigin = null;
         var temporaryUserOverride = null;
         var hostSourceTargets = new Set();
+        var importingEditorAvatar = false;
+
+        function editorPreferences() {
+            try { return normalizeEditorPreferences(getEditorPreferences()); }
+            catch (_) { return normalizeEditorPreferences(null); }
+        }
 
         function syncRuntimeAttribute(element, name, value) {
             if (!syncExactAttribute(element, name, value)) return false;
@@ -812,22 +887,22 @@
             });
         }
         function desiredForBinding(target, binding, asset) {
-            return messageImages(doc, target).map(function (entry) { return { entry: entry, binding: binding, asset: asset }; });
+            return messageImages(doc, target, contextSafe()).map(function (entry) { return { entry: entry, binding: binding, asset: asset }; });
         }
         function desiredForNativeView(target, record, asset) {
-            return messageImages(doc, target).map(function (entry) {
+            return messageImages(doc, target, contextSafe()).map(function (entry) {
                 return { entry: entry, binding: record, asset: asset, native: true, target: target };
             });
         }
         function desiredForHostSource(target, record) {
-            return messageImages(doc, target).map(function (entry) {
+            return messageImages(doc, target, contextSafe()).map(function (entry) {
                 var originalSource = hostOriginalSourceForEntry(entry);
                 var loaded = originalSource && hostImageCache.get(originalSource);
                 return { entry: entry, binding: record, hostSource: true, target: target, highResolutionSource: loaded && loaded.loadedSource || '' };
             });
         }
         function resolveHostSourcePlan(target, intent) {
-            var originals = Array.from(new Set(messageImages(doc, target).map(hostOriginalSourceForEntry).filter(Boolean)));
+            var originals = Array.from(new Set(messageImages(doc, target, contextSafe()).map(hostOriginalSourceForEntry).filter(Boolean)));
             if (!originals.length) return Promise.resolve(intent ? { target: target, binding: intent, asset: null, native: false, hostSource: true } : null);
             return Promise.all(originals.map(loadHostOriginal)).then(function () {
                 return { target: target, binding: intent || { targetKey: target.key, mode: 'host-source' }, asset: null, native: false, hostSource: true };
@@ -851,7 +926,7 @@
         }
         function resolveRuntimeDesired(requestedThemeKey, requestedChatKey) {
             var info = targets();
-            var targetList = [info.character, info.user].filter(Boolean);
+            var targetList = (info.isGroup ? info.characters : [info.character]).concat([info.user]).filter(Boolean);
             return Promise.all(targetList.map(function (target) {
                 return getBindingForTarget(target, requestedThemeKey, requestedChatKey).then(function (binding) {
                     if (binding) {
@@ -888,7 +963,7 @@
                                 });
                             });
                         }
-                        var representative = messageImages(doc, target)[0] || null;
+                        var representative = messageImages(doc, target, contextSafe())[0] || null;
                         var sourceKey = nativeSourceKey(target, representative);
                         if (sourceKey && canonicalNativeSourceKey(target, record.sourceKey) !== sourceKey) {
                             return putHostSourceIntent(target.key).then(function () {
@@ -918,7 +993,7 @@
         }
         function syncEditorInstances() {
             if (!editor) return false;
-            var entries = messageImages(doc, editor.target);
+            var entries = messageImages(doc, editor.target, contextSafe());
             var lightweightNative = editor.mode === 'native' && editor.nativeKnownImages;
             if (!editor.representative || editor.representative.image.isConnected === false) {
                 cancelEdit('target-disconnected');
@@ -997,8 +1072,56 @@
             sequence += 1;
             scheduleReconcile(delay);
         }
+        function removeMessageButtons() {
+            if (!doc || typeof doc.querySelectorAll !== 'function') return;
+            Array.prototype.slice.call(doc.querySelectorAll('.' + MESSAGE_BUTTON_CLASS)).forEach(function (button) {
+                if (button.parentNode) button.parentNode.removeChild(button);
+            });
+        }
+        function beginMessageEdit(message) {
+            var context = contextSafe();
+            var target = targetForMessage(context, message);
+            if (!target) return Promise.reject(Object.assign(new Error('无法识别这条消息对应的头像'), { code: 'TARGET_UNAVAILABLE' }));
+            var cap = capability(target.kind, target, message);
+            if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
+            return getBindingForTarget(target, currentThemeKey(), currentChatBindingKey()).then(function (binding) {
+                if (binding && binding.avatarId) {
+                    return beginEdit({ target: target, representative: cap.representative, avatarId: binding.avatarId, bindingMode: 'deferred' });
+                }
+                return beginNativeEdit({ target: target, representative: cap.representative });
+            });
+        }
+        function syncMessageButtons() {
+            var chat = doc.getElementById && doc.getElementById('chat');
+            if (!chat || typeof chat.querySelectorAll !== 'function') return;
+            var context = contextSafe();
+            Array.prototype.slice.call(chat.querySelectorAll('.mes')).forEach(function (message) {
+                if (!targetForMessage(context, message) || typeof message.querySelector !== 'function') return;
+                if (message.querySelector('.' + MESSAGE_BUTTON_CLASS)) return;
+                var buttons = message.querySelector('.mes_buttons');
+                if (!buttons) return;
+                var button = doc.createElement('div');
+                button.className = 'mes_button ' + MESSAGE_BUTTON_CLASS + ' fa-solid fa-user-pen';
+                button.setAttribute('role', 'button');
+                button.setAttribute('tabindex', '0');
+                button.setAttribute('title', '调整这条消息对应的头像');
+                button.setAttribute('aria-label', '调整这条消息对应的头像');
+                function activate(event) {
+                    if (event && event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+                    if (event) { event.preventDefault(); event.stopPropagation(); }
+                    beginMessageEdit(message).catch(onError);
+                }
+                button.addEventListener('click', activate);
+                button.addEventListener('keydown', activate);
+                ['pointerdown', 'mousedown', 'touchstart'].forEach(function (name) {
+                    button.addEventListener(name, function (event) { event.stopPropagation(); }, { passive: true });
+                });
+                buttons.appendChild(button);
+            });
+        }
         function observeChat() {
             var chat = doc.getElementById && doc.getElementById('chat');
+            syncMessageButtons();
             if (chat === observedChat) return;
             if (chatObserver) chatObserver.disconnect();
             observedChat = chat;
@@ -1024,9 +1147,11 @@
                 });
                 if (hostSourceChanged) {
                     invalidateHostSourceCache();
+                    syncMessageButtons();
                     scheduleReconcile(0);
                     return;
                 }
+                syncMessageButtons();
                 applyCachedPlans();
                 scheduleReconcile(0);
             });
@@ -1089,15 +1214,17 @@
             hostImageCache.clear();
             nativeImageCache.clear();
             sequence += 1;
+            removeMessageButtons();
             restoreAll();
         }
-        function capability(kind) {
+        function capability(kind, targetOverride, representativeMessage) {
             var info = targets();
-            var target = kind === 'character' ? info.character : info.user;
-            if (kind === 'character' && info.isGroup) return { available: false, reason: '当前群聊暂不支持角色头像原位调整', target: null };
+            var target = targetOverride || (kind === 'character' ? info.character : info.user);
+            if (kind === 'character' && info.isGroup && !targetOverride) return { available: false, reason: '请从群聊中对应角色的消息楼层打开头像调整', target: null };
             if (!target) return { available: false, reason: kind === 'character' ? '无法识别当前角色' : '无法识别当前 User', target: null };
-            var entries = messageImages(doc, target);
-            var visibleRepresentative = chooseRepresentative(entries, win);
+            var entries = messageImages(doc, target, contextSafe());
+            var requestedRepresentative = representativeMessage && entries.find(function (entry) { return entry.message === representativeMessage; });
+            var visibleRepresentative = requestedRepresentative || chooseRepresentative(entries, win);
             var representative = visibleRepresentative || entries[entries.length - 1] || null;
             if (!representative) return { available: false, reason: '当前聊天中还没有可调整的目标头像', target: target, count: 0 };
             return { available: true, reason: '', target: target, count: entries.length, representative: representative, visible: !!visibleRepresentative };
@@ -1167,6 +1294,7 @@
             toolbarViewport = null;
         }
         function ensureEditorUi() {
+            var preferences = editorPreferences();
             styleNode = doc.createElement('style');
             styleNode.id = STYLE_ID;
             styleNode.textContent = [
@@ -1182,7 +1310,8 @@
             toolbarStyle.textContent = [
                 ':host{--tm-avatar-accent:var(--SmartThemeQuoteColor,#7c6daf);--tm-avatar-text:var(--SmartThemeBodyColor,#eee);--tm-avatar-bg:var(--SmartThemeBlurTintColor,var(--SmartThemeBackgroundColor,#16161a))}',
                 '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
-                '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 44px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:.76}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}',
+                '.tm-avatar-editor-tools{display:flex;justify-content:flex-end;gap:5px}.tm-avatar-editor-tools button{display:inline-flex;align-items:center;gap:5px}.tm-avatar-editor-settings[hidden]{display:none}.tm-avatar-editor-settings{display:grid;grid-template-columns:1fr 88px;gap:7px 10px;align-items:center;padding:8px;border:1px solid rgba(127,127,127,.24);border-radius:10px;background:rgba(127,127,127,.07)}.tm-avatar-editor-settings label{display:contents}.tm-avatar-editor-settings input[type=number]{box-sizing:border-box;width:100%;min-width:0;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);color:inherit;padding:5px}.tm-avatar-editor-setting-toggle{grid-column:1/-1;display:flex!important;align-items:center;justify-content:space-between;gap:8px}.tm-avatar-editor-setting-toggle input{width:auto!important}.tm-avatar-editor-import-note{grid-column:1/-1;font-size:10px;line-height:1.35;opacity:.68}',
+                '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 52px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:.76}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}.tm-avatar-editor-number{display:none;box-sizing:border-box;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);color:inherit;padding:5px;text-align:right}.tm-avatar-editor-bar.is-manual .tm-avatar-editor-range{display:none}.tm-avatar-editor-bar.is-manual .tm-avatar-editor-number{display:block}',
                 'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}button:disabled{cursor:default;opacity:.38}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-bind{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}.tm-avatar-editor-bind span{font-weight:650}.tm-avatar-editor-bind small{font-size:10px;opacity:.62;text-align:right}.tm-avatar-editor-bind.is-active{border-color:var(--tm-avatar-accent);background:color-mix(in srgb,var(--tm-avatar-accent) 18%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-scope-panel[hidden]{display:none}.tm-avatar-editor-scope-panel{display:flex;flex-direction:column;gap:5px;padding:7px;border:1px solid color-mix(in srgb,var(--tm-avatar-accent) 34%,transparent);border-radius:10px;background:rgba(127,127,127,.08)}.tm-avatar-editor-scope-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:1px 2px 4px;font-weight:700}.tm-avatar-editor-scope-title small{font-size:10px;font-weight:500;opacity:.64}.tm-avatar-editor-priority{padding:0 2px 4px;font-size:10px;line-height:1.35;opacity:.68}.tm-avatar-editor-scope-option{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:38px;text-align:left;white-space:normal}.tm-avatar-editor-scope-option span{display:flex;min-width:0;flex-direction:column;gap:2px}.tm-avatar-editor-scope-option strong{font-size:12px}.tm-avatar-editor-scope-option small{font-size:10px;opacity:.64}.tm-avatar-editor-scope-option em{font-size:9px;font-style:normal;opacity:.72}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(6,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
                 '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:8px;font-size:12px}.tm-avatar-editor-controls{gap:3px}.tm-avatar-editor-row{grid-template-columns:30px 30px minmax(92px,1fr) 40px 30px;gap:4px;min-height:32px}button{min-height:30px;padding:4px 6px}.tm-avatar-editor-footer{gap:4px}}',
             ].join('');
@@ -1191,11 +1320,19 @@
             toolbar.className = 'tm-avatar-editor-bar';
             toolbar.setAttribute('role', 'dialog');
             toolbar.setAttribute('aria-label', '头像调整');
-            toolbar.innerHTML = '<div class="tm-avatar-editor-controls">' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">大小</span><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="-1" aria-label="缩小">−</button><input type="range" min="0.5" max="3" step="0.05" value="1" data-view="scale" aria-label="调整大小"><output class="tm-avatar-editor-value" data-view-output="scale">100%</output><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="1" aria-label="放大">+</button></div>' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">左右</span><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="-1" aria-label="向左移动">−</button><input type="range" min="-1" max="1" step="0.01" value="0" data-view="x" aria-label="左右位置"><output class="tm-avatar-editor-value" data-view-output="x">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="1" aria-label="向右移动">+</button></div>' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">上下</span><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="-1" aria-label="向上移动">−</button><input type="range" min="-1" max="1" step="0.01" value="0" data-view="y" aria-label="上下位置"><output class="tm-avatar-editor-value" data-view-output="y">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="1" aria-label="向下移动">+</button></div>' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input type="range" min="-180" max="180" step="1" value="0" data-view="rotate" aria-label="倾斜角度"><output class="tm-avatar-editor-value" data-view-output="rotate">0°</output><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
+            toolbar.innerHTML = '<div class="tm-avatar-editor-tools"><button type="button" data-action="editor-settings" title="调整设置"><span aria-hidden="true">⚙</span><span>设置</span></button><button type="button" data-action="open-avatar-manager" title="打开头像管理"><span aria-hidden="true">▦</span><span>头像库</span></button><button type="button" data-action="import-avatar" title="从相册或文件导入头像"><span aria-hidden="true">＋</span><span>导入</span></button><input type="file" accept="image/jpeg,image/png,image/webp" data-avatar-import hidden></div>' +
+                '<div class="tm-avatar-editor-settings" data-editor-settings hidden>' +
+                '<label><span>大小每次增加（%）</span><input type="number" min="0.1" max="100" step="0.1" value="' + preferences.scaleStepPercent + '" data-editor-pref="scaleStepPercent"></label>' +
+                '<label><span>位置每次增加（%）</span><input type="number" min="0.1" max="100" step="0.1" value="' + preferences.positionStepPercent + '" data-editor-pref="positionStepPercent"></label>' +
+                '<label><span>倾斜每次增加（°）</span><input type="number" min="0.1" max="180" step="0.1" value="' + preferences.rotationStepDegrees + '" data-editor-pref="rotationStepDegrees"></label>' +
+                '<label class="tm-avatar-editor-setting-toggle"><span>手动输入调整数值</span><input type="checkbox" data-editor-pref="manualInput"' + (preferences.manualInput ? ' checked' : '') + '></label>' +
+                '<label class="tm-avatar-editor-setting-toggle"><span>导入头像时保存到头像库</span><input type="checkbox" data-editor-pref="quickImportToLibrary"' + (preferences.quickImportToLibrary ? ' checked' : '') + '></label>' +
+                '<div class="tm-avatar-editor-import-note">关闭“保存到头像库”后，导入图只在本次调整中使用；保存时会覆盖对应的 SillyTavern 原头像。</div></div>' +
+                '<div class="tm-avatar-editor-controls">' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">大小</span><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="-1" aria-label="缩小">−</button><input class="tm-avatar-editor-range" type="range" min="0.5" max="3" step="0.001" value="1" data-view="scale" aria-label="调整大小"><input class="tm-avatar-editor-number" type="number" min="50" max="300" step="0.1" value="100" data-view-number="scale" aria-label="手动输入大小百分比"><output class="tm-avatar-editor-value" data-view-output="scale">100%</output><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="1" aria-label="放大">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">左右</span><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="-1" aria-label="向左移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="x" aria-label="左右位置"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="x" aria-label="手动输入左右百分比"><output class="tm-avatar-editor-value" data-view-output="x">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="1" aria-label="向右移动">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">上下</span><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="-1" aria-label="向上移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="y" aria-label="上下位置"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="y" aria-label="手动输入上下百分比"><output class="tm-avatar-editor-value" data-view-output="y">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="1" aria-label="向下移动">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input class="tm-avatar-editor-range" type="range" min="-180" max="180" step="0.1" value="0" data-view="rotate" aria-label="倾斜角度"><input class="tm-avatar-editor-number" type="number" min="-180" max="180" step="0.1" value="0" data-view-number="rotate" aria-label="手动输入倾斜角度"><output class="tm-avatar-editor-value" data-view-output="rotate">0°</output><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
                 '</div>' + (editor.mode === 'library' && editor.target.kind === 'user' && editor.bindingMode === 'adaptive'
                     ? '<button type="button" class="tm-avatar-editor-bind" data-action="bind-theme" aria-pressed="false"><span>绑定到当前美化</span><small data-bind-theme-hint></small></button>'
                     : '') + '<div class="tm-avatar-editor-scope-panel" data-scope-panel hidden></div><div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">垂直</button><button type="button" data-action="reset">重置</button>' + (editor.mode === 'library' ? '<button type="button" data-action="clear-bindings" title="解除头像绑定">解绑</button>' : '') + '<button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
@@ -1213,10 +1350,18 @@
         }
         function updateToolbar() {
             if (!toolbar || !editor) return;
+            var preferences = editorPreferences();
+            toolbar.classList.toggle('is-manual', preferences.manualInput);
+            ['import-avatar', 'open-avatar-manager', 'save'].forEach(function (action) {
+                var actionButton = toolbar.querySelector('[data-action="' + action + '"]');
+                if (actionButton) actionButton.disabled = importingEditorAvatar;
+            });
             ['scale', 'x', 'y', 'rotate'].forEach(function (name) {
                 var input = toolbar.querySelector('[data-view="' + name + '"]');
+                var numberInput = toolbar.querySelector('[data-view-number="' + name + '"]');
                 var output = toolbar.querySelector('[data-view-output="' + name + '"]');
                 if (input) input.value = editor.view[name];
+                if (numberInput) numberInput.value = name === 'rotate' ? editor.view[name] : round(editor.view[name] * 100, 2);
                 if (output) output.textContent = name === 'rotate' ? Math.round(editor.view.rotate) + '°' : Math.round(editor.view[name] * 100) + '%';
             });
             ['flipX', 'flipY'].forEach(function (name) {
@@ -1292,7 +1437,7 @@
                 if (button) button.setAttribute('aria-expanded', action === (mode === 'save' ? 'save' : 'clear-bindings') ? 'true' : 'false');
             });
             positionEditorToolbar();
-            return getApplicationScopes(editor.target.kind).then(function (status) {
+            return getApplicationScopes(editor.target.kind, editor.target).then(function (status) {
                 if (token !== scopePanelToken || !editor || !panel.parentNode || panel.dataset.mode !== mode) return false;
                 renderScopePanel(mode, status);
                 return true;
@@ -1346,7 +1491,7 @@
             input = input || {};
             if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
             var kind = input.target && input.target.kind || input.kind;
-            var cap = capability(kind);
+            var cap = capability(kind, input.target, input.representative && input.representative.message);
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
             var requestedMode = clean(input.bindingMode);
             var bindingMode = requestedMode === 'deferred' || requestedMode === 'theme' || requestedMode === 'chat' ||
@@ -1431,12 +1576,13 @@
                 return getState();
             });
         }
-        function beginNativeEdit(kind) {
+        function beginNativeEdit(input) {
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
             if (editor || editorClosing) return Promise.reject(Object.assign(new Error('头像编辑器正在使用中'), { code: 'EDITOR_ACTIVE' }));
-            kind = kind === 'user' ? 'user' : 'character';
-            var cap = capability(kind);
+            input = typeof input === 'string' ? { kind: input } : (input || {});
+            var kind = input.target && input.target.kind || (input.kind === 'user' ? 'user' : 'character');
+            var cap = capability(kind, input.target, input.representative && input.representative.message);
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
             return Promise.all([getBindingForTarget(cap.target), store.getNativeView(cap.target.key), embeddedNativeAsset(cap.representative, cap.target)]).then(function (parts) {
                 var sourceKey = nativeSourceKey(cap.target, cap.representative);
@@ -1459,7 +1605,7 @@
                 ensureEditorUi();
                 try {
                     syncEditorInstances();
-                    editor.nativeKnownImages = new Set(messageImages(doc, editor.target).map(function (item) { return item.image; }));
+                    editor.nativeKnownImages = new Set(messageImages(doc, editor.target, contextSafe()).map(function (item) { return item.image; }));
                     bindRepresentative();
                     editor.diagnostics = diagnosticsFor(editor.representative, editor.target);
                     updateToolbar();
@@ -1568,7 +1714,10 @@
         }
         function stepView(name, direction) {
             if (!editor) return getState();
-            var step = name === 'scale' ? SCALE_STEP : name === 'rotate' ? ROTATE_STEP : POSITION_STEP;
+            var preferences = editorPreferences();
+            var step = name === 'scale'
+                ? preferences.scaleStepPercent / 100
+                : (name === 'rotate' ? preferences.rotationStepDegrees : preferences.positionStepPercent / 100);
             var state = setViewValue(name, Number(editor.view[name]) + step * (direction < 0 ? -1 : 1));
             commitEditorPreview();
             return state;
@@ -1606,6 +1755,7 @@
         function saveEdit(requestedScope) {
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
+            if (importingEditorAvatar) return Promise.reject(Object.assign(new Error('头像导入处理中，请稍候'), { code: 'AVATAR_IMPORT_IN_PROGRESS' }));
             if (!editor || editorClosing) return Promise.resolve(null);
             var effectiveBindingMode = editor.bindingMode === 'adaptive'
                 ? (editor.bindToTheme ? 'theme' : editor.unboundSaveMode)
@@ -1732,6 +1882,64 @@
                 return Promise.all(targetsToDelete.map(function (binding) { return store.deleteBinding(binding.themeKey, binding.targetKey); }));
             });
         }
+        function rebuildEditorUi() {
+            if (!editor) return;
+            finishEditorUi();
+            ensureEditorUi();
+            syncEditorInstances();
+            bindRepresentative();
+            editor.diagnostics = diagnosticsFor(editor.representative, editor.target);
+            updateToolbar();
+        }
+        function replaceEditorAsset(asset, mode) {
+            if (!editor) return false;
+            if (!asset || !asset.imageData) throw Object.assign(new Error('导入头像内容无效'), { code: 'AVATAR_IMPORT_INVALID' });
+            editor.mode = mode === 'transient' ? 'transient' : 'library';
+            editor.bindingMode = mode === 'transient' ? 'original' : 'deferred';
+            editor.avatarId = mode === 'transient' ? null : asset.id;
+            editor.asset = asset;
+            editor.view = normalizeView(null);
+            editor.bindToTheme = false;
+            editor.unboundSaveMode = editor.bindingMode;
+            editorPreviewSettled = true;
+            ensureSourceCache(asset);
+            ensureSourceCache(editorPreviewAsset(asset));
+            rebuildEditorUi();
+            return getState();
+        }
+        function importEditorAvatar(file) {
+            if (!editor || !file || importingEditorAvatar) return Promise.resolve(false);
+            var preferences = editorPreferences();
+            var task;
+            importingEditorAvatar = true;
+            updateToolbar();
+            if (preferences.quickImportToLibrary) {
+                if (typeof importAvatarFileToLibrary !== 'function') task = Promise.reject(new Error('头像库导入功能不可用'));
+                else task = Promise.resolve(importAvatarFileToLibrary(file)).then(function (asset) {
+                    if (!asset || !asset.id) throw new Error('头像已导入，但无法读取入库结果');
+                    return store.getAsset(asset.id);
+                }).then(function (asset) { return replaceEditorAsset(asset, 'library'); });
+            } else {
+                if (typeof processAvatarFile !== 'function') task = Promise.reject(new Error('头像图片处理功能不可用'));
+                else task = Promise.resolve(processAvatarFile(file)).then(function (asset) { return replaceEditorAsset(asset, 'transient'); });
+            }
+            return task.finally(function () { importingEditorAvatar = false; updateToolbar(); });
+        }
+        function openManagerFromEditor() {
+            if (!editor || typeof openAvatarManager !== 'function') return Promise.reject(new Error('头像管理入口不可用'));
+            if (typeof win.confirm === 'function' && !win.confirm('打开头像管理会放弃本次尚未保存的调整，是否继续？')) return Promise.resolve(false);
+            return cancelEdit('manager-open').then(function () { return openAvatarManager(); });
+        }
+        function persistEditorPreference(input) {
+            var preferences = editorPreferences();
+            var name = input.getAttribute('data-editor-pref');
+            if (name === 'manualInput' || name === 'quickImportToLibrary') preferences[name] = input.checked === true;
+            else preferences[name] = Number(input.value);
+            preferences = normalizeEditorPreferences(preferences);
+            if (name in preferences) input.value = preferences[name];
+            updateToolbar();
+            return Promise.resolve(saveEditorPreferences(preferences)).catch(onError);
+        }
         function onToolbarClick(event) {
             var stepButton = event.target && event.target.closest ? event.target.closest('[data-step-view]') : null;
             if (stepButton && toolbar.contains(stepButton)) {
@@ -1743,12 +1951,25 @@
             var action = button.getAttribute('data-action');
             if (action === 'flip-x') toggleFlip('flipX');
             else if (action === 'flip-y') toggleFlip('flipY');
+            else if (action === 'editor-settings') {
+                var settings = toolbar.querySelector('[data-editor-settings]');
+                if (settings) { settings.hidden = !settings.hidden; positionEditorToolbar(); }
+            }
+            else if (action === 'open-avatar-manager') openManagerFromEditor().catch(onError);
+            else if (action === 'import-avatar') {
+                var picker = toolbar.querySelector('[data-avatar-import]');
+                if (picker && !importingEditorAvatar) picker.click();
+            }
             else if (action === 'bind-theme') toggleThemeBinding();
             else if (action === 'reset') resetEdit();
             else if (action === 'cancel') cancelEdit();
             else if (action === 'clear-bindings') openScopePanel('clear');
             else if (action === 'save') {
-                if (editor && editor.bindingMode === 'deferred') openScopePanel('save');
+                if (editor && editor.mode === 'transient') {
+                    var directLabel = editor.target.kind === 'user' ? '当前人设原头像' : '当前角色卡卡面';
+                    if (typeof win.confirm === 'function' && !win.confirm('这张图片没有保存到头像库。保存后会直接覆盖' + directLabel + '，是否继续？')) return;
+                    saveEdit('original').catch(onError);
+                } else if (editor && editor.bindingMode === 'deferred') openScopePanel('save');
                 else saveEdit().catch(onError);
             } else if (action.indexOf('save-') === 0) {
                 var saveScope = action.slice(5);
@@ -1762,15 +1983,16 @@
                 var clearKind = editor.target.kind;
                 var clearScope = action.slice(6);
                 button.disabled = true;
-                clearApplicationScope(clearKind, clearScope).catch(function (error) { button.disabled = false; onError(error); });
+                clearApplicationScope(clearKind, clearScope, editor.target).catch(function (error) { button.disabled = false; onError(error); });
             }
         }
         function onToolbarInput(event) {
             if (!editor) return;
-            var input = event.target && event.target.closest ? event.target.closest('[data-view]') : null;
+            var input = event.target && event.target.closest ? (event.target.closest('[data-view]') || event.target.closest('[data-view-number]')) : null;
             if (!input || !toolbar.contains(input)) return;
-            var name = input.getAttribute('data-view');
+            var name = input.getAttribute('data-view') || input.getAttribute('data-view-number');
             var value = Number(input.value);
+            if (input.getAttribute('data-view-number') && name !== 'rotate') value /= 100;
             editorPreviewSettled = false;
             setViewValue(name, value);
             scheduleEditorSettle();
@@ -1787,7 +2009,16 @@
             onToolbarCommit(event);
         }
         function onToolbarCommit(event) {
-            var input = event.target && event.target.closest ? event.target.closest('[data-view]') : null;
+            var preference = event.target && event.target.closest ? event.target.closest('[data-editor-pref]') : null;
+            if (preference && toolbar.contains(preference)) { persistEditorPreference(preference); return; }
+            var picker = event.target && event.target.closest ? event.target.closest('[data-avatar-import]') : null;
+            if (picker && toolbar.contains(picker)) {
+                var file = picker.files && picker.files[0];
+                picker.value = '';
+                if (file) importEditorAvatar(file).catch(onError);
+                return;
+            }
+            var input = event.target && event.target.closest ? (event.target.closest('[data-view]') || event.target.closest('[data-view-number]')) : null;
             if (!input || !toolbar.contains(input)) return;
             commitEditorPreview();
         }
@@ -1803,9 +2034,9 @@
                 return deleteTargetBindings(cap.target.key);
             }).then(reconcile);
         }
-        function getApplicationScopes(kind) {
+        function getApplicationScopes(kind, targetOverride) {
             kind = kind === 'user' ? 'user' : 'character';
-            var cap = capability(kind);
+            var cap = capability(kind, targetOverride);
             var info = targets();
             var target = cap.target;
             var themeScopeKey = currentThemeKey();
@@ -1835,14 +2066,14 @@
                 };
             });
         }
-        function clearApplicationScope(kind, scope) {
+        function clearApplicationScope(kind, scope, targetOverride) {
             var mutationError = requireMutable();
             if (mutationError) return Promise.reject(mutationError);
             kind = kind === 'user' ? 'user' : 'character';
             scope = clean(scope);
-            var cap = capability(kind);
+            var cap = capability(kind, targetOverride);
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
-            if (editor) return cancelEdit('binding-cleared').then(function () { return clearApplicationScope(kind, scope); });
+            if (editor) return cancelEdit('binding-cleared').then(function () { return clearApplicationScope(kind, scope, targetOverride); });
             var scopeKey = scope === 'chat' ? currentChatBindingKey() : (scope === 'theme' ? currentThemeKey() : DEFAULT_BINDING_KEY);
             if ((scope === 'chat' || scope === 'theme') && !scopeKey) {
                 return Promise.reject(Object.assign(new Error(scope === 'chat' ? '无法可靠识别当前聊天' : '无法识别当前美化'), { code: scope === 'chat' ? 'CHAT_UNAVAILABLE' : 'THEME_UNAVAILABLE' }));
@@ -1850,7 +2081,9 @@
             if (scope !== 'chat' && scope !== 'theme' && scope !== 'global') {
                 return Promise.reject(Object.assign(new Error('头像应用范围无效'), { code: 'AVATAR_SCOPE_INVALID' }));
             }
-            if (scope === 'theme') return clearThemeAvatarBinding(getThemeName(), kind);
+            if (scope === 'theme') return targetOverride
+                ? clearThemeAvatarBindingForTarget(getThemeName(), targetOverride)
+                : clearThemeAvatarBinding(getThemeName(), kind);
             if (scope === 'global') promotedBindings.delete(cap.target.key);
             sequence += 1;
             return store.deleteBinding(scopeKey, cap.target.key).then(reconcile);
@@ -2014,6 +2247,19 @@
                 return reconcile();
             });
         }
+        function clearThemeAvatarBindingForTarget(themeName, target) {
+            var key = themeKey(themeName || getThemeName());
+            if (!key) return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
+            return getThemeAvatarBindingSetByTarget(themeName, target).then(function (bindingSet) {
+                var targetKey = target && target.key;
+                var operations = bindingSet.candidates.map(function (binding) {
+                    return { type: 'delete', themeKey: key, targetKey: themeAvatarCandidateTargetKey(targetKey, binding.avatarId) };
+                });
+                operations.push({ type: 'delete', themeKey: key, targetKey: targetKey });
+                sequence += 1;
+                return store.mutateBindings(operations).then(reconcile);
+            });
+        }
         function bindingBelongsToTarget(binding, targetKey) {
             targetKey = clean(targetKey);
             return Boolean(binding && targetKey && (
@@ -2172,6 +2418,7 @@
             getCapabilities: getCapabilities,
             beginEdit: beginEdit,
             beginNativeEdit: beginNativeEdit,
+            beginMessageEdit: beginMessageEdit,
             clearNativeView: clearNativeView,
             cancelEdit: cancelEdit,
             saveEdit: saveEdit,
@@ -2221,6 +2468,9 @@
         nativeImageMime: nativeImageMime,
         getContextInfo: getContextInfo,
         messageImages: messageImages,
+        targetForMessage: targetForMessage,
+        messageMatchesTarget: messageMatchesTarget,
+        normalizeEditorPreferences: normalizeEditorPreferences,
         chooseRepresentative: chooseRepresentative,
         normalizeView: normalizeView,
         pixelsForView: pixelsForView,

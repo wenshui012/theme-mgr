@@ -456,6 +456,22 @@
                 getThemeName: getCurrentThemeName,
                 overwriteHostAvatar: overwriteSillyTavernAvatar,
                 bakesUserOriginalView: isTauriTavernRuntime(),
+                getEditorPreferences: function () { return load().avatarEditorPreferences; },
+                saveEditorPreferences: function (preferences) {
+                    var value = load();
+                    value.avatarEditorPreferences = preferences;
+                    return save(value);
+                },
+                openAvatarManager: function () { openPopup('avatars'); return true; },
+                processAvatarFile: function (file) { return avatarImageProcessor.processFile(file); },
+                importAvatarFileToLibrary: function (file) {
+                    if (!avatarPageController) return Promise.reject(new Error('头像管理尚未初始化'));
+                    return avatarPageController.importFiles([file]).then(function (results) {
+                        var passed = (results || []).find(function (result) { return result && result.ok && result.asset; });
+                        if (!passed) throw Object.assign(new Error('头像导入失败'), { code: 'AVATAR_IMPORT_FAILED' });
+                        return passed.asset;
+                    });
+                },
                 onError: function (error) {
                     console.warn('[头像管理] runtime 失败:', error);
                     toast(error && error.message ? error.message : '头像运行时失败', true);
@@ -581,6 +597,16 @@
         if (typeof d.followThemePreviewShape !== 'boolean') d.followThemePreviewShape = false;
         if (typeof d.simplifyGridText !== 'boolean') d.simplifyGridText = false;
         if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
+        if (!d.avatarEditorPreferences || typeof d.avatarEditorPreferences !== 'object' || Array.isArray(d.avatarEditorPreferences)) d.avatarEditorPreferences = {};
+        var avatarEditorDefaults = dd.avatarEditorPreferences;
+        ['scaleStepPercent', 'positionStepPercent', 'rotationStepDegrees'].forEach(function (name) {
+            var number = Number(d.avatarEditorPreferences[name]);
+            var min = 0.1;
+            var max = name === 'rotationStepDegrees' ? 180 : 100;
+            d.avatarEditorPreferences[name] = Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : avatarEditorDefaults[name];
+        });
+        d.avatarEditorPreferences.manualInput = d.avatarEditorPreferences.manualInput === true;
+        d.avatarEditorPreferences.quickImportToLibrary = d.avatarEditorPreferences.quickImportToLibrary !== false;
         if (avatarLibraryApi) avatarLibraryApi.ensureState(d);
         var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
         var seriesNormalizationDiagnostics = seriesApi && typeof seriesApi.inspectState === 'function' ? seriesApi.inspectState(d) : [];
@@ -639,6 +665,7 @@
             followThemePreviewShape: false,
             simplifyGridText: false,
             autoHideHeader: false,
+            avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, manualInput: false, quickImportToLibrary: true },
             dayNight: { version: 1, pairs: Object.create(null) },
             series: { version: 1, groups: Object.create(null) },
             bindings: { version: 2, characters: Object.create(null), chats: Object.create(null), manualTheme: '', manualTarget: null },
@@ -3863,13 +3890,14 @@
 
     // ── 打开全屏主界面 ────────────────────────────────────────
     var popupWaitingForStorage = false;
-    function openPopup() {
+    function openPopup(requestedPage) {
+        if (requestedPage === 'themes' || requestedPage === 'avatars' || requestedPage === 'backgrounds') lastAppPage = requestedPage;
         if (avatarRuntime && avatarRuntime.isEditing()) {
             if (pendingOpenAfterAvatarCancel) return;
             pendingOpenAfterAvatarCancel = true;
             avatarRuntime.cancelEdit('manager-open').then(function () {
                 pendingOpenAfterAvatarCancel = false;
-                openPopup();
+                openPopup(requestedPage);
             }).catch(function (error) {
                 pendingOpenAfterAvatarCancel = false;
                 toast(error.message || '无法结束头像调整', true);
@@ -3881,7 +3909,7 @@
             popupWaitingForStorage = true;
             whenStorageReady().then(function () {
                 popupWaitingForStorage = false;
-                openPopup();
+                openPopup(requestedPage);
             }).catch(function (err) {
                 popupWaitingForStorage = false;
                 console.warn('[美化管理] 打开管理器前等待存储失败:', err);

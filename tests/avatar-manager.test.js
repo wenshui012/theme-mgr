@@ -370,6 +370,41 @@ test('13 successful import renders the new card without a selection footer', asy
 test('14 current character target uses stable character avatar key', () => assert.equal(modules.avatarRuntime.getContextInfo({characters:[{avatar:'x.png'}],characterId:0}).character.key,'character:x.png'));
 test('15 User target uses a stable non-DOM global key', () => assert.equal(modules.avatarRuntime.getContextInfo({name1:'U'}).user.key,'user:global'));
 test('16 group chat refuses a current-character target', () => assert.equal(modules.avatarRuntime.getContextInfo({groups:[{id:1}],groupId:1,characters:[{avatar:'x'}],characterId:0}).character,null));
+test('message floors resolve group characters by original_avatar rather than display name', () => {
+    const floor = new Element('div'); floor.setAttribute('mesid', '1'); floor.setAttribute('is_user', 'false'); floor.setAttribute('is_system', 'false');
+    const context = {
+        groupId: 1,
+        characters: [{ avatar: 'alice.png', name: 'Same' }, { avatar: 'bob.png', name: 'Same' }],
+        chat: [{ is_user: false, original_avatar: 'alice.png' }, { is_user: false, original_avatar: 'bob.png' }],
+    };
+    assert.equal(modules.avatarRuntime.targetForMessage(context, floor).key, 'character:bob.png');
+});
+test('avatar editor preferences clamp steps and default quick imports to the library', () => {
+    assert.deepEqual({ ...modules.avatarRuntime.normalizeEditorPreferences({ scaleStepPercent: 500, positionStepPercent: 0, rotationStepDegrees: 2.5, manualInput: true }) }, {
+        scaleStepPercent: 100, positionStepPercent: 0.1, rotationStepDegrees: 2.5, manualInput: true, quickImportToLibrary: true,
+    });
+});
+test('a group message floor opens the matching character editor without a target picker', async () => {
+    const context = {
+        groupId: 1,
+        characters: [{ avatar: 'alice.png', name: 'Alice' }, { avatar: 'bob.png', name: 'Bob' }],
+        chat: [
+            { is_user: false, original_avatar: 'alice.png' },
+            { is_user: false, original_avatar: 'bob.png' },
+            { is_user: true },
+        ],
+        name1: 'User', chatId: 'Group Chat', chatMetadata: { integrity: 'group-chat-1' },
+        getCurrentChatId() { return this.chatId; },
+    };
+    const f = runtimeFixture({ context });
+    f.chars[0].mes.setAttribute('mesid', '0');
+    f.chars[1].mes.setAttribute('mesid', '1');
+    f.user.mes.setAttribute('mesid', '2');
+    const state = await f.runtime.beginMessageEdit(f.chars[1].mes);
+    assert.equal(state.target.key, 'character:bob.png');
+    assert.equal(state.mode, 'native');
+    assert.equal(f.chars[0].image.getAttribute('src'), 'raw-char.png');
+});
 test('17 editor start has no selecting state', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.notEqual(f.runtime.getState().state,'selecting'); });
 test('18 known target enters editing directly', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); const state=await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.equal(state.state,'editing'); });
 test('19 temporary high resolution src replaces every same-target instance', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.ok(f.chars.every((x)=>x.image.getAttribute('src').includes('main-a'))); });
@@ -1747,7 +1782,13 @@ test('94 Avatar adjustment opens directly and its toolbar owns four save scopes 
     assert.match(runtimeSource, /data-action="save">保存<\/button>/);
     assert.doesNotMatch(runtimeSource, /↔ 水平|↕ 垂直|⌫ 解绑|保存…/);
     assert.match(panelBlock, /已绑定 ' \+ Number\(scopes\.theme/);
-    assert.match(runtimeSource, /clearApplicationScope\(clearKind, clearScope\)/);
+    assert.match(runtimeSource, /clearApplicationScope\(clearKind, clearScope, editor\.target\)/);
+    assert.match(runtimeSource, /tm-avatar-message-edit/);
+    assert.match(runtimeSource, /data-action="editor-settings"/);
+    assert.match(runtimeSource, /data-action="open-avatar-manager"/);
+    assert.match(runtimeSource, /data-action="import-avatar"/);
+    assert.match(runtimeSource, /data-editor-pref="quickImportToLibrary"/);
+    assert.match(runtimeSource, /data-view-number="scale"/);
     assert.match(runtimeSource, /TT User 会按当前调整生成固定 2:3 成品/);
     assert.match(runtimeSource, /本地酒馆仍完整覆盖母图/);
 });
