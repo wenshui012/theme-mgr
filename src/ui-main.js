@@ -53,7 +53,7 @@
     var IMG_QUALITY = 0.8;
     var FAB_ID = 'tm-fab-main';
 
-    var TM_VERSION = options.version || '4.6.0';
+    var TM_VERSION = options.version || '4.6.1';
     var storageApi = null;
     var imageToolsApi = null;
     var imageLoaderApi = null;
@@ -203,7 +203,6 @@
     var lastBindingWarningKey = '';
     var pendingVerifiedManualThemes = Object.create(null);
     var colorSchemeWatcher = null;
-    var temporaryPairOverride = null;
     var frameAssetAnalysisCache = Object.create(null);
     var frameAssetAnalysisOrder = [];
     var IMAGE_FIELD_KEYS = { imageData: true, thumbData: true, previewData: true, fabImage: true };
@@ -331,9 +330,6 @@
                 },
                 resolveTargetTheme: function (target) {
                     return resolveLogicalTargetTheme(target);
-                },
-                beforeAutomaticReconcile: function () {
-                    clearTemporaryPairOverride();
                 },
                 applyTheme: applyTheme,
                 cancelApply: function () {
@@ -607,6 +603,9 @@
         });
         d.avatarEditorPreferences.manualInput = d.avatarEditorPreferences.manualInput === true;
         d.avatarEditorPreferences.quickImportToLibrary = d.avatarEditorPreferences.quickImportToLibrary !== false;
+        d.dayNightPreference = pairsApi && typeof pairsApi.normalizeDayNightPreference === 'function'
+            ? pairsApi.normalizeDayNightPreference(d.dayNightPreference)
+            : { mode: 'system', manualVariant: '', dayStart: '07:00', nightStart: '19:00' };
         if (avatarLibraryApi) avatarLibraryApi.ensureState(d);
         var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
         var seriesNormalizationDiagnostics = seriesApi && typeof seriesApi.inspectState === 'function' ? seriesApi.inspectState(d) : [];
@@ -666,6 +665,7 @@
             simplifyGridText: false,
             autoHideHeader: false,
             avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, manualInput: false, quickImportToLibrary: true },
+            dayNightPreference: { mode: 'system', manualVariant: '', dayStart: '07:00', nightStart: '19:00' },
             dayNight: { version: 1, pairs: Object.create(null) },
             series: { version: 1, groups: Object.create(null) },
             bindings: { version: 2, characters: Object.create(null), chats: Object.create(null), manualTheme: '', manualTarget: null },
@@ -681,8 +681,7 @@
         return metadataApi.ensureMeta(d, name);
     }
 
-    function getSystemDayNightVariant() {
-        if (colorSchemeWatcher) return colorSchemeWatcher.getVariant();
+    function readSystemDayNightVariant() {
         try {
             return typeof global.matchMedia === 'function' &&
                 global.matchMedia('(prefers-color-scheme: dark)').matches
@@ -693,29 +692,39 @@
         }
     }
 
-    function getPreferredPairVariant(pairId) {
-        if (temporaryPairOverride && temporaryPairOverride.pairId === pairId) {
-            return temporaryPairOverride.variant;
-        }
-        return getSystemDayNightVariant();
+    function resolveConfiguredDayNightVariant() {
+        if (!pairsApi || typeof pairsApi.resolveDayNightVariant !== 'function') return readSystemDayNightVariant();
+        return pairsApi.resolveDayNightVariant(load().dayNightPreference, readSystemDayNightVariant(), new Date());
     }
 
-    function clearTemporaryPairOverride() {
-        temporaryPairOverride = null;
+    function getPreferredPairVariant() {
+        return colorSchemeWatcher ? colorSchemeWatcher.getVariant() : resolveConfiguredDayNightVariant();
     }
 
-    function setTemporaryPairOverride(pairId, variant) {
-        temporaryPairOverride = {
-            pairId: String(pairId || ''),
-            variant: variant === 'night' ? 'night' : 'day',
-        };
+    function persistDayNightPreference(next, reason, deferReconcile) {
+        var d = load();
+        d.dayNightPreference = pairsApi.normalizeDayNightPreference(next);
+        var result = save(d);
+        var changed = !deferReconcile && colorSchemeWatcher
+            ? colorSchemeWatcher.check(reason || 'preference')
+            : false;
+        if (!deferReconcile && !changed && bindingController) bindingController.reconcile();
+        renderGrid();
+        renderBottomStatus();
+        updateBtn();
+        return result;
+    }
+
+    function persistManualDayNightVariant(variant, reason, deferReconcile) {
+        var current = pairsApi.normalizeDayNightPreference(load().dayNightPreference);
+        current.mode = 'manual';
+        current.manualVariant = variant === 'night' ? 'night' : 'day';
+        return persistDayNightPreference(current, reason || 'manual-switch', deferReconcile);
     }
 
     function resolveLogicalTargetTheme(target) {
         if (!pairsApi) return bindingsApi ? bindingsApi.getThemeName(target) : '';
-        var variant = target && target.kind === 'day-night'
-            ? getPreferredPairVariant(target.pairId)
-            : getSystemDayNightVariant();
+        var variant = getPreferredPairVariant(target && target.pairId);
         return pairsApi.resolveTargetTheme(load(), target, variant);
     }
 
@@ -728,8 +737,8 @@
             document: global.document,
             window: global,
             intervalMs: 1000,
+            getVariant: resolveConfiguredDayNightVariant,
             onChange: function () {
-                clearTemporaryPairOverride();
                 if (bindingController) bindingController.reconcile();
                 renderGrid();
                 renderBottomStatus();
@@ -3918,7 +3927,6 @@
         }
         if (document.querySelector('.tm-overlay')) return;
         var schemeChanged = colorSchemeWatcher ? colorSchemeWatcher.check('manager-open') : false;
-        clearTemporaryPairOverride();
         if (bindingController && !schemeChanged) bindingController.reconcile();
         injectStyles();
         cancelSearchDebounce();
@@ -4914,7 +4922,6 @@
             var d = load();
             var item = getLogicalItem(key, d);
             if (!item) return;
-            if (item.kind === 'pair') clearTemporaryPairOverride();
             var themeName = getItemDisplayTheme(d, item);
             applyManualTheme(themeName, function (ok, reason) {
                 if (ok) {
@@ -5611,7 +5618,6 @@
         pairsApi.dissolvePair(d, pairId);
         if (bindingsApi) bindingsApi.replacePairReferences(d, pairId, replacementTheme);
         save(d);
-        clearTemporaryPairOverride();
         if (sheet) closeSheet(sheet);
         renderCatbar();
         renderGrid();
@@ -6195,8 +6201,8 @@
         var sheet = createSheet([
             '<div class="tm-sheet-title tm-edit-sheet-title"><span><i class="fa-solid fa-pen"></i>编辑美化</span>' +
             (pair ? '<div class="tm-day-night-toggle" role="group" aria-label="切换日夜版本">' +
-                '<button type="button" data-variant="day" class="' + (selectedVariant === 'day' ? 'on' : '') + '" title="编辑并应用日间版"><i class="fa-solid fa-sun"></i></button>' +
-                '<button type="button" data-variant="night" class="' + (selectedVariant === 'night' ? 'on' : '') + '" title="编辑并应用夜间版"><i class="fa-solid fa-moon"></i></button>' +
+                '<button type="button" data-variant="day" class="' + (selectedVariant === 'day' ? 'on' : '') + '" title="切换并固定为日间版"><i class="fa-solid fa-sun"></i></button>' +
+                '<button type="button" data-variant="night" class="' + (selectedVariant === 'night' ? 'on' : '') + '" title="切换并固定为夜间版"><i class="fa-solid fa-moon"></i></button>' +
                 '</div>' : '') + '</div>',
             '<div class="tm-field"><label>美化名称</label><input type="text" id="tm-edit-name" maxlength="80" value="' + esc(pair ? pair.name : item.name) + '" /></div>',
             buildDisclosureHtml('tm-edit-annotation-section', '标注信息', 'fa-note-sticky', annotationFieldsHtml),
@@ -6476,10 +6482,13 @@
             sheet.querySelectorAll('.tm-day-night-toggle button').forEach(function (button) {
                 button.addEventListener('click', function () {
                     var variant = button.dataset.variant === 'night' ? 'night' : 'day';
-                    if (variant === selectedVariant) return;
-                    captureVariantDraft();
-                    loadVariantDraft(variant);
-                    setTemporaryPairOverride(pair.id, variant);
+                    var preference = pairsApi.normalizeDayNightPreference(load().dayNightPreference);
+                    if (variant !== selectedVariant) {
+                        captureVariantDraft();
+                        loadVariantDraft(variant);
+                    }
+                    if (preference.mode === 'manual' && preference.manualVariant === variant) return;
+                    persistManualDayNightVariant(variant, 'editor-manual-switch', true);
                     applyManualTheme(themeName, function (ok, reason) {
                         if (ok) {
                             renderGrid();
@@ -7152,6 +7161,25 @@
         var orphanMetaCount = metadataDiagnostics.orphanMetadata.length;
         var imgCount = 0;
         Object.keys(d.themeMeta).forEach(function (key) { if (d.themeMeta[key].imageData) imgCount++; });
+        var dayNightPreference = pairsApi.normalizeDayNightPreference(d.dayNightPreference);
+        var activeDayNightVariant = getPreferredPairVariant();
+        var displayedManualVariant = dayNightPreference.manualVariant || activeDayNightVariant;
+        var dayNightSettingsHtml =
+            '<div class="tm-field"><label>切换方式</label><select id="tm-day-night-mode">' +
+            '<option value="system"' + (dayNightPreference.mode === 'system' ? ' selected' : '') + '>跟随系统</option>' +
+            '<option value="manual"' + (dayNightPreference.mode === 'manual' ? ' selected' : '') + '>手动切换</option>' +
+            '<option value="schedule"' + (dayNightPreference.mode === 'schedule' ? ' selected' : '') + '>自定义时间</option>' +
+            '</select><div class="tm-hint">所有日夜美化组合共用同一种切换方式。</div></div>' +
+            '<div class="tm-day-night-setting-detail" id="tm-day-night-manual"' + (dayNightPreference.mode === 'manual' ? '' : ' hidden') + '>' +
+            '<div class="tm-day-night-setting-toggle" role="group" aria-label="手动选择日间或夜间">' +
+            '<button type="button" data-variant="day" class="' + (displayedManualVariant === 'day' ? 'on' : '') + '"><i class="fa-solid fa-sun"></i> 日间</button>' +
+            '<button type="button" data-variant="night" class="' + (displayedManualVariant === 'night' ? 'on' : '') + '"><i class="fa-solid fa-moon"></i> 夜间</button>' +
+            '</div><div class="tm-hint">选择会永久保存；也可以在日夜美化的编辑面板中直接切换。</div></div>' +
+            '<div class="tm-day-night-setting-detail" id="tm-day-night-schedule"' + (dayNightPreference.mode === 'schedule' ? '' : ' hidden') + '>' +
+            '<div class="tm-day-night-time-grid">' +
+            '<div class="tm-field"><label>日间开始</label><input type="time" id="tm-day-night-day-start" value="' + esc(dayNightPreference.dayStart) + '" /></div>' +
+            '<div class="tm-field"><label>夜间开始</label><input type="time" id="tm-day-night-night-start" value="' + esc(dayNightPreference.nightStart) + '" /></div>' +
+            '</div><div class="tm-hint">使用设备本地时间，支持跨零点时间段。</div></div>';
         var interfaceSettingsHtml =
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>' +
@@ -7211,6 +7239,7 @@
                 : '主界面使用缩略图，适合美化数量较多或设备性能一般。') +
             '</div></div>',
             buildDisclosureHtml('tm-settings-interface', '界面显示', 'fa-display', interfaceSettingsHtml),
+            buildDisclosureHtml('tm-settings-day-night', '日夜切换', 'fa-circle-half-stroke', dayNightSettingsHtml),
             buildDisclosureHtml('tm-settings-fab', '悬浮球', 'fa-circle-dot', fabSettingsHtml),
             buildDisclosureHtml('tm-settings-data', '数据管理', 'fa-database', dataSettingsHtml),
             extensionInfoHtml,
@@ -7229,6 +7258,59 @@
                 toast('检查更新失败；请检查网络、Git 状态或酒馆服务日志', true);
             });
         });
+
+        var dayNightModeInput = sheet.querySelector('#tm-day-night-mode');
+        var dayNightManualDetail = sheet.querySelector('#tm-day-night-manual');
+        var dayNightScheduleDetail = sheet.querySelector('#tm-day-night-schedule');
+        var dayStartInput = sheet.querySelector('#tm-day-night-day-start');
+        var nightStartInput = sheet.querySelector('#tm-day-night-night-start');
+        function syncDayNightSettingControls() {
+            var preference = pairsApi.normalizeDayNightPreference(load().dayNightPreference);
+            var displayedVariant = preference.manualVariant || getPreferredPairVariant();
+            dayNightModeInput.value = preference.mode;
+            dayNightManualDetail.hidden = preference.mode !== 'manual';
+            dayNightScheduleDetail.hidden = preference.mode !== 'schedule';
+            dayStartInput.value = preference.dayStart;
+            nightStartInput.value = preference.nightStart;
+            dayNightManualDetail.querySelectorAll('button[data-variant]').forEach(function (button) {
+                button.classList.toggle('on', button.dataset.variant === displayedVariant);
+            });
+        }
+        dayNightModeInput.addEventListener('change', function () {
+            var preference = pairsApi.normalizeDayNightPreference(load().dayNightPreference);
+            var previousVariant = getPreferredPairVariant();
+            preference.mode = this.value === 'manual' || this.value === 'schedule' ? this.value : 'system';
+            if (preference.mode === 'manual' && !preference.manualVariant) preference.manualVariant = previousVariant;
+            persistDayNightPreference(preference, 'settings-mode');
+            syncDayNightSettingControls();
+        });
+        dayNightManualDetail.querySelectorAll('button[data-variant]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                persistManualDayNightVariant(button.dataset.variant, 'settings-manual-switch');
+                syncDayNightSettingControls();
+            });
+        });
+        function saveDayNightTimes(changedInput) {
+            var preference = pairsApi.normalizeDayNightPreference(load().dayNightPreference);
+            var nextDayStart = dayStartInput.value;
+            var nextNightStart = nightStartInput.value;
+            if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(nextDayStart) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(nextNightStart)) {
+                toast('请选择完整的日间和夜间开始时间', true);
+                syncDayNightSettingControls();
+                return;
+            }
+            if (nextDayStart === nextNightStart) {
+                toast('日间和夜间开始时间不能相同', true);
+                changedInput.value = changedInput === dayStartInput ? preference.dayStart : preference.nightStart;
+                return;
+            }
+            preference.dayStart = nextDayStart;
+            preference.nightStart = nextNightStart;
+            persistDayNightPreference(preference, 'settings-schedule');
+            syncDayNightSettingControls();
+        }
+        dayStartInput.addEventListener('change', function () { saveDayNightTimes(dayStartInput); });
+        nightStartInput.addEventListener('change', function () { saveDayNightTimes(nightStartInput); });
 
         var followAppearanceInput = sheet.querySelector('#tm-follow-appearance');
         var showThemeAvatarFrameInput = sheet.querySelector('#tm-show-theme-avatar-frame');

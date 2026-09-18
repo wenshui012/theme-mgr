@@ -5545,6 +5545,65 @@ test('color-scheme watcher detects mobile WebView changes even when the original
     assert.equal(clearedTimer, 7);
 });
 
+test('day-night preference normalizes legacy or invalid values without changing old-user behavior', () => {
+    assert.deepEqual(pairs.normalizeDayNightPreference(), {
+        mode: 'system',
+        manualVariant: '',
+        dayStart: '07:00',
+        nightStart: '19:00',
+    });
+    assert.deepEqual(pairs.normalizeDayNightPreference({
+        mode: 'unexpected',
+        manualVariant: 'twilight',
+        dayStart: '25:00',
+        nightStart: '07:00',
+    }), {
+        mode: 'system',
+        manualVariant: '',
+        dayStart: '07:00',
+        nightStart: '19:00',
+    });
+});
+
+test('day-night preference resolves system, persistent manual and scheduled variants', () => {
+    const at = (hours, minutes) => ({ getHours: () => hours, getMinutes: () => minutes });
+    assert.equal(pairs.resolveDayNightVariant({ mode: 'system' }, 'night', at(12, 0)), 'night');
+    assert.equal(pairs.resolveDayNightVariant({ mode: 'manual', manualVariant: 'day' }, 'night', at(23, 0)), 'day');
+    assert.equal(pairs.resolveDayNightVariant({ mode: 'manual' }, 'night', at(23, 0)), 'night');
+
+    const ordinary = { mode: 'schedule', dayStart: '07:00', nightStart: '19:00' };
+    assert.equal(pairs.resolveDayNightVariant(ordinary, 'night', at(6, 59)), 'night');
+    assert.equal(pairs.resolveDayNightVariant(ordinary, 'night', at(7, 0)), 'day');
+    assert.equal(pairs.resolveDayNightVariant(ordinary, 'day', at(18, 59)), 'day');
+    assert.equal(pairs.resolveDayNightVariant(ordinary, 'day', at(19, 0)), 'night');
+
+    const overnight = { mode: 'schedule', dayStart: '18:00', nightStart: '06:00' };
+    assert.equal(pairs.resolveDayNightVariant(overnight, 'night', at(17, 59)), 'night');
+    assert.equal(pairs.resolveDayNightVariant(overnight, 'night', at(18, 0)), 'day');
+    assert.equal(pairs.resolveDayNightVariant(overnight, 'night', at(0, 30)), 'day');
+    assert.equal(pairs.resolveDayNightVariant(overnight, 'day', at(6, 0)), 'night');
+});
+
+test('day-night watcher accepts a persistent mode resolver and detects scheduled boundaries', () => {
+    let variant = 'day';
+    let poll = null;
+    const changes = [];
+    const watcher = pairs.createColorSchemeWatcher({
+        getVariant() { return variant; },
+        setInterval(handler) { poll = handler; return 9; },
+        clearInterval() {},
+        document: null,
+        window: null,
+        onChange(next, previous, reason) { changes.push({ next, previous, reason }); },
+    });
+    watcher.start();
+    assert.equal(watcher.getVariant(), 'day');
+    variant = 'night';
+    poll();
+    assert.deepEqual(changes, [{ next: 'night', previous: 'day', reason: 'poll' }]);
+    watcher.stop();
+});
+
 test('creating and dissolving a day-night item migrates character chat and manual targets safely', () => {
     const data = { themeMeta: {} };
     const context = makeBindingContext();
@@ -5606,7 +5665,7 @@ test('binding controller resolves a logical day-night target to the current pref
     assert.deepEqual(applied, ['Night', 'Day']);
 });
 
-test('chat changes clear a temporary day-night override before automatic reconciliation', () => {
+test('binding controller runs its pre-reconcile hook before resolving a day-night target', () => {
     const handlers = {};
     const eventSource = {
         on(name, handler) { (handlers[name] ||= []).push(handler); },

@@ -2,6 +2,12 @@
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
     var PAIR_VERSION = 1;
+    var DAY_NIGHT_PREFERENCE_DEFAULTS = {
+        mode: 'system',
+        manualVariant: '',
+        dayStart: '07:00',
+        nightStart: '19:00',
+    };
     var SHARED_META_KEYS = [
         'category',
         'tags',
@@ -32,6 +38,51 @@
             version: PAIR_VERSION,
             pairs: Object.create(null),
         };
+    }
+
+    function normalizeClockTime(value, fallback) {
+        value = String(value || '').trim();
+        return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
+    }
+
+    function normalizeDayNightPreference(value) {
+        value = isObject(value) ? value : {};
+        var mode = value.mode === 'manual' || value.mode === 'schedule' ? value.mode : 'system';
+        var manualVariant = value.manualVariant === 'day' || value.manualVariant === 'night'
+            ? value.manualVariant
+            : '';
+        var dayStart = normalizeClockTime(value.dayStart, DAY_NIGHT_PREFERENCE_DEFAULTS.dayStart);
+        var nightStart = normalizeClockTime(value.nightStart, DAY_NIGHT_PREFERENCE_DEFAULTS.nightStart);
+        if (dayStart === nightStart) {
+            dayStart = DAY_NIGHT_PREFERENCE_DEFAULTS.dayStart;
+            nightStart = DAY_NIGHT_PREFERENCE_DEFAULTS.nightStart;
+        }
+        return {
+            mode: mode,
+            manualVariant: manualVariant,
+            dayStart: dayStart,
+            nightStart: nightStart,
+        };
+    }
+
+    function clockMinutes(value) {
+        var parts = String(value || '').split(':');
+        return (Number(parts[0]) * 60) + Number(parts[1]);
+    }
+
+    function resolveDayNightVariant(preference, systemVariant, now) {
+        var normalized = normalizeDayNightPreference(preference);
+        var fallback = systemVariant === 'night' ? 'night' : 'day';
+        if (normalized.mode === 'system') return fallback;
+        if (normalized.mode === 'manual') return normalized.manualVariant || fallback;
+        now = now && typeof now.getHours === 'function' ? now : new Date();
+        var current = (now.getHours() * 60) + now.getMinutes();
+        var dayStart = clockMinutes(normalized.dayStart);
+        var nightStart = clockMinutes(normalized.nightStart);
+        var isDay = dayStart < nightStart
+            ? current >= dayStart && current < nightStart
+            : current >= dayStart || current < nightStart;
+        return isDay ? 'day' : 'night';
     }
 
     function normalizeMeta(meta) {
@@ -511,6 +562,7 @@
         var setIntervalFn = options.setInterval || global.setInterval;
         var clearIntervalFn = options.clearInterval || global.clearInterval;
         var onChange = options.onChange;
+        var getVariant = options.getVariant;
         var intervalMs = Math.max(250, Number(options.intervalMs) || 1000);
         var mediaQuery = null;
         var mediaListener = null;
@@ -523,6 +575,13 @@
         }
 
         function readVariant() {
+            if (typeof getVariant === 'function') {
+                try {
+                    return getVariant() === 'night' ? 'night' : 'day';
+                } catch (e) {
+                    return 'day';
+                }
+            }
             if (typeof matchMediaFn !== 'function') return 'day';
             try {
                 // Some mobile WebViews keep the first MediaQueryList object stale.
@@ -620,12 +679,15 @@
 
     ns.themePairs = {
         PAIR_VERSION: PAIR_VERSION,
+        DAY_NIGHT_PREFERENCE_DEFAULTS: clone(DAY_NIGHT_PREFERENCE_DEFAULTS),
         SHARED_META_KEYS: SHARED_META_KEYS.slice(),
         createState: createState,
         ensureState: ensureState,
         ensureMutableState: ensureMutableState,
         inspectState: inspectState,
         normalizeMeta: normalizeMeta,
+        normalizeDayNightPreference: normalizeDayNightPreference,
+        resolveDayNightVariant: resolveDayNightVariant,
         makePairTarget: makePairTarget,
         makeItemKey: makeItemKey,
         createPair: createPair,

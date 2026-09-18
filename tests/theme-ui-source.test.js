@@ -46,6 +46,19 @@ test('day night editor keeps pair rename and pair management separate from ordin
     assert.match(editor, /deleteThemeEverywhere\(deletingName/);
 });
 
+test('day night switching exposes three persistent modes and editor toggles select manual mode', () => {
+    const settings = source.slice(source.indexOf('function openSettingsSheet'), source.indexOf('// ── 分类管理'));
+    const editor = source.slice(source.indexOf('function openEditSheet'), source.indexOf('function mergeImportedAnnotations'));
+    assert.match(settings, /id="tm-day-night-mode"/);
+    assert.match(settings, /value="system"/);
+    assert.match(settings, /value="manual"/);
+    assert.match(settings, /value="schedule"/);
+    assert.match(settings, /id="tm-day-night-day-start"/);
+    assert.match(settings, /id="tm-day-night-night-start"/);
+    assert.match(editor, /persistManualDayNightVariant\(variant, 'editor-manual-switch', true\)/);
+    assert.doesNotMatch(source, /temporaryPairOverride/);
+});
+
 test('category and tag flows use sheets without theme-manager prompt dialogs', () => {
     assert.match(source, /function openCategoryPicker/);
     assert.match(source, /function openTagPicker/);
