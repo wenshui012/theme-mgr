@@ -311,6 +311,11 @@ function runtimeFixture(options = {}) {
         preloadHostImage: options.preloadHostImage,
         overwriteHostAvatar: options.overwriteHostAvatar,
         bakesUserOriginalView: options.bakesUserOriginalView,
+        getEditorPreferences: options.getEditorPreferences,
+        saveEditorPreferences: options.saveEditorPreferences,
+        importAvatarFileToLibrary: options.importAvatarFileToLibrary,
+        processAvatarFile: options.processAvatarFile,
+        openAvatarManager: options.openAvatarManager,
         imageTools: options.imageTools,
         fetch: options.fetch,
     };
@@ -380,9 +385,28 @@ test('message floors resolve group characters by original_avatar rather than dis
     assert.equal(modules.avatarRuntime.targetForMessage(context, floor).key, 'character:bob.png');
 });
 test('avatar editor preferences clamp steps and default quick imports to the library', () => {
-    assert.deepEqual({ ...modules.avatarRuntime.normalizeEditorPreferences({ scaleStepPercent: 500, positionStepPercent: 0, rotationStepDegrees: 2.5, manualInput: true }) }, {
-        scaleStepPercent: 100, positionStepPercent: 0.1, rotationStepDegrees: 2.5, manualInput: true, quickImportToLibrary: true,
+    assert.deepEqual({ ...modules.avatarRuntime.normalizeEditorPreferences({ scaleStepPercent: 500, positionStepPercent: 0, rotationStepDegrees: 2.5 }) }, {
+        scaleStepPercent: 100, positionStepPercent: 0.1, rotationStepDegrees: 2.5, quickImportToLibrary: true,
     });
+});
+test('an in-panel library import restores chat and theme scope keys from a native floor edit', async () => {
+    const imported = asset('imported');
+    const f = runtimeFixture({
+        seed: { assets: [imported] },
+        getEditorPreferences: () => ({ quickImportToLibrary: true }),
+        importAvatarFileToLibrary: async () => ({ id: imported.id }),
+    });
+    await f.runtime.beginNativeEdit('user');
+    let state = await f.runtime.importEditorAvatar({ name: 'new.png' });
+    assert.equal(state.chatKey, modules.avatarRuntime.chatBindingKey('chat-uuid-1'));
+    assert.equal(state.themeKey, 'theme-name:A');
+    await f.runtime.saveEdit('chat');
+    assert.equal((await f.store.getBinding(modules.avatarRuntime.chatBindingKey('chat-uuid-1'), 'user:global')).avatarId, imported.id);
+    await f.runtime.beginNativeEdit('user');
+    state = await f.runtime.importEditorAvatar({ name: 'new.png' });
+    assert.equal(state.themeKey, 'theme-name:A');
+    await f.runtime.saveEdit('theme');
+    assert.equal((await f.store.getBinding('theme-name:A', 'user:global')).avatarId, imported.id);
 });
 test('a group message floor opens the matching character editor without a target picker', async () => {
     const context = {
@@ -1784,11 +1808,13 @@ test('94 Avatar adjustment opens directly and its toolbar owns four save scopes 
     assert.match(panelBlock, /已绑定 ' \+ Number\(scopes\.theme/);
     assert.match(runtimeSource, /clearApplicationScope\(clearKind, clearScope, editor\.target\)/);
     assert.match(runtimeSource, /tm-avatar-message-edit/);
+    assert.match(runtimeSource, /message\.querySelector\('\.extraMesButtons'\)/);
     assert.match(runtimeSource, /data-action="editor-settings"/);
     assert.match(runtimeSource, /data-action="open-avatar-manager"/);
     assert.match(runtimeSource, /data-action="import-avatar"/);
     assert.match(runtimeSource, /data-editor-pref="quickImportToLibrary"/);
     assert.match(runtimeSource, /data-view-number="scale"/);
+    assert.doesNotMatch(runtimeSource, /manualInput|is-manual|手动输入调整数值/);
     assert.match(runtimeSource, /TT User 会按当前调整生成固定 2:3 成品/);
     assert.match(runtimeSource, /本地酒馆仍完整覆盖母图/);
 });

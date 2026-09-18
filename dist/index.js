@@ -11442,7 +11442,7 @@
 })(window);
 /* END MODULE 21/29: src/avatar-recovery.js */
 
-/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:6329ac3e2f3d4862afad9abc590d26231ad307669ef69e1fc86905b2b816cf36 */
+/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:4d8692719af4138a9eb5baef6fd88c68635e70ed17ae9960f041f5bf8f3ad3b1 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -11471,7 +11471,6 @@
         scaleStepPercent: 1,
         positionStepPercent: 1,
         rotationStepDegrees: 1,
-        manualInput: false,
         quickImportToLibrary: true,
     };
 
@@ -11620,7 +11619,6 @@
             scaleStepPercent: number('scaleStepPercent', DEFAULT_EDITOR_PREFERENCES.scaleStepPercent, 0.1, 100),
             positionStepPercent: number('positionStepPercent', DEFAULT_EDITOR_PREFERENCES.positionStepPercent, 0.1, 100),
             rotationStepDegrees: number('rotationStepDegrees', DEFAULT_EDITOR_PREFERENCES.rotationStepDegrees, 0.1, 180),
-            manualInput: value.manualInput === true,
             quickImportToLibrary: value.quickImportToLibrary !== false,
         };
     }
@@ -12543,7 +12541,7 @@
             Array.prototype.slice.call(chat.querySelectorAll('.mes')).forEach(function (message) {
                 if (!targetForMessage(context, message) || typeof message.querySelector !== 'function') return;
                 if (message.querySelector('.' + MESSAGE_BUTTON_CLASS)) return;
-                var buttons = message.querySelector('.mes_buttons');
+                var buttons = message.querySelector('.extraMesButtons');
                 if (!buttons) return;
                 var button = doc.createElement('div');
                 button.className = 'mes_button ' + MESSAGE_BUTTON_CLASS + ' fa-solid fa-user-pen';
@@ -12756,9 +12754,9 @@
                 ':host{--tm-avatar-accent:var(--SmartThemeQuoteColor,#7c6daf);--tm-avatar-text:var(--SmartThemeBodyColor,#eee);--tm-avatar-bg:var(--SmartThemeBlurTintColor,var(--SmartThemeBackgroundColor,#16161a))}',
                 '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
                 '.tm-avatar-editor-tools{display:flex;justify-content:flex-end;gap:5px}.tm-avatar-editor-tools button{display:inline-flex;align-items:center;gap:5px}.tm-avatar-editor-settings[hidden]{display:none}.tm-avatar-editor-settings{display:grid;grid-template-columns:1fr 88px;gap:7px 10px;align-items:center;padding:8px;border:1px solid rgba(127,127,127,.24);border-radius:10px;background:rgba(127,127,127,.07)}.tm-avatar-editor-settings label{display:contents}.tm-avatar-editor-settings input[type=number]{box-sizing:border-box;width:100%;min-width:0;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);color:inherit;padding:5px}.tm-avatar-editor-setting-toggle{grid-column:1/-1;display:flex!important;align-items:center;justify-content:space-between;gap:8px}.tm-avatar-editor-setting-toggle input{width:auto!important}.tm-avatar-editor-import-note{grid-column:1/-1;font-size:10px;line-height:1.35;opacity:.68}',
-                '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 52px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:.76}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}.tm-avatar-editor-number{display:none;box-sizing:border-box;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);color:inherit;padding:5px;text-align:right}.tm-avatar-editor-bar.is-manual .tm-avatar-editor-range{display:none}.tm-avatar-editor-bar.is-manual .tm-avatar-editor-number{display:block}',
+                '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 58px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}.tm-avatar-editor-number-wrap{display:flex;align-items:center;gap:2px;box-sizing:border-box;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);padding:0 5px;font-variant-numeric:tabular-nums}.tm-avatar-editor-number{box-sizing:border-box;border:0!important;background:transparent!important;color:inherit;padding:5px 0;text-align:right;outline:none;-moz-appearance:textfield}.tm-avatar-editor-number::-webkit-inner-spin-button,.tm-avatar-editor-number::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}.tm-avatar-editor-number-wrap span{opacity:.7}',
                 'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}button:disabled{cursor:default;opacity:.38}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-bind{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}.tm-avatar-editor-bind span{font-weight:650}.tm-avatar-editor-bind small{font-size:10px;opacity:.62;text-align:right}.tm-avatar-editor-bind.is-active{border-color:var(--tm-avatar-accent);background:color-mix(in srgb,var(--tm-avatar-accent) 18%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-scope-panel[hidden]{display:none}.tm-avatar-editor-scope-panel{display:flex;flex-direction:column;gap:5px;padding:7px;border:1px solid color-mix(in srgb,var(--tm-avatar-accent) 34%,transparent);border-radius:10px;background:rgba(127,127,127,.08)}.tm-avatar-editor-scope-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:1px 2px 4px;font-weight:700}.tm-avatar-editor-scope-title small{font-size:10px;font-weight:500;opacity:.64}.tm-avatar-editor-priority{padding:0 2px 4px;font-size:10px;line-height:1.35;opacity:.68}.tm-avatar-editor-scope-option{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:38px;text-align:left;white-space:normal}.tm-avatar-editor-scope-option span{display:flex;min-width:0;flex-direction:column;gap:2px}.tm-avatar-editor-scope-option strong{font-size:12px}.tm-avatar-editor-scope-option small{font-size:10px;opacity:.64}.tm-avatar-editor-scope-option em{font-size:9px;font-style:normal;opacity:.72}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(6,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
-                '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:8px;font-size:12px}.tm-avatar-editor-controls{gap:3px}.tm-avatar-editor-row{grid-template-columns:30px 30px minmax(92px,1fr) 40px 30px;gap:4px;min-height:32px}button{min-height:30px;padding:4px 6px}.tm-avatar-editor-footer{gap:4px}}',
+                '@media(max-width:430px){.tm-avatar-editor-bar{gap:6px;padding:8px;font-size:12px}.tm-avatar-editor-controls{gap:3px}.tm-avatar-editor-row{grid-template-columns:30px 30px minmax(88px,1fr) 54px 30px;gap:4px;min-height:32px}button{min-height:30px;padding:4px 6px}.tm-avatar-editor-footer{gap:4px}}',
             ].join('');
             toolbarRoot.appendChild(toolbarStyle);
             toolbar = doc.createElement('div');
@@ -12770,14 +12768,13 @@
                 '<label><span>大小每次增加（%）</span><input type="number" min="0.1" max="100" step="0.1" value="' + preferences.scaleStepPercent + '" data-editor-pref="scaleStepPercent"></label>' +
                 '<label><span>位置每次增加（%）</span><input type="number" min="0.1" max="100" step="0.1" value="' + preferences.positionStepPercent + '" data-editor-pref="positionStepPercent"></label>' +
                 '<label><span>倾斜每次增加（°）</span><input type="number" min="0.1" max="180" step="0.1" value="' + preferences.rotationStepDegrees + '" data-editor-pref="rotationStepDegrees"></label>' +
-                '<label class="tm-avatar-editor-setting-toggle"><span>手动输入调整数值</span><input type="checkbox" data-editor-pref="manualInput"' + (preferences.manualInput ? ' checked' : '') + '></label>' +
                 '<label class="tm-avatar-editor-setting-toggle"><span>导入头像时保存到头像库</span><input type="checkbox" data-editor-pref="quickImportToLibrary"' + (preferences.quickImportToLibrary ? ' checked' : '') + '></label>' +
                 '<div class="tm-avatar-editor-import-note">关闭“保存到头像库”后，导入图只在本次调整中使用；保存时会覆盖对应的 SillyTavern 原头像。</div></div>' +
                 '<div class="tm-avatar-editor-controls">' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">大小</span><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="-1" aria-label="缩小">−</button><input class="tm-avatar-editor-range" type="range" min="0.5" max="3" step="0.001" value="1" data-view="scale" aria-label="调整大小"><input class="tm-avatar-editor-number" type="number" min="50" max="300" step="0.1" value="100" data-view-number="scale" aria-label="手动输入大小百分比"><output class="tm-avatar-editor-value" data-view-output="scale">100%</output><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="1" aria-label="放大">+</button></div>' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">左右</span><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="-1" aria-label="向左移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="x" aria-label="左右位置"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="x" aria-label="手动输入左右百分比"><output class="tm-avatar-editor-value" data-view-output="x">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="1" aria-label="向右移动">+</button></div>' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">上下</span><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="-1" aria-label="向上移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="y" aria-label="上下位置"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="y" aria-label="手动输入上下百分比"><output class="tm-avatar-editor-value" data-view-output="y">0%</output><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="1" aria-label="向下移动">+</button></div>' +
-                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input class="tm-avatar-editor-range" type="range" min="-180" max="180" step="0.1" value="0" data-view="rotate" aria-label="倾斜角度"><input class="tm-avatar-editor-number" type="number" min="-180" max="180" step="0.1" value="0" data-view-number="rotate" aria-label="手动输入倾斜角度"><output class="tm-avatar-editor-value" data-view-output="rotate">0°</output><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">大小</span><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="-1" aria-label="缩小">−</button><input class="tm-avatar-editor-range" type="range" min="0.5" max="3" step="0.001" value="1" data-view="scale" aria-label="调整大小"><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="50" max="300" step="0.1" value="100" data-view-number="scale" aria-label="输入大小百分比"><span>%</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="scale" data-step-direction="1" aria-label="放大">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">左右</span><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="-1" aria-label="向左移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="x" aria-label="左右位置"><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="x" aria-label="输入左右百分比"><span>%</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="x" data-step-direction="1" aria-label="向右移动">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">上下</span><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="-1" aria-label="向上移动">−</button><input class="tm-avatar-editor-range" type="range" min="-1" max="1" step="0.001" value="0" data-view="y" aria-label="上下位置"><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="-100" max="100" step="0.1" value="0" data-view-number="y" aria-label="输入上下百分比"><span>%</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="y" data-step-direction="1" aria-label="向下移动">+</button></div>' +
+                '<div class="tm-avatar-editor-row"><span class="tm-avatar-editor-label">倾斜</span><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="-1" aria-label="逆时针倾斜">−</button><input class="tm-avatar-editor-range" type="range" min="-180" max="180" step="0.1" value="0" data-view="rotate" aria-label="倾斜角度"><label class="tm-avatar-editor-number-wrap"><input class="tm-avatar-editor-number" type="number" min="-180" max="180" step="0.1" value="0" data-view-number="rotate" aria-label="输入倾斜角度"><span>°</span></label><button type="button" class="tm-avatar-editor-step" data-step-view="rotate" data-step-direction="1" aria-label="顺时针倾斜">+</button></div>' +
                 '</div>' + (editor.mode === 'library' && editor.target.kind === 'user' && editor.bindingMode === 'adaptive'
                     ? '<button type="button" class="tm-avatar-editor-bind" data-action="bind-theme" aria-pressed="false"><span>绑定到当前美化</span><small data-bind-theme-hint></small></button>'
                     : '') + '<div class="tm-avatar-editor-scope-panel" data-scope-panel hidden></div><div class="tm-avatar-editor-footer"><button type="button" data-action="flip-x" aria-pressed="false" title="水平镜像">水平</button><button type="button" data-action="flip-y" aria-pressed="false" title="垂直镜像">垂直</button><button type="button" data-action="reset">重置</button>' + (editor.mode === 'library' ? '<button type="button" data-action="clear-bindings" title="解除头像绑定">解绑</button>' : '') + '<button type="button" data-action="cancel">取消</button><button type="button" class="tm-avatar-editor-save" data-action="save">保存</button></div>';
@@ -12795,8 +12792,6 @@
         }
         function updateToolbar() {
             if (!toolbar || !editor) return;
-            var preferences = editorPreferences();
-            toolbar.classList.toggle('is-manual', preferences.manualInput);
             ['import-avatar', 'open-avatar-manager', 'save'].forEach(function (action) {
                 var actionButton = toolbar.querySelector('[data-action="' + action + '"]');
                 if (actionButton) actionButton.disabled = importingEditorAvatar;
@@ -12804,10 +12799,8 @@
             ['scale', 'x', 'y', 'rotate'].forEach(function (name) {
                 var input = toolbar.querySelector('[data-view="' + name + '"]');
                 var numberInput = toolbar.querySelector('[data-view-number="' + name + '"]');
-                var output = toolbar.querySelector('[data-view-output="' + name + '"]');
                 if (input) input.value = editor.view[name];
                 if (numberInput) numberInput.value = name === 'rotate' ? editor.view[name] : round(editor.view[name] * 100, 2);
-                if (output) output.textContent = name === 'rotate' ? Math.round(editor.view.rotate) + '°' : Math.round(editor.view[name] * 100) + '%';
             });
             ['flipX', 'flipY'].forEach(function (name) {
                 var action = name === 'flipX' ? 'flip-x' : 'flip-y';
@@ -13341,6 +13334,8 @@
             if (!asset || !asset.imageData) throw Object.assign(new Error('导入头像内容无效'), { code: 'AVATAR_IMPORT_INVALID' });
             editor.mode = mode === 'transient' ? 'transient' : 'library';
             editor.bindingMode = mode === 'transient' ? 'original' : 'deferred';
+            editor.chatKey = currentChatBindingKey();
+            editor.themeKey = currentThemeKey();
             editor.avatarId = mode === 'transient' ? null : asset.id;
             editor.asset = asset;
             editor.view = normalizeView(null);
@@ -13378,7 +13373,7 @@
         function persistEditorPreference(input) {
             var preferences = editorPreferences();
             var name = input.getAttribute('data-editor-pref');
-            if (name === 'manualInput' || name === 'quickImportToLibrary') preferences[name] = input.checked === true;
+            if (name === 'quickImportToLibrary') preferences[name] = input.checked === true;
             else preferences[name] = Number(input.value);
             preferences = normalizeEditorPreferences(preferences);
             if (name in preferences) input.value = preferences[name];
@@ -13436,6 +13431,7 @@
             var input = event.target && event.target.closest ? (event.target.closest('[data-view]') || event.target.closest('[data-view-number]')) : null;
             if (!input || !toolbar.contains(input)) return;
             var name = input.getAttribute('data-view') || input.getAttribute('data-view-number');
+            if (input.getAttribute('data-view-number') && clean(input.value) === '') return;
             var value = Number(input.value);
             if (input.getAttribute('data-view-number') && name !== 'rotate') value /= 100;
             editorPreviewSettled = false;
@@ -13465,6 +13461,7 @@
             }
             var input = event.target && event.target.closest ? (event.target.closest('[data-view]') || event.target.closest('[data-view-number]')) : null;
             if (!input || !toolbar.contains(input)) return;
+            if (input.getAttribute('data-view-number') && clean(input.value) === '') { updateToolbar(); return; }
             commitEditorPreview();
         }
         function clearBinding(kind) {
@@ -13834,6 +13831,7 @@
                 state: 'editing',
                 mode: editor.mode,
                 themeKey: editor.themeKey,
+                chatKey: editor.chatKey || null,
                 bindingMode: editor.bindingMode || null,
                 target: clone(editor.target),
                 avatarId: editor.avatarId,
@@ -13864,6 +13862,7 @@
             beginEdit: beginEdit,
             beginNativeEdit: beginNativeEdit,
             beginMessageEdit: beginMessageEdit,
+            importEditorAvatar: importEditorAvatar,
             clearNativeView: clearNativeView,
             cancelEdit: cancelEdit,
             saveEdit: saveEdit,
@@ -15945,7 +15944,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:180600ea931eec5b44dd73a40d94d6f5b68b9d002e83404508f022d2dc21c2b0 */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:7394af7db6cf7654cf323b64f1c63760284c5ce4b3c0eeb686e215b5eea9fb31 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16553,7 +16552,7 @@
             var max = name === 'rotationStepDegrees' ? 180 : 100;
             d.avatarEditorPreferences[name] = Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : avatarEditorDefaults[name];
         });
-        d.avatarEditorPreferences.manualInput = d.avatarEditorPreferences.manualInput === true;
+        delete d.avatarEditorPreferences.manualInput;
         d.avatarEditorPreferences.quickImportToLibrary = d.avatarEditorPreferences.quickImportToLibrary !== false;
         if (avatarLibraryApi) avatarLibraryApi.ensureState(d);
         var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
@@ -16613,7 +16612,7 @@
             followThemePreviewShape: false,
             simplifyGridText: false,
             autoHideHeader: false,
-            avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, manualInput: false, quickImportToLibrary: true },
+            avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, quickImportToLibrary: true },
             dayNight: { version: 1, pairs: Object.create(null) },
             series: { version: 1, groups: Object.create(null) },
             bindings: { version: 2, characters: Object.create(null), chats: Object.create(null), manualTheme: '', manualTarget: null },
