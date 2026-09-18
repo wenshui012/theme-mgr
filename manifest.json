@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v4.5.1",
-  "version": "4.5.1",
+  "display_name": "美化管理 v4.6.0",
+  "version": "4.6.0",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v4.5.1: 修复 iOS TauriTavern 背景选择黑屏、头像调整兼容及 User 原头像拉伸与刷新问题"
+  "description": "v4.6.0: 新增楼层头像快捷调整、精细步进、快捷导入与后端孤儿图片安全清理"
 }

@@ -1506,6 +1506,11 @@ test('Avatar settings expose verified backup restore and a clear mobile size war
     assert.match(settings, /avatarRecoveryApi\.restoreBackup\(file\)/);
     assert.match(settings, /超过移动端完整备份安全上限 48MB；可在桌面端备份或分批导出图片/);
     assert.match(settings, /回滚未完成的恢复/);
+    assert.match(settings, /清理孤儿图片/);
+    assert.match(settings, /requestAvatarImageGc\(true\)/);
+    assert.match(settings, /requestAvatarImageGc\(false, scan\.files\)/);
+    assert.match(uiSource, /imageGarbageCollection[\s\S]*avatarAware !== true[\s\S]*exactCommit !== true/);
+    assert.match(uiSource, /payload\.expectedFiles = Array\.isArray\(expectedFiles\) \? expectedFiles\.slice\(\) : \[\]/);
     assert.ok(uiSource.indexOf('modules.avatarRecovery.resolveBootstrap') < uiSource.indexOf('modules.createAvatarStore({ dbName: avatarRecoveryBootstrap.databaseName })'));
     assert.match(uiSource, /if \(avatarRecoveryGateLocked\) return Promise\.reject/);
     assert.ok(settings.indexOf('organizeHtml') < settings.indexOf("buildDisclosureHtml('tm-avatar-settings-interface'"));

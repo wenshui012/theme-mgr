@@ -53,7 +53,7 @@
     var IMG_QUALITY = 0.8;
     var FAB_ID = 'tm-fab-main';
 
-    var TM_VERSION = options.version || '4.5.1';
+    var TM_VERSION = options.version || '4.6.0';
     var storageApi = null;
     var imageToolsApi = null;
     var imageLoaderApi = null;
@@ -6946,6 +6946,59 @@
     }
 
     // ── 设置 ─────────────────────────────────────────────────
+    function avatarImageGcError(message, code) {
+        var error = new Error(message);
+        error.code = code || 'AVATAR_IMAGE_GC_FAILED';
+        return error;
+    }
+
+    function readAvatarImageGcJson(response, fallbackMessage) {
+        if (!response || typeof response.json !== 'function') return Promise.reject(avatarImageGcError(fallbackMessage, 'AVATAR_IMAGE_GC_INVALID'));
+        return response.json().catch(function () {
+            throw avatarImageGcError(fallbackMessage, 'AVATAR_IMAGE_GC_INVALID');
+        }).then(function (body) {
+            if (!body || typeof body !== 'object' || Array.isArray(body)) throw avatarImageGcError(fallbackMessage, 'AVATAR_IMAGE_GC_INVALID');
+            if (!response.ok || body.ok !== true) {
+                var code = typeof body.error === 'string' ? body.error : 'AVATAR_IMAGE_GC_FAILED';
+                var message = code === 'IMAGE_GC_CHANGED'
+                    ? '孤儿图片状态已变化，请重新扫描确认'
+                    : (code === 'AVATAR_GC_BLOCKED' ? '头像数据未通过完整校验，已中止清理' : fallbackMessage);
+                throw avatarImageGcError(message, code);
+            }
+            return body;
+        });
+    }
+
+    function requestAvatarImageGc(dryRun, expectedFiles) {
+        return global.fetch(SERVER_BASE + '/status', { method: 'GET', credentials: 'same-origin', cache: 'no-cache' })
+            .then(function (response) { return readAvatarImageGcJson(response, '无法确认后端清理能力'); })
+            .then(function (status) {
+                var capability = status.capabilities && status.capabilities.imageGarbageCollection;
+                if (!capability || capability.version !== 1 || capability.avatarAware !== true || capability.dryRun !== true || capability.exactCommit !== true) {
+                    throw avatarImageGcError('当前后端版本不支持安全清理孤儿图片，请先更新 theme-mgr-server', 'AVATAR_IMAGE_GC_UNSUPPORTED');
+                }
+                return getPostHeaders().then(function (headers) {
+                    var payload = { dryRun: dryRun === true };
+                    if (!dryRun) payload.expectedFiles = Array.isArray(expectedFiles) ? expectedFiles.slice() : [];
+                    return global.fetch(SERVER_BASE + '/gc', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        cache: 'no-cache',
+                        headers: headers,
+                        body: JSON.stringify(payload),
+                    }).then(function (response) { return readAvatarImageGcJson(response, dryRun ? '扫描孤儿图片失败' : '清理孤儿图片失败'); })
+                        .then(function (result) {
+                            if (!Array.isArray(result.files) || !Number.isSafeInteger(result.removed) || result.removed < 0 ||
+                                !Number.isFinite(result.bytes) || result.bytes < 0 || result.files.length !== result.removed ||
+                                result.files.some(function (name) { return typeof name !== 'string' || !name; })) {
+                                throw avatarImageGcError('后端返回了无效的孤儿图片清理结果', 'AVATAR_IMAGE_GC_INVALID');
+                            }
+                            return { files: result.files.slice(), removed: result.removed, bytes: result.bytes, capability: capability };
+                        });
+                });
+            });
+    }
+
     function formatAvatarMegabytes(bytes) { return (Math.max(0, Number(bytes) || 0) / (1024 * 1024)).toFixed(1) + 'MB'; }
     function openAvatarSettingsSheet() {
         var d = load();
@@ -6971,7 +7024,10 @@
             (recoveryPending
                 ? '<div class="tm-hint" style="margin-bottom:9px;color:var(--warning-color,#d97706)">检测到未完成的头像恢复事务。Avatar Manager 与普通设置保存将保持只读，完成回滚前不会加载半恢复数据。</div><button class="tm-btn tm-btn-danger" id="tm-avatar-rollback-recovery" style="width:100%;margin-bottom:9px"><i class="fa-solid fa-rotate-left"></i> 回滚未完成的恢复</button>'
                 : '<button class="tm-btn tm-btn-outline" id="tm-avatar-restore-backup" style="width:100%;margin-bottom:9px"' + (restoreDisabled ? ' disabled' : '') + '><i class="fa-solid fa-file-arrow-up"></i> 从完整备份恢复</button><input type="file" id="tm-avatar-restore-file" accept=".zip,application/zip" style="display:none">' +
-                    (authority.localOnly === true ? '<div class="tm-hint" style="margin-bottom:9px">恢复会完整替换 Avatar Manager 数据，不会合并；旧头像库将保留为事务回滚依据。</div>' : '<div class="tm-hint" style="margin-bottom:9px">本阶段仅支持经明确确认的本地存储环境恢复；后端头像库不会被修改。</div>'));
+                    (authority.localOnly === true ? '<div class="tm-hint" style="margin-bottom:9px">恢复会完整替换 Avatar Manager 数据，不会合并；旧头像库将保留为事务回滚依据。</div>' : '<div class="tm-hint" style="margin-bottom:9px">本阶段仅支持经明确确认的本地存储环境恢复；后端头像库不会被修改。</div>')) +
+            '<div class="tm-data-danger"><div class="tm-data-group-label">后端空间清理</div>' +
+            '<button class="tm-btn tm-btn-danger" id="tm-avatar-clean-orphan-images"' + (storageState.phase !== 'remote-ready' || storageState.authoritative !== 'remote' || storageState.writable !== true || recoveryPending ? ' disabled' : '') + '><i class="fa-solid fa-broom"></i><span><strong>清理孤儿图片</strong><small>先扫描，只删除未被美化或头像库引用且已保留 24 小时的后端图片</small></span></button>' +
+            '<div class="tm-hint" style="margin-top:7px">仅新版 theme-mgr-server 支持；本地头像库无需执行此清理。</div></div>';
         var extensionHtml = '<div class="tm-update-panel' + (updateState.phase === 'ready' && updateState.available ? ' has-update' : '') + '"><div class="tm-update-panel-head"><div><strong>美化管理 v' + esc(TM_VERSION) + '</strong><span class="tm-update-status">' + esc(updateView.status) + '</span></div><button type="button" class="tm-btn tm-btn-outline tm-update-action" id="tm-avatar-update-action" data-update-mode="' + esc(updateView.mode) + '"' + (updateView.disabled ? ' disabled' : '') + '><i class="fa-solid ' + (updateView.mode === 'update' ? 'fa-download' : 'fa-rotate') + '"></i> ' + esc(updateView.action) + '</button></div><div class="tm-update-detail"' + (updateView.detail ? '' : ' hidden') + '>' + esc(updateView.detail) + '</div><div class="tm-plugin-credit"><span>作者：温水</span><span>发布于毛毛雨美化群、旅程</span></div></div>';
         var sheet = createSheet(['<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>', organizeHtml, buildDisclosureHtml('tm-avatar-settings-interface', '界面显示', 'fa-display', interfaceHtml), buildDisclosureHtml('tm-avatar-settings-data', '数据管理', 'fa-database', dataHtml), extensionHtml].join(''));
         sheet.classList.add('tm-sheet-tall', 'tm-settings-sheet');
@@ -7052,6 +7108,33 @@
                 toast(error && error.message ? error.message : '恢复事务回滚失败；仍保持只读', true);
                 rollbackButton.innerHTML = original;
                 rollbackButton.disabled = false;
+            });
+        });
+        var orphanImageButton = sheet.querySelector('#tm-avatar-clean-orphan-images');
+        if (orphanImageButton) orphanImageButton.addEventListener('click', function () {
+            var button = orphanImageButton;
+            var original = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在安全扫描…';
+            requestAvatarImageGc(true).then(function (scan) {
+                if (!scan.removed) {
+                    toast('没有可清理的孤儿图片');
+                    return null;
+                }
+                var graceHours = Math.max(1, Math.round((Number(scan.capability.graceMs) || 86400000) / 3600000));
+                if (!confirm('扫描到 ' + scan.removed + ' 张孤儿图片，共 ' + formatAvatarMegabytes(scan.bytes) + '。\n\n这些文件未被美化或头像库引用，并且已超过 ' + graceHours + ' 小时保护期。\n删除后无法恢复，确定继续吗？')) return null;
+                button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在清理…';
+                return requestAvatarImageGc(false, scan.files);
+            }).then(function (result) {
+                if (!result) return;
+                toast('已清理 ' + result.removed + ' 张孤儿图片，释放约 ' + formatAvatarMegabytes(result.bytes));
+            }).catch(function (error) {
+                toast(error && error.message ? error.message : '清理孤儿图片失败', true);
+            }).finally(function () {
+                if (!button.parentNode) return;
+                button.innerHTML = original;
+                var current = avatarCoordinator && avatarCoordinator.getState();
+                button.disabled = avatarRecoveryGateLocked || !current || current.phase !== 'remote-ready' || current.authoritative !== 'remote' || current.writable !== true;
             });
         });
         sheet.querySelector('#tm-avatar-update-action').addEventListener('click', function () { var current = getExtensionUpdateState(); if (current.phase === 'ready' && current.available) openExtensionUpdateConfirmSheet(); else { this.disabled = true; checkExtensionUpdate(true).catch(function () { toast('检查更新失败；请检查网络、Git 状态或酒馆服务日志', true); }); } });
