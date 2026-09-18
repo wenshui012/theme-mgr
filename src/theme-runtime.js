@@ -157,13 +157,19 @@
             options = options || {};
             var bridge = getBridge();
             var apiOptions = {};
+            if (Array.isArray(options.targetNames)) {
+                apiOptions.targetNames = options.targetNames.slice();
+            }
             if (typeof options.targetName === 'string' && options.targetName.trim()) {
                 apiOptions.targetName = options.targetName;
+            }
+            if ((apiOptions.targetNames && apiOptions.targetNames.length) || apiOptions.targetName) {
                 apiOptions.onDiagnostics = typeof options.onDiagnostics === 'function'
                     ? options.onDiagnostics
                     : function (diagnostics) {
                         console.warn('[ThemeManager] non-blocking inventory diagnostics:', {
-                            targetName: options.targetName,
+                            targetName: options.targetName || '',
+                            targetNames: apiOptions.targetNames || [],
                             diagnostics: diagnostics,
                         });
                     };

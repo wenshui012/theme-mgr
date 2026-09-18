@@ -43,16 +43,21 @@
                 });
             }
 
-            var targetName = typeof options.targetName === 'string' && options.targetName.trim()
-                ? options.targetName
-                : '';
+            var targetNames = [];
+            function addTargetName(value) {
+                value = typeof value === 'string' ? value.trim() : '';
+                if (value && targetNames.indexOf(value) === -1) targetNames.push(value);
+            }
+            if (Array.isArray(options.targetNames)) options.targetNames.forEach(addTargetName);
+            addTargetName(options.targetName);
+            var targeted = targetNames.length > 0;
             var seenNames = Object.create(null);
             var namedItems = [];
             var diagnostics = [];
             for (var i = 0; i < data.themes.length; i++) {
                 var item = data.themes[i];
                 if (!schema.isPlainObject(item) || typeof item.name !== 'string' || !item.name.trim()) {
-                    if (!targetName) {
+                    if (!targeted) {
                         throw inventoryError('SillyTavern 主题库存包含无效主题项', {
                             reason: 'item-invalid',
                             index: i,
@@ -73,7 +78,7 @@
             var duplicateNames = Object.keys(seenNames).filter(function (name) {
                 return seenNames[name].length > 1;
             });
-            if (!targetName && duplicateNames.length) {
+            if (!targeted && duplicateNames.length) {
                 var duplicateName = duplicateNames[0];
                 throw inventoryError('SillyTavern 主题库存包含重复主题名', {
                     reason: 'duplicate-name',
@@ -93,16 +98,20 @@
                 });
             });
 
-            if (targetName && seenNames[targetName] && seenNames[targetName].length > 1) {
-                throw inventoryError('目标主题在 SillyTavern 库存中存在重名歧义', {
+            var ambiguousTargets = targetNames.filter(function (name) {
+                return seenNames[name] && seenNames[name].length > 1;
+            });
+            if (ambiguousTargets.length > 0) {
+                throw inventoryError('目标主题在 SillyTavern 库存中存在重名歧义：' + ambiguousTargets.join('、'), {
                     reason: 'target-ambiguous',
-                    targetName: targetName,
-                    indices: seenNames[targetName].slice(),
+                    targetName: ambiguousTargets.length === 1 ? ambiguousTargets[0] : '',
+                    targetNames: ambiguousTargets.slice(),
+                    indices: ambiguousTargets.length === 1 ? seenNames[ambiguousTargets[0]].slice() : [],
                     diagnostics: diagnostics,
                 }, 'inventory-target-ambiguous');
             }
 
-            if (targetName) {
+            if (targeted) {
                 reportInventoryDiagnostics(options.onDiagnostics, diagnostics);
                 return namedItems.filter(function (entry) {
                     return seenNames[entry.item.name].length === 1;

@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v4.6.1",
-  "version": "4.6.1",
+  "display_name": "美化管理 v4.6.2",
+  "version": "4.6.2",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v4.6.1: 日夜美化支持跟随系统、永久手动选择与自定义时间切换"
+  "description": "v4.6.2: 修复主题库存存在无关重名时插件无法导入美化的问题"
 }

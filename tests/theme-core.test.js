@@ -2189,6 +2189,28 @@ function makeTransactionHarness(initialThemes, hooks) {
             if (typeof hooks.transformInventory === 'function') {
                 inventory = hooks.transformInventory(inventory, inventoryCount, store, options);
             }
+            if (options && Array.isArray(options.targetNames) && options.targetNames.length > 0) {
+                const counts = Object.create(null);
+                inventory.forEach((item) => {
+                    if (item && typeof item.name === 'string') counts[item.name] = (counts[item.name] || 0) + 1;
+                });
+                const duplicateNames = Object.keys(counts).filter((name) => counts[name] > 1);
+                const diagnostics = duplicateNames.map((name) => ({
+                    code: 'inventory-name-duplicate',
+                    reason: 'duplicate-name',
+                    name,
+                    count: counts[name],
+                }));
+                const ambiguousTargets = options.targetNames.filter((name) => counts[name] > 1);
+                if (ambiguousTargets.length > 0) {
+                    const inventoryError = new Error(`目标主题在 SillyTavern 库存中存在重名歧义：${ambiguousTargets.join('、')}`);
+                    inventoryError.code = 'inventory-target-ambiguous';
+                    inventoryError.details = { targetNames: ambiguousTargets, diagnostics };
+                    return Promise.reject(inventoryError);
+                }
+                if (typeof options.onDiagnostics === 'function') options.onDiagnostics(diagnostics);
+                inventory = inventory.filter((item) => item && counts[item.name] === 1);
+            }
             return Promise.resolve(clone(inventory));
         },
         findTheme(themes, name) { return (themes || []).find((theme) => theme && theme.name === name) || null; },
@@ -3317,6 +3339,63 @@ test('targeted theme inventory excludes unrelated duplicate names without blocki
     }]);
 });
 
+test('multi-target inventory keeps every unambiguous import target while excluding unrelated duplicates', async (t) => {
+    const first = completeTheme('Import One');
+    const second = completeTheme('Import Two');
+    const harness = createThemeApiInventoryHarness(t, {
+        themes: [
+            first,
+            completeTheme('Legacy Duplicate', { custom_css: '/* first */' }),
+            second,
+            completeTheme('Legacy Duplicate', { custom_css: '/* second */' }),
+        ],
+    });
+    const diagnostics = [];
+
+    const themes = await harness.api.getSettingsInventory({
+        targetNames: ['Import One', 'Import Two'],
+        onDiagnostics(items) { diagnostics.push(...items); },
+    });
+
+    assert.deepEqual(themes, [first, second]);
+    assert.deepEqual(diagnostics.map((item) => item.name), ['Legacy Duplicate']);
+});
+
+test('multi-target inventory rejects when any requested import target is ambiguous', async (t) => {
+    const harness = createThemeApiInventoryHarness(t, {
+        themes: [
+            completeTheme('Import One'),
+            completeTheme('Import Two', { custom_css: '/* first */' }),
+            completeTheme('Import Two', { custom_css: '/* second */' }),
+        ],
+    });
+
+    await assert.rejects(
+        harness.api.getSettingsInventory({ targetNames: ['Import One', 'Import Two'] }),
+        (error) => error.code === 'inventory-target-ambiguous' &&
+            error.message.includes('Import Two') &&
+            error.details.targetNames[0] === 'Import Two',
+    );
+});
+
+test('theme runtime forwards every batch import target to the inventory API', async () => {
+    let receivedOptions = null;
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: {
+            getSettingsInventory(options) {
+                receivedOptions = options;
+                return Promise.resolve([]);
+            },
+        },
+    });
+
+    await runtime.getInventory({ targetNames: ['Import One', 'Import Two'] });
+
+    assert.deepEqual(receivedOptions.targetNames, ['Import One', 'Import Two']);
+    assert.equal(typeof receivedOptions.onDiagnostics, 'function');
+});
+
 test('targeted theme inventory rejects ambiguity on the requested theme and preserves diagnostics', async (t) => {
     const harness = createThemeApiInventoryHarness(t, {
         themes: [
@@ -4022,6 +4101,63 @@ test('batch save uses one initial and one final inventory for any number of them
     assert.equal(result.results.slice(1).every((item) => !item.overwritten), true);
     assert.equal(harness.calls.filter((call) => call.type === 'save').length, 5);
     batch.forEach((theme) => assert.deepEqual(harness.store[theme.name], theme));
+});
+
+test('batch import ignores unrelated duplicate inventory names while preserving verified writes', async () => {
+    const imported = completeTheme('Fresh Import');
+    const harness = makeTransactionHarness([], {
+        transformInventory(inventory) {
+            return inventory.concat([
+                completeTheme('Legacy Duplicate', { custom_css: '/* first */' }),
+                completeTheme('Legacy Duplicate', { custom_css: '/* second */' }),
+            ]);
+        },
+    });
+
+    const result = await harness.transactions.saveVerifiedThemes([imported]);
+
+    assert.equal(result.results.length, 1);
+    assert.deepEqual(result.results[0].theme, imported);
+    assert.deepEqual(harness.store['Fresh Import'], imported);
+    assert.equal(harness.calls.filter((call) => call.type === 'save').length, 1);
+});
+
+test('batch import still rejects an ambiguous target before every write', async () => {
+    const target = completeTheme('Ambiguous Import');
+    const harness = makeTransactionHarness([], {
+        transformInventory(inventory, inventoryCount) {
+            if (inventoryCount !== 1) return inventory;
+            return inventory.concat([
+                completeTheme('Ambiguous Import', { custom_css: '/* first */' }),
+                completeTheme('Ambiguous Import', { custom_css: '/* second */' }),
+            ]);
+        },
+    });
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedThemes([target]),
+        (error) => error.code === 'inventory-target-ambiguous' && error.message.includes('Ambiguous Import'),
+    );
+    assert.deepEqual(harness.calls, []);
+});
+
+test('batch import rejects filename collisions reported by an excluded duplicate name', async () => {
+    const target = completeTheme('AB');
+    const harness = makeTransactionHarness([], {
+        transformInventory(inventory, inventoryCount) {
+            if (inventoryCount !== 1) return inventory;
+            return inventory.concat([
+                completeTheme('A:B', { custom_css: '/* first */' }),
+                completeTheme('A:B', { custom_css: '/* second */' }),
+            ]);
+        },
+    });
+
+    await assert.rejects(
+        harness.transactions.saveVerifiedThemes([target]),
+        (error) => error.code === 'filename-conflict',
+    );
+    assert.deepEqual(harness.calls, []);
 });
 
 test('batch save failure restores every attempted destination before reporting failure', async () => {

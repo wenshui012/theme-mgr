@@ -39,10 +39,15 @@
             return themes;
         }
 
-        function freshInventory(reason) {
+        function freshInventory(reason, targetNames, onDiagnostics) {
             runtime.invalidate(reason);
+            var inventoryOptions = { bypassBaibaokuCache: true };
+            if (Array.isArray(targetNames) && targetNames.length > 0) {
+                inventoryOptions.targetNames = targetNames.slice();
+                if (typeof onDiagnostics === 'function') inventoryOptions.onDiagnostics = onDiagnostics;
+            }
             return Promise.resolve()
-                .then(function () { return runtime.getInventory({ bypassBaibaokuCache: true }); })
+                .then(function () { return runtime.getInventory(inventoryOptions); })
                 .then(function (themes) { return requireValidInventory(themes, reason); });
         }
 
@@ -263,6 +268,7 @@
         function rollbackVerifiedThemeBatch(entries, headers, originalError, options) {
             options = options || {};
             var rollbackEntries = (entries || []).slice().reverse();
+            var rollbackTargetNames = rollbackEntries.map(function (entry) { return entry.expected.name; });
             return rollbackEntries.reduce(function (pending, entry) {
                 return pending.then(function () {
                     var rollbackRequest;
@@ -287,7 +293,10 @@
                 });
             }, Promise.resolve())
                 .then(function () {
-                    return freshInventory(options.rollbackVerifyReason || 'theme-manager-import-batch-rollback-verify');
+                    return freshInventory(
+                        options.rollbackVerifyReason || 'theme-manager-import-batch-rollback-verify',
+                        rollbackTargetNames
+                    );
                 })
                 .then(function (themes) {
                     var state = describeBatchRollbackState(entries, themes);
@@ -339,15 +348,24 @@
             var entries = [];
             var attemptedEntries = [];
             var writeStarted = false;
+            var targetNames = expectedThemes.map(function (theme) { return theme.name; });
+            var initialDiagnostics = [];
 
-            return freshInventory(options.readReason || 'theme-manager-import-batch-read')
+            return freshInventory(options.readReason || 'theme-manager-import-batch-read', targetNames, function (diagnostics) {
+                initialDiagnostics = initialDiagnostics.concat(diagnostics || []);
+            })
                 .then(function (inventory) {
                     initialInventory = inventory;
+                    var excludedDuplicateNames = initialDiagnostics.filter(function (item) {
+                        return item && item.code === 'inventory-name-duplicate' && typeof item.name === 'string';
+                    }).map(function (item) { return item.name; });
+                    var collisionNames = initialInventory.map(function (item) { return item && item.name; })
+                        .concat(excludedDuplicateNames)
+                        .filter(Boolean);
                     var collision = expectedThemes.some(function (expected) {
                         var targetKey = schema.sanitizeFilename(expected.name).toLowerCase();
-                        return initialInventory.some(function (item) {
-                            return item && item.name && item.name !== expected.name &&
-                                schema.sanitizeFilename(item.name).toLowerCase() === targetKey;
+                        return collisionNames.some(function (name) {
+                            return name !== expected.name && schema.sanitizeFilename(name).toLowerCase() === targetKey;
                         });
                     });
                     if (collision) throw error('filename-conflict', '主题名称经文件名清理后与已有主题冲突');
@@ -389,7 +407,7 @@
                     }, Promise.resolve());
                 })
                 .then(function () {
-                    return freshInventory(options.verifyReason || 'theme-manager-import-batch-verify');
+                    return freshInventory(options.verifyReason || 'theme-manager-import-batch-verify', targetNames);
                 })
                 .then(function (finalInventory) {
                     var verified = verifyBatchSavedThemes(expectedThemes, finalInventory);
