@@ -7458,7 +7458,7 @@
 })(window);
 /* END MODULE 14/29: src/image-tools.js */
 
-/* BEGIN MODULE 15/29: src/image-loader.js | sha256:2782f8425080a9e638dd9733eddfcc5b21eb72cbd53685ab492909a65e8d7a45 */
+/* BEGIN MODULE 15/29: src/image-loader.js | sha256:99967cea73e6cfe617868c5fd9657f9e3a6c87ea0b644c079a8ee1e8f98e66d3 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -7486,6 +7486,9 @@
         var onLoad = typeof options.onLoad === 'function' ? options.onLoad : null;
         var onError = typeof options.onError === 'function' ? options.onError : null;
         var placeholder = typeof options.placeholder === 'string' ? options.placeholder : PLACEHOLDER_SRC;
+        var maxConcurrent = Number.isFinite(Number(options.maxConcurrent)) && Number(options.maxConcurrent) > 0
+            ? Math.max(1, Math.floor(Number(options.maxConcurrent)))
+            : Infinity;
         var Observer = Object.prototype.hasOwnProperty.call(options, 'IntersectionObserver')
             ? options.IntersectionObserver
             : global.IntersectionObserver;
@@ -7494,6 +7497,8 @@
         var observer = null;
         var records = new Map();
         var loaded = new WeakSet();
+        var loadQueue = [];
+        var activeLoads = 0;
 
         function setState(image, state) {
             if (image && image.dataset) image.dataset.imageState = state;
@@ -7523,6 +7528,11 @@
             if (observer && typeof observer.unobserve === 'function') observer.unobserve(image);
             removeImageListeners(image, record);
             if (records.get(image) === record) records.delete(image);
+            if (record && record.slotActive) {
+                record.slotActive = false;
+                activeLoads = Math.max(0, activeLoads - 1);
+                pumpQueue();
+            }
         }
 
         function keepCurrent(image, record) {
@@ -7576,14 +7586,33 @@
             });
         }
 
+        function runQueuedLoad(queued) {
+            Promise.resolve()
+                .then(function () { return resolveSource(queued.record.key, queued.image, queued.record.generation); })
+                .then(function (resolved) { attachResolvedSource(queued.image, queued.record, resolved); })
+                .catch(function (error) { fail(queued.image, queued.record, error); });
+        }
+
+        function pumpQueue() {
+            while (activeLoads < maxConcurrent && loadQueue.length) {
+                var queued = loadQueue.shift();
+                var image = queued.image;
+                var record = queued.record;
+                if (!isCurrent(image, record) || record.status !== 'queued') continue;
+                record.status = 'resolving';
+                record.slotActive = true;
+                activeLoads += 1;
+                setState(image, 'resolving');
+                runQueuedLoad(queued);
+            }
+        }
+
         function loadRecord(image, record) {
             if (!keepCurrent(image, record) || record.status !== 'observed') return;
-            record.status = 'resolving';
-            setState(image, 'resolving');
-            Promise.resolve()
-                .then(function () { return resolveSource(record.key, image, record.generation); })
-                .then(function (resolved) { attachResolvedSource(image, record, resolved); })
-                .catch(function (error) { fail(image, record, error); });
+            record.status = 'queued';
+            setState(image, 'queued');
+            loadQueue.push({ image: image, record: record });
+            pumpQueue();
         }
 
         function handleIntersections(entries) {
@@ -7619,6 +7648,7 @@
                 source: '',
                 loadHandler: null,
                 errorHandler: null,
+                slotActive: false,
             };
             records.set(image, record);
             setState(image, 'observed');
@@ -7653,8 +7683,11 @@
             epoch += 1;
             if (observer && typeof observer.disconnect === 'function') observer.disconnect();
             observer = null;
+            loadQueue = [];
             records.forEach(function (record, image) { removeImageListeners(image, record); });
+            records.forEach(function (record) { record.slotActive = false; });
             records.clear();
+            activeLoads = 0;
         }
 
         function reset(nextOptions) {
@@ -7668,8 +7701,14 @@
             if (typeof nextOptions.getKey === 'function') getKey = nextOptions.getKey;
             if (typeof nextOptions.onLoad === 'function') onLoad = nextOptions.onLoad;
             if (typeof nextOptions.onError === 'function') onError = nextOptions.onError;
+            if (Object.prototype.hasOwnProperty.call(nextOptions, 'maxConcurrent')) {
+                maxConcurrent = Number.isFinite(Number(nextOptions.maxConcurrent)) && Number(nextOptions.maxConcurrent) > 0
+                    ? Math.max(1, Math.floor(Number(nextOptions.maxConcurrent)))
+                    : Infinity;
+            }
             if (Object.prototype.hasOwnProperty.call(nextOptions, 'IntersectionObserver')) Observer = nextOptions.IntersectionObserver;
             ensureObserver();
+            pumpQueue();
         }
 
         ensureObserver();
@@ -13942,7 +13981,7 @@
 })(window);
 /* END MODULE 22/29: src/avatar-runtime.js */
 
-/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:a67708adc5bd77c9361e76eece16b0647ca57857af6242965634f5fe92b22bb1 */
+/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:8557ea9e5df33db972d9429d53c129719e6ed812dad1a50df616b10252b12f1f */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -14061,7 +14100,7 @@
         function columns() { var grid = root && root.querySelector('[data-avatar-grid]'), width = grid && grid.clientWidth || 0; if (grid && typeof global.getComputedStyle === 'function') { var template = global.getComputedStyle(grid).gridTemplateColumns, actual = template && template !== 'none' ? countGridTracks(template) : 0; if (actual > 0) return actual; } if (width <= 430) return 3; return Math.max(1, Math.floor((Math.max(112, width - 24) + 9) / 121)); }
         function matchingAssets(state) { var lowered = query.toLocaleLowerCase(), mode = library.ensureState(state).sortMode; var sorted = assets.filter(function (asset) { var meta = library.peekMeta(state, asset.id); if (category !== '__all__' && (category === '__uncategorized__' ? !!meta.category : meta.category !== category)) return false; if (!lowered) return true; var series = library.findSeries(state, asset.id); return [meta.category].concat(meta.tags, series ? [series.name] : []).some(function (text) { return String(text || '').toLocaleLowerCase().indexOf(lowered) !== -1; }); }).sort(function (a, b) { return library.compareAssets(state, a, b, mode); }); var stableIndex = new Map(sorted.map(function (asset, index) { return [asset.id, index]; })); return sorted.sort(function (a, b) { var priority = activeRank(a.id) - activeRank(b.id); return priority || stableIndex.get(a.id) - stableIndex.get(b.id); }); }
         function layoutHtml(state, list, count) { var byId = Object.create(null), emitted = new Set(), chunks = []; list.forEach(function (item) { byId[item.id] = item; }); list.forEach(function (asset) { if (emitted.has(asset.id)) return; var group = library.findSeries(state, asset.id), members = group ? group.members.map(function (id) { return byId[id]; }).filter(Boolean) : []; if (!group || members.length < 2) { emitted.add(asset.id); chunks.push(cardHtml(asset)); return; } members.forEach(function (item) { emitted.add(item.id); }); members.sort(function (a, b) { var priority = activeRank(a.id) - activeRank(b.id); return priority || group.members.indexOf(a.id) - group.members.indexOf(b.id); }); if (members.length <= count) { chunks.push('<section class="tm-avatar-series-inline" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-size:' + members.length + '">' + members.map(cardHtml).join('') + '</section>'); return; } var expanded = expandedSeriesId === group.id; chunks.push('<section class="tm-avatar-series-block' + (expanded ? ' is-expanded' : '') + '" data-avatar-series-id="' + esc(group.id) + '" style="--tm-avatar-series-cols:' + count + '"><div class="tm-avatar-series-track">' + members.map(cardHtml).join('') + '</div><div class="tm-avatar-series-controls"><button type="button" class="tm-avatar-series-control" data-avatar-series-manage="' + esc(group.id) + '" title="管理系列" aria-label="管理系列"><i class="fa-solid fa-sliders"></i></button><button type="button" class="tm-avatar-series-control" data-avatar-series-toggle="' + esc(group.id) + '" title="' + (expanded ? '收起系列' : '展开系列') + '" aria-label="' + (expanded ? '收起系列' : '展开系列') + '" aria-expanded="' + (expanded ? 'true' : 'false') + '"><i class="fa-solid ' + (expanded ? 'fa-compress' : 'fa-expand') + '"></i></button></div></section>'); }); return chunks.join(''); }
-        function setupGridLoader() { if (gridLoader) gridLoader.disconnect(); var grid = root.querySelector('[data-avatar-grid]'); gridLoader = imageLoaderApi.createImageLoader({ root: grid, rootMargin: '320px 0px', resolveSource: function (id) { return store.getThumbnail(id); } }); gridLoader.observe(grid.querySelectorAll('.tm-avatar-page-thumb')); }
+        function setupGridLoader() { if (gridLoader) gridLoader.disconnect(); var grid = root.querySelector('[data-avatar-grid]'); gridLoader = imageLoaderApi.createImageLoader({ root: grid, rootMargin: '320px 0px', maxConcurrent: 4, resolveSource: function (id) { return store.getThumbnail(id); } }); gridLoader.observe(grid.querySelectorAll('.tm-avatar-page-thumb')); }
         function renderCategoryBar(state) { var bar = root.querySelector('[data-avatar-catbar]'), categories = library.ensureState(state).categories; bar.innerHTML = [{ key: '__all__', label: '全部' }, { key: '__uncategorized__', label: '未分类' }].concat(categories.map(function (name) { return { key: name, label: name }; })).map(function (item) { return '<button class="tm-catbtn' + (category === item.key ? ' on' : '') + '" data-avatar-category="' + esc(item.key) + '">' + esc(item.label) + '</button>'; }).join(''); }
         function updateBatchCount() { if (!root) return; var count = root.querySelector('[data-avatar-batch-count]'); if (count) count.textContent = String(batchSelected.size); var deleteButton = root.querySelector('[data-avatar-batch="delete"]'); if (deleteButton) deleteButton.disabled = batchDeleting || importing || exporting || batchSelected.size === 0; var exportButton = root.querySelector('[data-avatar-batch="export"]'); if (exportButton) exportButton.disabled = importing || exporting || batchSelected.size === 0 || !transfer; }
         function syncBatchCard(card) { if (!card) return; var selected = batchSelected.has(card.dataset.avatarId); card.classList.toggle('batch-sel', selected); var icon = card.querySelector('.tm-avatar-card-check i'); if (icon) { icon.classList.toggle('fa-check', selected); icon.classList.toggle('fa-plus', !selected); } }

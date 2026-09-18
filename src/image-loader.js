@@ -25,6 +25,9 @@
         var onLoad = typeof options.onLoad === 'function' ? options.onLoad : null;
         var onError = typeof options.onError === 'function' ? options.onError : null;
         var placeholder = typeof options.placeholder === 'string' ? options.placeholder : PLACEHOLDER_SRC;
+        var maxConcurrent = Number.isFinite(Number(options.maxConcurrent)) && Number(options.maxConcurrent) > 0
+            ? Math.max(1, Math.floor(Number(options.maxConcurrent)))
+            : Infinity;
         var Observer = Object.prototype.hasOwnProperty.call(options, 'IntersectionObserver')
             ? options.IntersectionObserver
             : global.IntersectionObserver;
@@ -33,6 +36,8 @@
         var observer = null;
         var records = new Map();
         var loaded = new WeakSet();
+        var loadQueue = [];
+        var activeLoads = 0;
 
         function setState(image, state) {
             if (image && image.dataset) image.dataset.imageState = state;
@@ -62,6 +67,11 @@
             if (observer && typeof observer.unobserve === 'function') observer.unobserve(image);
             removeImageListeners(image, record);
             if (records.get(image) === record) records.delete(image);
+            if (record && record.slotActive) {
+                record.slotActive = false;
+                activeLoads = Math.max(0, activeLoads - 1);
+                pumpQueue();
+            }
         }
 
         function keepCurrent(image, record) {
@@ -115,14 +125,33 @@
             });
         }
 
+        function runQueuedLoad(queued) {
+            Promise.resolve()
+                .then(function () { return resolveSource(queued.record.key, queued.image, queued.record.generation); })
+                .then(function (resolved) { attachResolvedSource(queued.image, queued.record, resolved); })
+                .catch(function (error) { fail(queued.image, queued.record, error); });
+        }
+
+        function pumpQueue() {
+            while (activeLoads < maxConcurrent && loadQueue.length) {
+                var queued = loadQueue.shift();
+                var image = queued.image;
+                var record = queued.record;
+                if (!isCurrent(image, record) || record.status !== 'queued') continue;
+                record.status = 'resolving';
+                record.slotActive = true;
+                activeLoads += 1;
+                setState(image, 'resolving');
+                runQueuedLoad(queued);
+            }
+        }
+
         function loadRecord(image, record) {
             if (!keepCurrent(image, record) || record.status !== 'observed') return;
-            record.status = 'resolving';
-            setState(image, 'resolving');
-            Promise.resolve()
-                .then(function () { return resolveSource(record.key, image, record.generation); })
-                .then(function (resolved) { attachResolvedSource(image, record, resolved); })
-                .catch(function (error) { fail(image, record, error); });
+            record.status = 'queued';
+            setState(image, 'queued');
+            loadQueue.push({ image: image, record: record });
+            pumpQueue();
         }
 
         function handleIntersections(entries) {
@@ -158,6 +187,7 @@
                 source: '',
                 loadHandler: null,
                 errorHandler: null,
+                slotActive: false,
             };
             records.set(image, record);
             setState(image, 'observed');
@@ -192,8 +222,11 @@
             epoch += 1;
             if (observer && typeof observer.disconnect === 'function') observer.disconnect();
             observer = null;
+            loadQueue = [];
             records.forEach(function (record, image) { removeImageListeners(image, record); });
+            records.forEach(function (record) { record.slotActive = false; });
             records.clear();
+            activeLoads = 0;
         }
 
         function reset(nextOptions) {
@@ -207,8 +240,14 @@
             if (typeof nextOptions.getKey === 'function') getKey = nextOptions.getKey;
             if (typeof nextOptions.onLoad === 'function') onLoad = nextOptions.onLoad;
             if (typeof nextOptions.onError === 'function') onError = nextOptions.onError;
+            if (Object.prototype.hasOwnProperty.call(nextOptions, 'maxConcurrent')) {
+                maxConcurrent = Number.isFinite(Number(nextOptions.maxConcurrent)) && Number(nextOptions.maxConcurrent) > 0
+                    ? Math.max(1, Math.floor(Number(nextOptions.maxConcurrent)))
+                    : Infinity;
+            }
             if (Object.prototype.hasOwnProperty.call(nextOptions, 'IntersectionObserver')) Observer = nextOptions.IntersectionObserver;
             ensureObserver();
+            pumpQueue();
         }
 
         ensureObserver();

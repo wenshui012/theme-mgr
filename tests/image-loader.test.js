@@ -241,6 +241,22 @@ test('new batch images can be registered after earlier images settle', async () 
     assert.deepEqual(harness.resolved, ['batch-one', 'batch-two']);
 });
 
+test('maxConcurrent waits for an image to settle before starting the next decode', async () => {
+    const harness = createHarness({ maxConcurrent: 2 });
+    const first = new FakeImage('limited-one', harness.root);
+    const second = new FakeImage('limited-two', harness.root);
+    const third = new FakeImage('limited-three', harness.root);
+    harness.loader.observe([first, second, third], 1);
+    [first, second, third].forEach((image) => harness.observers[0].intersect(image));
+    await flushPromises();
+    assert.deepEqual(harness.resolved, ['limited-one', 'limited-two']);
+    assert.equal(third.dataset.imageState, 'queued');
+
+    first.dispatch('load');
+    await flushPromises();
+    assert.deepEqual(harness.resolved, ['limited-one', 'limited-two', 'limited-three']);
+});
+
 test('loadNow supports a small eager group without disabling observation', async () => {
     const harness = createHarness();
     const eager = new FakeImage('eager', harness.root);
