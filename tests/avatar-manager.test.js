@@ -1169,7 +1169,8 @@ test('64 avatar grids use definite square items without implicit-row compression
     assert.match(css, /tm-avatar-page-card\{[^}]*width:100%[^}]*aspect-ratio:1[^}]*align-self:start/);
     assert.match(css, /tm-avatar-page-grid\{[^}]*touch-action:pan-x pan-y!important/);
     assert.match(css, /tm-avatar-page-card\{[^}]*content-visibility:auto[^}]*contain-intrinsic-size:112px 112px/);
-    assert.match(css, /tm-avatar-page-thumb\{[^}]*position:absolute[^}]*inset:0/);
+    assert.match(css, /tm-avatar-page-thumb\{[^}]*position:absolute[^}]*inset:0[^}]*pointer-events:none/);
+    assert.match(css, /tm-avatar-card-active,.tm-avatar-card-check\{[^}]*pointer-events:none/);
 });
 
 test('65 the theme editor manages bound User and Character avatars without opening the full library', () => {
