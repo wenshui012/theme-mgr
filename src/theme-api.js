@@ -51,6 +51,7 @@
             if (Array.isArray(options.targetNames)) options.targetNames.forEach(addTargetName);
             addTargetName(options.targetName);
             var targeted = targetNames.length > 0;
+            var allowDuplicateNames = options.allowDuplicateNames === true;
             var seenNames = Object.create(null);
             var namedItems = [];
             var diagnostics = [];
@@ -78,7 +79,7 @@
             var duplicateNames = Object.keys(seenNames).filter(function (name) {
                 return seenNames[name].length > 1;
             });
-            if (!targeted && duplicateNames.length) {
+            if (!targeted && duplicateNames.length && !allowDuplicateNames) {
                 var duplicateName = duplicateNames[0];
                 throw inventoryError('SillyTavern 主题库存包含重复主题名', {
                     reason: 'duplicate-name',
@@ -120,6 +121,7 @@
                 });
             }
 
+            reportInventoryDiagnostics(options.onDiagnostics, diagnostics);
             return data.themes;
         }
 

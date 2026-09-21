@@ -63,6 +63,26 @@
             flipY: view.flipY === true,
         };
     }
+    function parseEditorNumberDraft(name, rawValue, commit) {
+        var bounds = name === 'scale'
+            ? { min: 50, max: 300 }
+            : (name === 'rotate' ? { min: -180, max: 180 } : { min: -100, max: 100 });
+        var raw = clean(rawValue);
+        var displayValue = Number(raw);
+        if (!raw || !Number.isFinite(displayValue)) {
+            return { apply: false, value: null, displayValue: null };
+        }
+        if (commit) displayValue = Math.max(bounds.min, Math.min(bounds.max, displayValue));
+        else if (displayValue < bounds.min || displayValue > bounds.max) {
+            return { apply: false, value: null, displayValue: displayValue };
+        }
+        displayValue = round(displayValue, 2);
+        return {
+            apply: true,
+            value: name === 'rotate' ? displayValue : round(displayValue / 100, 4),
+            displayValue: displayValue,
+        };
+    }
     function getAttribute(element, name) {
         return element && typeof element.getAttribute === 'function' ? element.getAttribute(name) : null;
     }
@@ -2002,9 +2022,15 @@
             var input = event.target && event.target.closest ? (event.target.closest('[data-view]') || event.target.closest('[data-view-number]')) : null;
             if (!input || !toolbar.contains(input)) return;
             var name = input.getAttribute('data-view') || input.getAttribute('data-view-number');
-            if (input.getAttribute('data-view-number') && clean(input.value) === '') return;
-            var value = Number(input.value);
-            if (input.getAttribute('data-view-number') && name !== 'rotate') value /= 100;
+            var numberName = input.getAttribute('data-view-number');
+            var value;
+            if (numberName) {
+                var draft = parseEditorNumberDraft(name, input.value, false);
+                if (!draft.apply) return;
+                value = draft.value;
+            } else {
+                value = Number(input.value);
+            }
             editorPreviewSettled = false;
             setViewValue(name, value);
             scheduleEditorSettle();
@@ -2032,7 +2058,13 @@
             }
             var input = event.target && event.target.closest ? (event.target.closest('[data-view]') || event.target.closest('[data-view-number]')) : null;
             if (!input || !toolbar.contains(input)) return;
-            if (input.getAttribute('data-view-number') && clean(input.value) === '') { updateToolbar(); return; }
+            var name = input.getAttribute('data-view') || input.getAttribute('data-view-number');
+            if (input.getAttribute('data-view-number')) {
+                var draft = parseEditorNumberDraft(name, input.value, true);
+                if (!draft.apply) { updateToolbar(); return; }
+                editorPreviewSettled = false;
+                setViewValue(name, draft.value);
+            }
             commitEditorPreview();
         }
         function clearBinding(kind) {
@@ -2486,6 +2518,7 @@
         targetForMessage: targetForMessage,
         messageMatchesTarget: messageMatchesTarget,
         normalizeEditorPreferences: normalizeEditorPreferences,
+        parseEditorNumberDraft: parseEditorNumberDraft,
         chooseRepresentative: chooseRepresentative,
         normalizeView: normalizeView,
         pixelsForView: pixelsForView,

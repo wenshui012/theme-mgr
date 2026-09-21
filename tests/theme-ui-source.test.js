@@ -15,6 +15,17 @@ test('theme card ellipsis opens the editor directly while preserving click isola
     assert.doesNotMatch(source, /function openContextMenu/);
 });
 
+test('theme list uses the authoritative settings inventory without guessing from unrelated API controls', () => {
+    const listLoader = source.slice(source.indexOf('function fetchThemeList'), source.indexOf('function getCurrentThemeName'));
+    assert.match(listLoader, /themeApi\.getSettingsInventory\(/);
+    assert.match(listLoader, /allowDuplicateNames: true/);
+    assert.match(listLoader, /document\.getElementById\('themes'\)/);
+    assert.doesNotMatch(listLoader, /querySelectorAll\('datalist'\)/);
+    assert.doesNotMatch(listLoader, /\/api\/themes\/all|var apiPaths/);
+    assert.match(source, /blockAmbiguousThemeItem\(item\)/);
+    assert.match(source, /themeNameConflicts\.has\(themeName\)/);
+});
+
 test('theme editor keeps the name permanent, moves annotations first and leaves preview last', () => {
     const editor = source.slice(source.indexOf('function openEditSheet'), source.indexOf('function mergeImportedAnnotations'));
     const markup = editor.slice(editor.indexOf('var sheet = createSheet'), editor.indexOf('function renderBackgroundBind'));

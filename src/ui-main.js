@@ -193,6 +193,8 @@
     // 缓存主题列表
     var stThemeList = [];
     var stThemeListReliable = false;
+    var themeNameConflicts = new Set();
+    var themeListLoadError = '';
     var themeListRevision = 0;
     var metadataRevision = 0;
     var libraryViewCache = null;
@@ -755,11 +757,41 @@
             });
     }
 
-    function setThemeList(list, reliable) {
-        stThemeList = Array.isArray(list) ? list : [];
-        stThemeListReliable = reliable === true;
+    function setThemeList(list, reliable, options) {
+        options = options || {};
+        var counts = Object.create(null);
+        var normalized = [];
+        (Array.isArray(list) ? list : []).forEach(function (value) {
+            var name = typeof value === 'string' ? value.trim() : '';
+            if (!name) return;
+            counts[name] = (counts[name] || 0) + 1;
+            if (counts[name] === 1) normalized.push(name);
+        });
+        themeNameConflicts = new Set(Object.keys(counts).filter(function (name) { return counts[name] > 1; }));
+        (Array.isArray(options.conflictNames) ? options.conflictNames : []).forEach(function (name) {
+            name = typeof name === 'string' ? name.trim() : '';
+            if (name) themeNameConflicts.add(name);
+        });
+        themeListLoadError = typeof options.error === 'string' ? options.error : '';
+        stThemeList = normalized;
+        stThemeListReliable = reliable === true && themeNameConflicts.size === 0;
         themeListRevision += 1;
         libraryViewCache = null;
+    }
+
+    function getAmbiguousThemeNames(item) {
+        if (!item) return [];
+        var names = Array.isArray(item.themeNames) && item.themeNames.length
+            ? item.themeNames
+            : [item.themeName];
+        return Array.from(new Set(names.filter(function (name) { return themeNameConflicts.has(name); })));
+    }
+
+    function blockAmbiguousThemeItem(item) {
+        var names = getAmbiguousThemeNames(item);
+        if (!names.length) return false;
+        toast('检测到同名主题「' + names.join('、') + '」，无法安全确定对应文件；已阻止本次操作', true);
+        return true;
     }
 
     function buildLibraryView(d) {
@@ -929,86 +961,76 @@
 
     function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
 
-    // ── ST 主题列表获取（多策略）──────────────────────────────
+    // ── ST 主题列表获取（权威库存优先，精确控件兜底）────────────
     function fetchThemeList(cb) {
         var found = false;
 
-        function done(list, method, reliable) {
+        function done(list, method, reliable, diagnostics) {
             if (found) return;
             found = true;
-            setThemeList(list, reliable);
-            console.log('[美化管理] 主题列表获取成功:', method, list.length + '个');
-            if (cb) cb(list);
+            var conflictNames = (Array.isArray(diagnostics) ? diagnostics : []).filter(function (item) {
+                return item && item.code === 'inventory-name-duplicate';
+            }).map(function (item) { return item.name; });
+            setThemeList(list, reliable, { conflictNames: conflictNames });
+            console.log('[美化管理] 主题列表获取成功:', method, stThemeList.length + '个');
+            if (themeNameConflicts.size > 0) {
+                console.warn('[美化管理] SillyTavern 主题库存存在同名歧义，危险操作已禁用:', Array.from(themeNameConflicts));
+                toast('检测到同名主题：' + Array.from(themeNameConflicts).join('、') + '；已合并显示并禁用相关操作', true);
+            }
+            if (cb) cb(stThemeList.slice());
         }
 
-        // 方式A: 从 UI 里的 #themes 元素读取
-        try {
+        function readExactThemeControl() {
+            var names = [];
             var sel = document.getElementById('themes');
-            if (sel) {
-                if (sel.tagName === 'SELECT' && sel.options && sel.options.length > 0) {
-                    var names = [];
-                    for (var i = 0; i < sel.options.length; i++) {
-                        var v = sel.options[i].value || sel.options[i].textContent;
-                        if (v && v.trim()) names.push(v.trim());
-                    }
-                    if (names.length > 0) { done(names, 'SELECT#themes', true); return; }
+            if (!sel) return names;
+            if (sel.tagName === 'SELECT' && sel.options) {
+                for (var i = 0; i < sel.options.length; i++) {
+                    var value = sel.options[i].value || sel.options[i].textContent;
+                    if (value && value.trim()) names.push(value.trim());
                 }
-                if (sel.tagName === 'INPUT') {
-                    var listId = sel.getAttribute('list');
-                    if (listId) {
-                        var dl = document.getElementById(listId);
-                        if (dl && dl.options) {
-                            var names2 = [];
-                            for (var j = 0; j < dl.options.length; j++) {
-                                var v2 = dl.options[j].value || dl.options[j].textContent;
-                                if (v2 && v2.trim()) names2.push(v2.trim());
-                            }
-                            if (names2.length > 0) { done(names2, 'INPUT#themes+datalist', true); return; }
-                        }
+                return names;
+            }
+            if (sel.tagName === 'INPUT') {
+                var listId = sel.getAttribute('list');
+                var dl = listId ? document.getElementById(listId) : null;
+                if (dl && dl.options) {
+                    for (var j = 0; j < dl.options.length; j++) {
+                        var optionValue = dl.options[j].value || dl.options[j].textContent;
+                        if (optionValue && optionValue.trim()) names.push(optionValue.trim());
                     }
                 }
             }
-        } catch (e) {}
+            return names;
+        }
 
-        // 方式B: 遍历页面所有 select/datalist 找主题列表
-        try {
-            var allDl = document.querySelectorAll('datalist');
-            allDl.forEach(function (dl) {
-                if (found) return;
-                if (dl.options && dl.options.length > 5) {
-                    var items = [];
-                    for (var k = 0; k < dl.options.length; k++) {
-                        var val = dl.options[k].value || dl.options[k].textContent;
-                        if (val && val.trim()) items.push(val.trim());
-                    }
-                    if (items.length > 5) done(items, 'datalist#' + (dl.id || ''), false);
-                }
-            });
-            if (found) return;
-        } catch (e) {}
+        function fallbackToExactControl(error) {
+            var names = [];
+            try { names = readExactThemeControl(); } catch (_) {}
+            if (names.length > 0) {
+                console.warn('[美化管理] 权威主题库存读取失败，改用精确 #themes 控件:', error);
+                done(names, '#themes fallback', false);
+                return;
+            }
+            found = true;
+            var message = '主题列表读取失败，请确认 SillyTavern 已完成加载后重试';
+            setThemeList([], false, { error: message });
+            console.warn('[美化管理] ' + message + ':', error);
+            toast(message, true);
+            if (cb) cb([]);
+        }
 
-        // 方式C: 尝试多种 API 路径
-        var apiPaths = ['/api/themes', '/api/themes/all', '/themes'];
-        var apiDone = 0;
-        apiPaths.forEach(function (path) {
-            fetch(path)
-                .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
-                .then(function (data) {
-                    if (Array.isArray(data) && data.length > 0) done(data, 'fetch ' + path, false);
-                    else if (typeof data === 'object' && !Array.isArray(data)) {
-                        var keys = Object.keys(data);
-                        if (keys.length > 0) done(keys, 'fetch ' + path, false);
-                    }
-                })
-                .catch(function () {})
-                .finally(function () {
-                    apiDone++;
-                    if (apiDone >= apiPaths.length && !found) {
-                        setThemeList([], false);
-                        if (cb) cb([]);
-                    }
-                });
-        });
+        if (!themeApi || typeof themeApi.getSettingsInventory !== 'function') {
+            fallbackToExactControl(new Error('theme api unavailable'));
+            return;
+        }
+        var diagnostics = [];
+        themeApi.getSettingsInventory({
+            allowDuplicateNames: true,
+            onDiagnostics: function (items) { diagnostics = items.slice(); },
+        }).then(function (themes) {
+            done(themes.map(function (theme) { return theme.name; }), '/api/settings/get', true, diagnostics);
+        }).catch(fallbackToExactControl);
     }
 
     function getCurrentThemeName() {
@@ -1587,6 +1609,7 @@
         newName = String(newName || '').trim();
         if (!newName) { if (cb) cb(false, 'empty'); return; }
         if (newName === oldName) { if (cb) cb(false, 'same'); return; }
+        if (themeNameConflicts.has(oldName)) { if (cb) cb(false, 'inventory-name-ambiguous'); return; }
 
         var destinationIdentityConflicts = metadataApi.findThemeIdentityConflicts(load(), newName);
         if (destinationIdentityConflicts.length > 0) {
@@ -1632,6 +1655,7 @@
     }
 
     function deleteThemeEverywhere(themeName, cb) {
+        if (themeNameConflicts.has(themeName)) { if (cb) cb(false, 'inventory-name-ambiguous'); return; }
         themeTransactions.deleteThemeSafely(themeName, {
             readCurrentTheme: function () {
                 return themeRuntime.captureConfirmedCurrentThemeIdentity();
@@ -4483,9 +4507,14 @@
                 '</div>'
             : '<div class="tm-card-noimg"><i class="fa-solid fa-palette"></i><span>' + esc(item.name.slice(0, 6)) + '</span></div>';
         var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-key="' + esc(item.key) + '" title="编辑美化" aria-label="编辑「' + esc(item.name) + '」"><i class="fa-solid fa-ellipsis"></i></button>';
-        var tagText = (meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || '');
+        var conflictNames = getAmbiguousThemeNames(item);
+        var inventoryConflict = conflictNames.length > 0;
+        var tagText = inventoryConflict
+            ? '同名冲突 · 已禁用操作'
+            : ((meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || ''));
 
-        return '<div class="tm-card' + (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + '" data-key="' + esc(item.key) + '">' +
+        return '<div class="tm-card' + (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + (inventoryConflict ? ' inventory-conflict' : '') + '" data-key="' + esc(item.key) + '"' +
+            (inventoryConflict ? ' title="同名主题无法安全确定对应文件，相关操作已禁用"' : '') + '>' +
             '<div class="tm-card-img">' + checkBox + imgContent + badge + starBadge + freqBadge + menuBtn + '</div>' +
             '<div class="tm-card-info"><div class="tm-card-name">' + esc(item.name) + '</div>' +
             (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
@@ -4909,6 +4938,9 @@
             var card = event.target.closest('.tm-card');
             if (!card || !area.contains(card)) return;
             var key = card.dataset.key;
+            var d = load();
+            var item = getLogicalItem(key, d);
+            if (!item || blockAmbiguousThemeItem(item)) return;
             if (batchMode) {
                 if (batchDeleting) return;
                 if (batchSelected.has(key)) batchSelected.delete(key); else batchSelected.add(key);
@@ -4919,9 +4951,6 @@
                 syncBatchActionState(load());
                 return;
             }
-            var d = load();
-            var item = getLogicalItem(key, d);
-            if (!item) return;
             var themeName = getItemDisplayTheme(d, item);
             applyManualTheme(themeName, function (ok, reason) {
                 if (ok) {
@@ -4965,6 +4994,10 @@
         var metrics = getGridLayoutMetrics(area, d.gridCardSize);
         var units = alignSeriesUnitsForGrid(layout.units, metrics.columns);
         var list = layout.displayedItems;
+        var inventoryWarning = themeNameConflicts.size > 0
+            ? '<div class="tm-inventory-warning"><i class="fa-solid fa-triangle-exclamation"></i><span>检测到同名主题：' +
+                esc(Array.from(themeNameConflicts).join('、')) + '。管理器已合并显示，并禁用这些主题的切换、编辑和删除。</span></div>'
+            : '';
         syncSeriesCardWidth(area, d.gridCardSize);
 
         if (batchArea) {
@@ -5000,8 +5033,8 @@
         }
 
         if (list.length === 0) {
-            area.innerHTML = '<div class="tm-grid"></div><div class="tm-empty"><i class="fa-solid fa-palette"></i><span>' +
-                (searchQuery ? '没有匹配「' + esc(searchQuery) + '」的主题' : (curCat !== '__all__' ? '该分类暂无主题' : '没有找到主题，请点击底栏刷新按钮')) +
+            area.innerHTML = inventoryWarning + '<div class="tm-grid"></div><div class="tm-empty"><i class="fa-solid fa-palette"></i><span>' +
+                (searchQuery ? '没有匹配「' + esc(searchQuery) + '」的主题' : (curCat !== '__all__' ? '该分类暂无主题' : (themeListLoadError || '没有找到主题，请点击底栏刷新按钮'))) +
                 '</span></div>';
             renderedCardsByKey = Object.create(null);
             renderedActiveItemKey = '';
@@ -5010,7 +5043,7 @@
             area.dataset.tmRenderComplete = 'true';
             area.dataset.tmRenderedCards = '0';
         } else {
-            area.innerHTML = '<div class="tm-grid"></div>';
+            area.innerHTML = inventoryWarning + '<div class="tm-grid"></div>';
             resetGridImageLoader(area, generation);
             renderedCardsByKey = Object.create(null);
             renderedActiveItemKey = (view.itemByThemeName[curTheme] || {}).key || '';
@@ -6101,7 +6134,7 @@
     function openEditSheet(itemRef) {
         var d = load();
         var item = getLogicalItem(itemRef, d);
-        if (!item) return;
+        if (!item || blockAmbiguousThemeItem(item)) return;
         var pair = item.kind === 'pair' ? pairsApi.getPair(d, item.pairId) : null;
         var meta = getItemMeta(d, item);
         var originalEditName = item.name;

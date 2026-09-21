@@ -390,6 +390,16 @@ test('avatar editor preferences clamp steps and default quick imports to the lib
     });
     assert.equal(modules.avatarRuntime.normalizeEditorPreferences({ manualInput: true }).manualInput, true);
 });
+test('avatar editor number drafts preserve partial typing and clamp only on commit', () => {
+    const parse = modules.avatarRuntime.parseEditorNumberDraft;
+    assert.deepEqual({ ...parse('scale', '1', false) }, { apply: false, value: null, displayValue: 1 });
+    assert.deepEqual({ ...parse('scale', '120', false) }, { apply: true, value: 1.2, displayValue: 120 });
+    assert.deepEqual({ ...parse('scale', '999', false) }, { apply: false, value: null, displayValue: 999 });
+    assert.deepEqual({ ...parse('scale', '999', true) }, { apply: true, value: 3, displayValue: 300 });
+    assert.deepEqual({ ...parse('scale', '', true) }, { apply: false, value: null, displayValue: null });
+    assert.deepEqual({ ...parse('x', '-25', false) }, { apply: true, value: -0.25, displayValue: -25 });
+    assert.deepEqual({ ...parse('rotate', '-45.5', false) }, { apply: true, value: -45.5, displayValue: -45.5 });
+});
 test('an in-panel library import restores chat and theme scope keys from a native floor edit', async () => {
     const imported = asset('imported');
     const f = runtimeFixture({

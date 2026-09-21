@@ -3291,6 +3291,28 @@ test('theme API rejects malformed inventories and accepts only an explicit theme
     assert.deepEqual(await api.getSettingsInventory(), []);
 });
 
+test('theme API can expose duplicate inventory names for read-only manager diagnostics', async (t) => {
+    const first = completeTheme('Duplicate', { custom_css: '/* first */' });
+    const second = completeTheme('Duplicate', { custom_css: '/* second */' });
+    const unique = completeTheme('Unique');
+    const harness = createThemeApiInventoryHarness(t, { themes: [first, unique, second] });
+    const diagnostics = [];
+
+    const themes = await harness.api.getSettingsInventory({
+        allowDuplicateNames: true,
+        onDiagnostics(items) { diagnostics.push(...items); },
+    });
+
+    assert.deepEqual(themes, [first, unique, second]);
+    assert.deepEqual(diagnostics, [{
+        code: 'inventory-name-duplicate',
+        reason: 'duplicate-name',
+        name: 'Duplicate',
+        count: 2,
+        indices: [0, 2],
+    }]);
+});
+
 test('targeted theme inventory isolates one malformed item from an unrelated valid target', async (t) => {
     const good = completeTheme('Good');
     const harness = createThemeApiInventoryHarness(t, {
