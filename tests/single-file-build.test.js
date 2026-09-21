@@ -4,9 +4,9 @@ const fs = require('node:fs');
 
 const build = require('../scripts/build-single-file.js');
 
-test('development loader exposes the fixed 29-module release order', () => {
+test('development loader exposes the fixed 31-module release order', () => {
     const entry = build.parseDevelopmentEntry();
-    assert.equal(entry.modules.length, 29);
+    assert.equal(entry.modules.length, 31);
     assert.deepEqual(entry.modules, build.EXPECTED_MODULES);
     assert.ok(entry.modules.indexOf('src/update-manager.js') > entry.modules.indexOf('src/theme-api.js'));
     assert.ok(entry.modules.indexOf('src/update-manager.js') < entry.modules.indexOf('src/ui-main.js'));
@@ -19,6 +19,9 @@ test('development loader exposes the fixed 29-module release order', () => {
     assert.ok(entry.modules.indexOf('src/avatar-transfer.js') < entry.modules.indexOf('src/avatar-runtime.js'));
     assert.ok(entry.modules.indexOf('src/app-shell.js') > entry.modules.indexOf('src/image-loader.js'));
     assert.ok(entry.modules.indexOf('src/app-shell.js') < entry.modules.indexOf('src/ui-main.js'));
+    assert.ok(entry.modules.indexOf('src/background-library.js') < entry.modules.indexOf('src/backgrounds.js'));
+    assert.ok(entry.modules.indexOf('src/backgrounds.js') < entry.modules.indexOf('src/background-page.js'));
+    assert.ok(entry.modules.indexOf('src/background-page.js') < entry.modules.indexOf('src/ui-main.js'));
 });
 
 test('single-file build is deterministic and contains every module once in order', () => {

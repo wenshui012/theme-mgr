@@ -68,6 +68,8 @@
     var avatarRecoveryGateLocked = false;
     var avatarRuntime = null;
     var avatarPageController = null;
+    var backgroundLibraryApi = null;
+    var backgroundPageController = null;
     var appShellApi = null;
     var appShellController = null;
     var lastAppPage = 'themes';
@@ -244,7 +246,7 @@
                 !modules.themeAppearance ||
                 !modules.createAvatarStore || !modules.createAvatarStorageCoordinator || !modules.createAvatarImageProcessor ||
                 !modules.avatarLibrary || !modules.createAvatarTransfer || !modules.createAvatarRecovery || !modules.avatarRecovery || !modules.createAvatarRuntime || !modules.createAvatarPage || !modules.avatarPage ||
-                !modules.createBackgrounds ||
+                !modules.backgroundLibrary || !modules.createBackgrounds || !modules.createBackgroundPage || !modules.backgroundPage ||
                 !modules.createUiSheets ||
                 !modules.createUiEvents || !modules.appShell ||
                 !modules.createStorage || !modules.imageTools || !modules.imageLoader || !modules.injectStyles) {
@@ -276,7 +278,9 @@
                     if (!modules.createAvatarRecovery || !modules.avatarRecovery) missing.push('avatar-recovery.js');
                     if (!modules.createAvatarRuntime) missing.push('avatar-runtime.js');
                     if (!modules.createAvatarPage || !modules.avatarPage) missing.push('avatar-page.js');
+                    if (!modules.backgroundLibrary) missing.push('background-library.js');
                     if (!modules.createBackgrounds) missing.push('backgrounds.js');
+                    if (!modules.createBackgroundPage || !modules.backgroundPage) missing.push('background-page.js');
                     if (!modules.createUiSheets) missing.push('ui-sheets.js');
                     if (!modules.createUiEvents) missing.push('ui-events.js');
                     supportErrorText = missing.length ? ('模块未注册：' + missing.join('、')) : '支持模块初始化失败';
@@ -310,6 +314,7 @@
             });
             metadataApi = modules.themeMetadata;
             avatarLibraryApi = modules.avatarLibrary;
+            backgroundLibraryApi = modules.backgroundLibrary;
             editorDraftApi = modules.editorDraft;
             pairsApi = modules.themePairs;
             seriesApi = modules.themeSeries;
@@ -364,6 +369,24 @@
                 setControlValue: setControlValue,
                 themeRuntime: themeRuntime,
                 imageLoader: modules.imageLoader,
+                backgroundLibrary: backgroundLibraryApi,
+            });
+            backgroundPageController = modules.createBackgroundPage({
+                document: document,
+                backgrounds: backgroundsApi,
+                library: backgroundLibraryApi,
+                imageLoader: modules.imageLoader,
+                getRoot: function () { return document.querySelector('[data-tm-page="backgrounds"]'); },
+                createSheet: createSheet,
+                closeSheet: closeSheet,
+                createActionDialog: uiSheetsApi.createActionDialog,
+                openImageLightbox: uiSheetsApi.openImageLightbox,
+                openCategoryPicker: openCategoryPicker,
+                loadUiData: load,
+                saveUiData: save,
+                toast: toast,
+                confirm: global.confirm.bind(global),
+                onStateChange: renderBackgroundBottomStatus,
             });
             storageApi = modules.createStorage({
                 DB_NAME: DB_NAME,
@@ -567,6 +590,7 @@
     //   dayNight: { pairs: { id: { name, dayTheme, nightTheme, meta } } },
     //   series: { groups: { id: { name, category, members[] } } },
     //   bindings: { characters, chats, manualTarget },
+    //   backgroundLibrary: { version, categories[], assetMeta, sortMode, cardSize },
     //   showBall: true,
     //   fabImage: '',
     //   fabSize: 38,
@@ -609,6 +633,7 @@
             ? pairsApi.normalizeDayNightPreference(d.dayNightPreference)
             : { mode: 'system', manualVariant: '', dayStart: '07:00', nightStart: '19:00' };
         if (avatarLibraryApi) avatarLibraryApi.ensureState(d);
+        if (backgroundLibraryApi) backgroundLibraryApi.ensureState(d);
         var pairNormalizationDiagnostics = pairsApi && typeof pairsApi.inspectState === 'function' ? pairsApi.inspectState(d) : [];
         var seriesNormalizationDiagnostics = seriesApi && typeof seriesApi.inspectState === 'function' ? seriesApi.inspectState(d) : [];
         var bindingNormalizationDiagnostics = bindingsApi && typeof bindingsApi.inspectState === 'function' ? bindingsApi.inspectState(d) : [];
@@ -671,7 +696,8 @@
             dayNight: { version: 1, pairs: Object.create(null) },
             series: { version: 1, groups: Object.create(null) },
             bindings: { version: 2, characters: Object.create(null), chats: Object.create(null), manualTheme: '', manualTarget: null },
-            avatarLibrary: { version: 1, categories: [], assetMeta: Object.create(null), series: { version: 1, groups: Object.create(null) }, sortMode: 'import-desc', nextImportOrder: 1 }
+            avatarLibrary: { version: 1, categories: [], assetMeta: Object.create(null), series: { version: 1, groups: Object.create(null) }, sortMode: 'import-desc', nextImportOrder: 1 },
+            backgroundLibrary: { version: 1, categories: [], assetMeta: Object.create(null), sortMode: 'name', cardSize: 156 }
         };
     }
 
@@ -3907,7 +3933,9 @@
                 { id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
                     avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
                 }, unmount: function () { avatarPageController.unmount(); } },
-                { id: 'backgrounds', label: '背景管理', icon: 'fa-image' },
+                { id: 'backgrounds', label: '背景管理', icon: 'fa-image', mount: function () {
+                    backgroundPageController.mount().then(renderBackgroundBottomStatus).catch(function (error) { toast(error.message || '背景管理页加载失败', true); });
+                }, unmount: function () { backgroundPageController.unmount(); } },
             ],
             beforeChange: function () {
                 return !uiSheetsApi || uiSheetsApi.requestCloseAll(overlay, 'page-change');
@@ -3915,6 +3943,7 @@
             onChange: function (activePage) {
                 lastAppPage = activePage;
                 if (activePage === 'avatars') renderAvatarBottomStatus();
+                if (activePage === 'backgrounds') renderBackgroundBottomStatus();
                 syncAvatarImportIndicator();
             },
         });
@@ -3992,7 +4021,7 @@
                 id: 'backgrounds',
                 label: '背景管理',
                 icon: 'fa-image',
-                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景管理</h2><p>背景管理功能将在后续版本加入</p></div>',
+                html: modules.backgroundPage.buildPageHtml(imageLoaderApi.PLACEHOLDER_SRC),
             },
         ];
         var shellOptions = {
@@ -4016,12 +4045,15 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
+            '<div class="tm-bottom-status tm-backgrounds-only" id="tm-background-status"></div>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="头像解绑" aria-label="头像解绑"><i class="fa-solid fa-eraser"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
             (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
+            '<button class="tm-bottom-btn tm-backgrounds-only" id="tm-background-refresh" title="刷新背景" aria-label="刷新背景"><i class="fa-solid fa-rotate"></i></button>' +
+            '<button class="tm-bottom-btn tm-backgrounds-only" id="tm-background-add" title="导入背景" aria-label="导入背景"><i class="fa-solid fa-plus"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
             '</div>' +
             '<div id="tm-popup-slot" style="position:absolute;inset:0;pointer-events:none;z-index:20;isolation:isolate;">' + pageMenuHtml + '</div>' +
@@ -4034,6 +4066,8 @@
         syncAvatarImportIndicator();
         if (lastAppPage === 'avatars') {
             avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
+        } else if (lastAppPage === 'backgrounds') {
+            backgroundPageController.mount().then(renderBackgroundBottomStatus).catch(function (error) { toast(error.message || '背景管理页加载失败', true); });
         } else if (lastAppPage === 'themes') {
             bindSeriesResizeListener();
         }
@@ -4077,6 +4111,13 @@
             if (avatarPageController) avatarPageController.toggleBatchMode();
         });
         ov.querySelector('#tm-avatar-global').addEventListener('click', openAvatarGlobalMenu);
+        ov.querySelector('#tm-background-add').addEventListener('click', function () {
+            if (backgroundPageController) backgroundPageController.pickFiles();
+        });
+        ov.querySelector('#tm-background-refresh').addEventListener('click', function () {
+            if (!backgroundPageController) return;
+            backgroundPageController.refresh(true).catch(function (error) { toast(error.message || '背景刷新失败', true); });
+        });
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
             if (dd.followThemeAppearance === true) {
@@ -4098,6 +4139,7 @@
         // 搜索
         ov.querySelector('#tm-search-toggle').addEventListener('click', function () {
             if (appShellController && appShellController.getActivePage() === 'avatars') { avatarPageController.toggleSearch(); return; }
+            if (appShellController && appShellController.getActivePage() === 'backgrounds') { backgroundPageController.toggleSearch(); return; }
             searchOpen = !searchOpen;
             ov.querySelector('#tm-search-bar').classList.toggle('open', searchOpen);
             if (searchOpen) ov.querySelector('#tm-search-inp').focus();
@@ -4138,6 +4180,7 @@
         // 排序
         ov.querySelector('#tm-sort-toggle').addEventListener('click', function () {
             if (appShellController && appShellController.getActivePage() === 'avatars') { avatarPageController.toggleSort(); return; }
+            if (appShellController && appShellController.getActivePage() === 'backgrounds') { backgroundPageController.toggleSort(); return; }
             sortOpen = !sortOpen;
             ov.querySelector('#tm-sortbar').classList.toggle('open', sortOpen);
         });
@@ -4199,6 +4242,7 @@
         seriesResizeTimer = null;
         if (appShellController) lastAppPage = appShellController.getActivePage();
         if (avatarPageController) avatarPageController.unmount();
+        if (backgroundPageController) backgroundPageController.unmount();
         if (appShellController) appShellController.destroy();
         appShellController = null;
         var ov = document.querySelector('.tm-overlay'); if (ov) ov.parentNode.removeChild(ov);
@@ -5768,6 +5812,17 @@
         }
     }
 
+    function renderBackgroundBottomStatus() {
+        if (!backgroundPageController) return;
+        var state = backgroundPageController.getState();
+        var status = document.getElementById('tm-background-status');
+        if (status) status.innerHTML = '<div class="tm-status-dot ' + (state.count ? 'green' : 'gray') + '"></div><span class="tm-status-text">背景 ' + state.count + ' 张 · 分类 ' + state.categories + ' 个</span>';
+        var add = document.getElementById('tm-background-add');
+        var refresh = document.getElementById('tm-background-refresh');
+        if (add) add.disabled = state.busy;
+        if (refresh) refresh.disabled = state.busy;
+    }
+
     function openAvatarGlobalMenu() {
         if (!avatarRuntime || !avatarPageController || !uiSheetsApi) return;
         var user = avatarPageController.getNativeStatus('user');
@@ -7186,6 +7241,7 @@
 
     function openSettingsSheet() {
         if (lastAppPage === 'avatars') return openAvatarSettingsSheet();
+        if (lastAppPage === 'backgrounds') return backgroundPageController.openCategoryManager();
         var d = load();
         var updateState = getExtensionUpdateState();
         var updateView = getExtensionUpdateView(updateState);

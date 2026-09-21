@@ -15,12 +15,27 @@
         var setControlValue = opts.setControlValue;
         var themeRuntime = opts.themeRuntime;
         var imageLoaderApi = opts.imageLoader || ns.imageLoader;
+        var backgroundLibraryApi = opts.backgroundLibrary || ns.backgroundLibrary;
+        var downloadBlob = typeof opts.downloadBlob === 'function' ? opts.downloadBlob : defaultDownloadBlob;
         var loadBoundBackgroundModules = typeof opts.loadBackgroundModules === 'function'
             ? opts.loadBackgroundModules
             : function () { return Promise.all([import('/scripts/backgrounds.js'), import('/script.js')]); };
         var backgroundListCache = null;
         var backgroundThumbnailCache = new Map();
         var BACKGROUND_THUMBNAIL_CACHE_LIMIT = 64;
+
+        function defaultDownloadBlob(blob, filename) {
+            if (!global.URL || typeof global.URL.createObjectURL !== 'function') throw new Error('当前环境不支持导出文件');
+            var url = global.URL.createObjectURL(blob);
+            var anchor = global.document.createElement('a');
+            anchor.href = url;
+            anchor.download = filename;
+            anchor.style.display = 'none';
+            global.document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            global.setTimeout(function () { global.URL.revokeObjectURL(url); }, 1000);
+        }
 
         function getBackgroundPath(backgroundName) {
             if (typeof global.__TAURITAVERN_BACKGROUND_PATH__ === 'function') {
@@ -32,6 +47,10 @@
 
         function getBackgroundCssUrl(backgroundName) {
             return 'url("' + getBackgroundPath(backgroundName) + '")';
+        }
+
+        function getBackgroundHttpPath(backgroundName) {
+            return 'backgrounds/' + encodeURIComponent(backgroundName);
         }
 
         function blobToDataUrl(blob) {
@@ -65,9 +84,9 @@
             return promise;
         }
 
-        function getBackgroundList(cb, force) {
-            if (backgroundListCache && !force) { cb(backgroundListCache); return; }
-            getPostHeaders()
+        function requestBackgroundList(force) {
+            if (backgroundListCache && !force) return Promise.resolve(backgroundListCache);
+            return getPostHeaders()
                 .then(function (headers) {
                     return global.fetch('/api/backgrounds/all', {
                         method: 'POST',
@@ -84,12 +103,180 @@
                     backgroundListCache = images.map(function (image) {
                         return typeof image === 'string' ? image : image.filename;
                     }).filter(function (name) { return !!name; }).sort(function (a, b) { return a.localeCompare(b); });
-                    cb(backgroundListCache);
-                })
-                .catch(function (err) {
-                    console.warn('[美化管理] 读取背景列表失败:', err);
-                    cb([]);
+                    return backgroundListCache;
                 });
+        }
+
+        function getBackgroundList(cb, force) {
+            requestBackgroundList(force).then(cb).catch(function (err) {
+                console.warn('[美化管理] 读取背景列表失败:', err);
+                cb([]);
+            });
+        }
+
+        function getBackgroundListPromise(force) {
+            return requestBackgroundList(force);
+        }
+
+        function invalidateBackgroundCache(name) {
+            backgroundListCache = null;
+            if (name) backgroundThumbnailCache.delete(name);
+        }
+
+        function getMultipartHeaders() {
+            return getPostHeaders().then(function (headers) {
+                var multipartHeaders = {};
+                Object.keys(headers || {}).forEach(function (key) {
+                    if (key.toLowerCase() !== 'content-type') multipartHeaders[key] = headers[key];
+                });
+                return multipartHeaders;
+            });
+        }
+
+        function uploadBackgroundFile(file) {
+            if (!file || !file.name) return Promise.reject(new Error('未选择有效图片'));
+            if (typeof global.FormData !== 'function') return Promise.reject(new Error('当前环境不支持图片上传'));
+            var formData = new global.FormData();
+            formData.append('avatar', file, file.name);
+            return getMultipartHeaders().then(function (headers) {
+                return global.fetch('/api/backgrounds/upload', {
+                    method: 'POST',
+                    headers: headers,
+                    body: formData,
+                    cache: 'no-cache',
+                });
+            }).then(function (response) {
+                if (!response || !response.ok) throw new Error('上传背景失败' + (response ? '（' + response.status + '）' : ''));
+                return response.text();
+            }).then(function (name) {
+                name = String(name || file.name).trim();
+                if (!name) throw new Error('酒馆未返回背景文件名');
+                invalidateBackgroundCache(name);
+                return name;
+            });
+        }
+
+        function fetchBackgroundBlob(name, source) {
+            return global.fetch(source, { cache: 'no-cache' }).then(function (response) {
+                if (!response || !response.ok || typeof response.blob !== 'function') throw new Error('读取背景原图失败');
+                return response.blob();
+            });
+        }
+
+        function exportBackground(name) {
+            var preferredPath = getBackgroundPath(name);
+            var httpPath = getBackgroundHttpPath(name);
+            return fetchBackgroundBlob(name, preferredPath).catch(function (error) {
+                if (preferredPath === httpPath) throw error;
+                return fetchBackgroundBlob(name, httpPath);
+            }).then(function (blob) {
+                return Promise.resolve(downloadBlob(blob, name)).then(function () { return name; });
+            });
+        }
+
+        function referencesBackground(value, name) {
+            value = String(value || '');
+            return value.indexOf(name) !== -1 || value.indexOf(encodeURIComponent(name)) !== -1;
+        }
+
+        function syncDeletedHostBackground(name, remaining) {
+            return loadBoundBackgroundModules().then(function (mods) {
+                var bgMod = mods[0] || {};
+                var scriptMod = mods[1] || {};
+                var fallback = remaining && remaining[0] ? remaining[0] : '';
+                var fallbackUrl = fallback ? getBackgroundCssUrl(fallback) : 'none';
+                var changedSettings = false;
+                if (bgMod.background_settings && bgMod.background_settings.name === name) {
+                    bgMod.background_settings.name = fallback;
+                    bgMod.background_settings.url = fallbackUrl;
+                    changedSettings = true;
+                }
+                var chatMetadata = scriptMod.chat_metadata;
+                var lockedDeleted = chatMetadata && referencesBackground(chatMetadata.custom_background, name);
+                var hasOtherChatLock = chatMetadata && chatMetadata.custom_background && !lockedDeleted;
+                if (lockedDeleted) delete chatMetadata.custom_background;
+                if (!hasOtherChatLock && (changedSettings || lockedDeleted)) {
+                    var bg = global.document && global.document.getElementById ? global.document.getElementById('bg1') : null;
+                    var visualUrl = changedSettings
+                        ? fallbackUrl
+                        : (bgMod.background_settings && bgMod.background_settings.url ? bgMod.background_settings.url : fallbackUrl);
+                    if (bg) bg.style.backgroundImage = visualUrl;
+                }
+                if (changedSettings && typeof scriptMod.saveSettingsDebounced === 'function') scriptMod.saveSettingsDebounced();
+                if (lockedDeleted) {
+                    if (typeof scriptMod.saveMetadataDebounced === 'function') scriptMod.saveMetadataDebounced();
+                    else if (typeof scriptMod.saveMetadata === 'function') scriptMod.saveMetadata();
+                }
+                return {
+                    activeChanged: changedSettings,
+                    chatLockCleared: !!lockedDeleted,
+                    fallback: changedSettings ? fallback : (lockedDeleted && bgMod.background_settings ? bgMod.background_settings.name || '' : ''),
+                };
+            }).catch(function (error) {
+                console.warn('[背景管理] 删除后同步酒馆当前背景失败:', error);
+                return { activeChanged: false, chatLockCleared: false, fallback: '' };
+            });
+        }
+
+        function syncDeletedBackground(name) {
+            var data = load();
+            var bindingCount = 0;
+            var changed = false;
+            Object.keys(data.themeMeta || {}).forEach(function (themeName) {
+                if (data.themeMeta[themeName] && data.themeMeta[themeName].backgroundName === name) {
+                    data.themeMeta[themeName].backgroundName = '';
+                    bindingCount += 1;
+                    changed = true;
+                }
+            });
+            if (backgroundLibraryApi && typeof backgroundLibraryApi.removeAsset === 'function') {
+                changed = backgroundLibraryApi.removeAsset(data, name) || changed;
+            } else if (data.backgroundLibrary && data.backgroundLibrary.assetMeta && Object.prototype.hasOwnProperty.call(data.backgroundLibrary.assetMeta, name)) {
+                delete data.backgroundLibrary.assetMeta[name];
+                changed = true;
+            }
+            var metadataSave = changed ? Promise.resolve(save(data)).then(function () { return true; }).catch(function (error) {
+                console.warn('[背景管理] 背景删除成功，但整理信息保存失败:', error);
+                return false;
+            }) : Promise.resolve(true);
+            var remainingBackgrounds = getBackgroundListPromise(true).catch(function (error) {
+                console.warn('[背景管理] 删除成功，但刷新酒馆背景列表失败:', error);
+                return [];
+            });
+            return Promise.all([metadataSave, remainingBackgrounds]).then(function (parts) {
+                return syncDeletedHostBackground(name, parts[1]).then(function (hostState) {
+                    return {
+                        name: name,
+                        themeBindingsCleared: bindingCount,
+                        metadataSaved: parts[0],
+                        activeChanged: hostState.activeChanged,
+                        chatLockCleared: hostState.chatLockCleared,
+                        fallback: hostState.fallback,
+                    };
+                });
+            });
+        }
+
+        function deleteBackgroundOnServer(name) {
+            return getPostHeaders().then(function (headers) {
+                return global.fetch('/api/backgrounds/delete', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({ bg: name }),
+                    cache: 'no-cache',
+                });
+            }).then(function (response) {
+                if (!response || !response.ok) throw new Error('删除背景失败' + (response ? '（' + response.status + '）' : ''));
+                invalidateBackgroundCache(name);
+                return syncDeletedBackground(name);
+            });
+        }
+
+        function countThemeBindings(name) {
+            var data = load();
+            return Object.keys(data.themeMeta || {}).filter(function (themeName) {
+                return data.themeMeta[themeName] && data.themeMeta[themeName].backgroundName === name;
+            }).length;
         }
 
         function normalizeBackgroundRename(oldName, rawName) {
@@ -111,8 +298,11 @@
                     changed = true;
                 }
             });
-            if (changed) save(data);
-            Promise.all([import('/scripts/backgrounds.js'), import('/script.js')])
+            if (backgroundLibraryApi && typeof backgroundLibraryApi.renameAsset === 'function') {
+                changed = backgroundLibraryApi.renameAsset(data, oldName, newName) || changed;
+            }
+            if (changed) Promise.resolve(save(data)).catch(function (error) { console.warn('[背景管理] 背景改名后的整理信息保存失败:', error); });
+            loadBoundBackgroundModules()
                 .then(function (mods) {
                     var bgMod = mods[0];
                     var scriptMod = mods[1];
@@ -141,7 +331,8 @@
                 })
                 .then(function (response) {
                     if (!response || !response.ok) throw new Error('rename background ' + (response ? response.status : 'failed'));
-                    backgroundListCache = null;
+                    invalidateBackgroundCache(oldName);
+                    backgroundThumbnailCache.delete(newName);
                     syncRenamedBackground(oldName, newName, function () { if (cb) cb(true); });
                 })
                 .catch(function (err) {
@@ -320,7 +511,14 @@
 
         return {
             getBackgroundCssUrl: getBackgroundCssUrl,
+            getBackgroundPath: getBackgroundPath,
+            getBackgroundThumbnailSource: getBackgroundThumbnailSource,
             getBackgroundList: getBackgroundList,
+            getBackgroundListPromise: getBackgroundListPromise,
+            uploadBackgroundFile: uploadBackgroundFile,
+            exportBackground: exportBackground,
+            deleteBackgroundOnServer: deleteBackgroundOnServer,
+            countThemeBindings: countThemeBindings,
             normalizeBackgroundRename: normalizeBackgroundRename,
             renameBackgroundOnServer: renameBackgroundOnServer,
             buildBackgroundBindHtml: buildBackgroundBindHtml,

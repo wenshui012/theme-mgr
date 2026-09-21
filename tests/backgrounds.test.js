@@ -5,13 +5,16 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'backgrounds.js'), 'utf8');
+const librarySource = fs.readFileSync(path.join(__dirname, '..', 'src', 'background-library.js'), 'utf8');
 
 function loadBackgrounds(window) {
     window.window = window;
     window.Promise = Promise;
     window.Map = Map;
     window.console = console;
-    vm.runInContext(source, vm.createContext(window), { filename: 'backgrounds.js' });
+    const context = vm.createContext(window);
+    vm.runInContext(librarySource, context, { filename: 'background-library.js' });
+    vm.runInContext(source, context, { filename: 'backgrounds.js' });
     return window.ThemeMgrModules;
 }
 
@@ -97,4 +100,139 @@ test('background picker registers thumbnail placeholders with a viewport loader'
     assert.deepEqual(requests, ['/api/backgrounds/all', '/thumbnail?type=bg&file=large.png']);
     assert.equal(beforeClose(), true);
     assert.equal(disconnectCount, 1);
+});
+
+test('background upload uses multipart headers and returns the server filename', async () => {
+    const requests = [];
+    class FormData {
+        constructor() { this.values = new Map(); }
+        append(key, value, filename) { this.values.set(key, { value, filename }); }
+    }
+    const window = {
+        FormData,
+        fetch: async (url, options) => {
+            requests.push({ url, options });
+            return { ok: true, text: async () => '夜景.png' };
+        },
+    };
+    const modules = loadBackgrounds(window);
+    const backgrounds = modules.createBackgrounds(baseOptions({
+        backgroundLibrary: modules.backgroundLibrary,
+        getPostHeaders: async () => ({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'token' }),
+    }));
+    const file = { name: '夜景.png', size: 42, type: 'image/png' };
+    assert.equal(await backgrounds.uploadBackgroundFile(file), '夜景.png');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, '/api/backgrounds/upload');
+    assert.equal(requests[0].options.headers['Content-Type'], undefined);
+    assert.equal(requests[0].options.headers['X-CSRF-Token'], 'token');
+    assert.deepEqual(requests[0].options.body.values.get('avatar'), { value: file, filename: '夜景.png' });
+});
+
+test('background export falls back to the HTTP path when a TT resource URL cannot be fetched', async () => {
+    const requests = [];
+    const downloads = [];
+    const blob = { type: 'image/png', size: 12 };
+    const window = {
+        __TAURITAVERN_BACKGROUND_PATH__: (name) => `asset://background/${encodeURIComponent(name)}`,
+        fetch: async (url) => {
+            requests.push(url);
+            if (url.startsWith('asset://')) return { ok: false };
+            return { ok: true, blob: async () => blob };
+        },
+    };
+    const modules = loadBackgrounds(window);
+    const backgrounds = modules.createBackgrounds(baseOptions({
+        backgroundLibrary: modules.backgroundLibrary,
+        downloadBlob: (value, filename) => downloads.push({ value, filename }),
+    }));
+    assert.equal(await backgrounds.exportBackground('夜 景.png'), '夜 景.png');
+    assert.deepEqual(requests, ['asset://background/%E5%A4%9C%20%E6%99%AF.png', 'backgrounds/%E5%A4%9C%20%E6%99%AF.png']);
+    assert.deepEqual(downloads, [{ value: blob, filename: '夜 景.png' }]);
+});
+
+test('background deletion clears local annotations, theme bindings, and deleted active host state', async () => {
+    const state = {
+        themeMeta: {
+            A: { backgroundName: 'night.png' },
+            B: { backgroundName: 'day.png' },
+        },
+        backgroundLibrary: {
+            categories: ['夜景'],
+            assetMeta: { 'night.png': { category: '夜景', starred: true } },
+        },
+    };
+    let saveCount = 0;
+    let savedSettings = 0;
+    let savedMetadata = 0;
+    const backgroundElement = { style: { backgroundImage: '' } };
+    const bgModule = { background_settings: { name: 'night.png', url: 'url("backgrounds/night.png")' } };
+    const scriptModule = {
+        chat_metadata: { custom_background: 'url("backgrounds/night.png")' },
+        saveSettingsDebounced() { savedSettings += 1; },
+        saveMetadataDebounced() { savedMetadata += 1; },
+    };
+    const requests = [];
+    const window = {
+        document: { getElementById: () => backgroundElement },
+        fetch: async (url, options) => {
+            requests.push({ url, options });
+            if (url === '/api/backgrounds/delete') return { ok: true };
+            if (url === '/api/backgrounds/all') return { ok: true, json: async () => ({ images: ['day.png'] }) };
+            throw new Error(`unexpected ${url}`);
+        },
+    };
+    const modules = loadBackgrounds(window);
+    const backgrounds = modules.createBackgrounds(baseOptions({
+        load: () => state,
+        save: async () => { saveCount += 1; return true; },
+        backgroundLibrary: modules.backgroundLibrary,
+        loadBackgroundModules: async () => [bgModule, scriptModule],
+    }));
+    assert.equal(backgrounds.countThemeBindings('night.png'), 1);
+    const result = await backgrounds.deleteBackgroundOnServer('night.png');
+    assert.equal(result.themeBindingsCleared, 1);
+    assert.equal(result.metadataSaved, true);
+    assert.equal(result.activeChanged, true);
+    assert.equal(result.chatLockCleared, true);
+    assert.equal(result.fallback, 'day.png');
+    assert.equal(state.themeMeta.A.backgroundName, '');
+    assert.equal(state.themeMeta.B.backgroundName, 'day.png');
+    assert.equal(Object.hasOwn(state.backgroundLibrary.assetMeta, 'night.png'), false);
+    assert.equal(bgModule.background_settings.name, 'day.png');
+    assert.equal(backgroundElement.style.backgroundImage, 'url("backgrounds/day.png")');
+    assert.equal(Object.hasOwn(scriptModule.chat_metadata, 'custom_background'), false);
+    assert.equal(saveCount, 1);
+    assert.equal(savedSettings, 1);
+    assert.equal(savedMetadata, 1);
+    assert.equal(JSON.parse(requests[0].options.body).bg, 'night.png');
+});
+
+test('deleting only the locked chat background restores the real global background', async () => {
+    const state = { themeMeta: {}, backgroundLibrary: { categories: [], assetMeta: {} } };
+    const backgroundElement = { style: { backgroundImage: 'url("backgrounds/locked.png")' } };
+    const bgModule = { background_settings: { name: 'day.png', url: 'url("backgrounds/day.png")' } };
+    const scriptModule = {
+        chat_metadata: { custom_background: 'url("backgrounds/locked.png")' },
+        saveMetadataDebounced() {},
+    };
+    const window = {
+        document: { getElementById: () => backgroundElement },
+        fetch: async (url) => {
+            if (url === '/api/backgrounds/delete') return { ok: true };
+            if (url === '/api/backgrounds/all') return { ok: true, json: async () => ({ images: ['aaa.png', 'day.png'] }) };
+            throw new Error(`unexpected ${url}`);
+        },
+    };
+    const modules = loadBackgrounds(window);
+    const backgrounds = modules.createBackgrounds(baseOptions({
+        load: () => state,
+        backgroundLibrary: modules.backgroundLibrary,
+        loadBackgroundModules: async () => [bgModule, scriptModule],
+    }));
+    const result = await backgrounds.deleteBackgroundOnServer('locked.png');
+    assert.equal(result.activeChanged, false);
+    assert.equal(result.chatLockCleared, true);
+    assert.equal(result.fallback, 'day.png');
+    assert.equal(backgroundElement.style.backgroundImage, 'url("backgrounds/day.png")');
 });
