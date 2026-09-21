@@ -304,6 +304,7 @@ function runtimeFixture(options = {}) {
         eventSource, eventTypes: options.eventTypes || {},
     };
     const win = { document: doc, location: { href: 'http://localhost/' }, URL, CSS: { supports: () => options.objectViewBoxSupported !== false }, innerWidth: 800, innerHeight: 600, MutationObserver, setTimeout, clearTimeout, requestAnimationFrame: (fn) => fn(), getComputedStyle: (el) => el.computed, confirm: () => true };
+    if (options.tauriLayout) win.__TAURITAVERN__ = { ready: Promise.resolve(), api: { layout: options.tauriLayout } };
     const mods = loadModules(win); const bundle = memoryStore(options.seed); const runtimeStore = options.store || bundle.store; const runtimeOptions = {
         window: win, document: doc, store: runtimeStore, getContext: () => context, getThemeName: () => theme,
         canMutate: options.canMutate,
@@ -790,6 +791,47 @@ test('offscreen avatar editing never scrolls the SillyTavern host and removes th
     assert.ok(f.doc.getElementById('tm-avatar-editor-toolbar'));
     assert.equal(f.chars.reduce((sum, entry) => sum + (entry.avatar.scrollIntoViewCalls || 0), 0), 0);
     await f.runtime.cancelEdit();
+    assert.equal(f.doc.getElementById('tm-avatar-editor-toolbar'), null);
+});
+test('TT avatar editor follows the active IME surface and releases its layout subscription on close', async () => {
+    let handler = null;
+    let unsubscribeCalls = 0;
+    const layout = {
+        subscribe(fn) {
+            handler = fn;
+            return Promise.resolve(() => { unsubscribeCalls += 1; });
+        },
+    };
+    const f = runtimeFixture({ seed: { assets: [asset()] }, tauriLayout: layout });
+    await f.runtime.beginEdit({ kind: 'character', avatarId: 'a' });
+    await Promise.resolve();
+    await Promise.resolve();
+    const host = f.doc.getElementById('tm-avatar-editor-toolbar');
+    assert.ok(host);
+    assert.equal(host.getAttribute('data-tt-mobile-surface'), 'fullscreen-window');
+    assert.equal(typeof handler, 'function');
+
+    handler({
+        viewport: { left: 0, top: 0, width: 800, height: 600 },
+        safeInsets: { top: 20, right: 0, bottom: 10, left: 0 },
+        ime: { activeSurface: host, keyboardOffset: 260 },
+    });
+    let style = host.getAttribute('style');
+    assert.match(style, /top:218px!important/);
+    assert.match(style, /--tm-avatar-toolbar-max-height:294px!important/);
+
+    handler({
+        viewport: { left: 0, top: 0, width: 800, height: 600 },
+        safeInsets: { top: 20, right: 0, bottom: 10, left: 0 },
+        ime: { activeSurface: host, keyboardOffset: 0 },
+    });
+    style = host.getAttribute('style');
+    assert.match(style, /top:478px!important/);
+    assert.match(style, /--tm-avatar-toolbar-max-height:554px!important/);
+
+    await f.runtime.cancelEdit();
+    await Promise.resolve();
+    assert.equal(unsubscribeCalls, 1);
     assert.equal(f.doc.getElementById('tm-avatar-editor-toolbar'), null);
 });
 test('47 editing either target preserves the other target binding', async () => {

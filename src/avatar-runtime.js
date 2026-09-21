@@ -509,6 +509,9 @@
         var toolbar = null;
         var styleNode = null;
         var toolbarViewport = null;
+        var toolbarLayoutSnapshot = null;
+        var toolbarLayoutUnsubscribe = null;
+        var toolbarLayoutToken = 0;
         var editorRenderFrame = null;
         var editorSettleTimer = null;
         var editorSyncAll = false;
@@ -1287,16 +1290,65 @@
         }
         function positionEditorToolbar() {
             if (!toolbarHost) return;
-            var viewport = win.visualViewport;
-            var viewportWidth = Number(viewport && viewport.width) || Number(win.innerWidth) || 320;
-            var viewportHeight = Number(viewport && viewport.height) || Number(win.innerHeight) || 480;
-            var offsetLeft = Number(viewport && viewport.offsetLeft) || 0;
-            var offsetTop = Number(viewport && viewport.offsetTop) || 0;
+            var visualViewport = win.visualViewport;
+            var layoutViewport = toolbarLayoutSnapshot && toolbarLayoutSnapshot.viewport;
+            var viewportWidth = Number(layoutViewport && layoutViewport.width) || Number(visualViewport && visualViewport.width) || Number(win.innerWidth) || 320;
+            var viewportHeight = Number(layoutViewport && layoutViewport.height) || Number(visualViewport && visualViewport.height) || Number(win.innerHeight) || 480;
+            var offsetLeft = Number(layoutViewport && layoutViewport.left);
+            if (!Number.isFinite(offsetLeft)) offsetLeft = Number(visualViewport && visualViewport.offsetLeft) || 0;
+            var offsetTop = Number(layoutViewport && layoutViewport.top);
+            if (!Number.isFinite(offsetTop)) offsetTop = Number(visualViewport && visualViewport.offsetTop) || 0;
+            var safeInsets = toolbarLayoutSnapshot && toolbarLayoutSnapshot.safeInsets || {};
+            var safeTop = Math.max(0, Number(safeInsets.top) || 0);
+            var safeBottom = Math.max(0, Number(safeInsets.bottom) || 0);
+            var ime = toolbarLayoutSnapshot && toolbarLayoutSnapshot.ime;
+            var keyboardOffset = ime && ime.activeSurface === toolbarHost ? Math.max(0, Number(ime.keyboardOffset) || 0) : 0;
+            var usableTop = offsetTop + safeTop;
+            var usableBottom = offsetTop + viewportHeight - safeBottom - keyboardOffset;
             var rect = rectOf(toolbarHost);
-            var top = Math.max(offsetTop + 8, offsetTop + viewportHeight - rect.height - 12);
+            var top = Math.max(usableTop + 8, usableBottom - rect.height - 12);
             setImportantStyle(toolbarHost, 'left', round(offsetLeft + viewportWidth / 2, 2) + 'px');
-            setImportantStyle(toolbarHost, 'top', 'calc(' + round(top, 2) + 'px - env(safe-area-inset-bottom,0px))');
+            setImportantStyle(toolbarHost, 'top', toolbarLayoutSnapshot ? round(top, 2) + 'px' : 'calc(' + round(top, 2) + 'px - env(safe-area-inset-bottom,0px))');
             setImportantStyle(toolbarHost, 'max-width', Math.max(240, viewportWidth - 16) + 'px');
+            setImportantStyle(toolbarHost, '--tm-avatar-toolbar-max-height', Math.max(120, usableBottom - usableTop - 16) + 'px');
+        }
+        function bindToolbarLayout() {
+            var tauri = global.__TAURITAVERN__;
+            if (!tauri || !toolbarHost) return;
+            toolbarHost.setAttribute('data-tt-mobile-surface', 'fullscreen-window');
+            var token = ++toolbarLayoutToken;
+            var ready = tauri.ready || global.__TAURITAVERN_MAIN_READY__ || Promise.resolve();
+            Promise.resolve(ready).then(function () {
+                if (token !== toolbarLayoutToken || !toolbarHost) return null;
+                var layout = tauri.api && tauri.api.layout;
+                if (!layout || typeof layout.subscribe !== 'function') return null;
+                return layout.subscribe(function (snapshot) {
+                    if (token !== toolbarLayoutToken || !toolbarHost) return;
+                    toolbarLayoutSnapshot = snapshot || null;
+                    positionEditorToolbar();
+                });
+            }).then(function (unsubscribe) {
+                if (typeof unsubscribe !== 'function') return;
+                if (token !== toolbarLayoutToken || !toolbarHost) {
+                    try {
+                        var staleResult = unsubscribe();
+                        if (staleResult && typeof staleResult.catch === 'function') staleResult.catch(function () {});
+                    } catch (_) {}
+                    return;
+                }
+                toolbarLayoutUnsubscribe = unsubscribe;
+            }).catch(function () {});
+        }
+        function unbindToolbarLayout() {
+            toolbarLayoutToken += 1;
+            toolbarLayoutSnapshot = null;
+            var unsubscribe = toolbarLayoutUnsubscribe;
+            toolbarLayoutUnsubscribe = null;
+            if (typeof unsubscribe !== 'function') return;
+            try {
+                var result = unsubscribe();
+                if (result && typeof result.catch === 'function') result.catch(function () {});
+            } catch (_) {}
         }
         function bindToolbarViewport() {
             toolbarViewport = win.visualViewport || null;
@@ -1319,6 +1371,7 @@
                 win.removeEventListener('orientationchange', positionEditorToolbar);
             }
             toolbarViewport = null;
+            unbindToolbarLayout();
         }
         function ensureEditorUi() {
             var preferences = editorPreferences();
@@ -1332,11 +1385,12 @@
             toolbarHost = doc.createElement('div');
             toolbarHost.id = TOOLBAR_ID;
             toolbarHost.setAttribute('style', 'all:initial!important;position:fixed!important;left:50%!important;top:0!important;bottom:auto!important;transform:translateX(-50%)!important;z-index:2147483647!important;display:block!important;width:max-content!important;max-width:calc(100vw - 16px)!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;box-sizing:border-box!important');
+            bindToolbarLayout();
             var toolbarRoot = typeof toolbarHost.attachShadow === 'function' ? toolbarHost.attachShadow({ mode: 'open' }) : toolbarHost;
             var toolbarStyle = doc.createElement('style');
             toolbarStyle.textContent = [
                 ':host{--tm-avatar-accent:var(--SmartThemeQuoteColor,#7c6daf);--tm-avatar-text:var(--SmartThemeBodyColor,#eee);--tm-avatar-bg:var(--SmartThemeBlurTintColor,var(--SmartThemeBackgroundColor,#16161a))}',
-                '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
+                '.tm-avatar-editor-bar{width:min(420px,calc(100vw - 16px));max-height:var(--tm-avatar-toolbar-max-height,calc(100vh - 16px));overflow:auto;display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:10px;border:1px solid rgba(127,127,127,.26);border-color:color-mix(in srgb,var(--tm-avatar-accent) 42%,transparent);border-radius:14px;background:var(--tm-avatar-bg);color:var(--tm-avatar-text);font:13px/1.2 system-ui,sans-serif;box-shadow:0 10px 32px rgba(0,0,0,.34);backdrop-filter:blur(14px);user-select:none;-webkit-user-select:none;pointer-events:auto;touch-action:manipulation}',
                 '.tm-avatar-editor-tools{display:flex;justify-content:flex-end;gap:5px}.tm-avatar-editor-tools button{display:inline-flex;align-items:center;gap:5px}.tm-avatar-editor-settings[hidden]{display:none}.tm-avatar-editor-settings{display:grid;grid-template-columns:1fr 88px;gap:7px 10px;align-items:center;padding:8px;border:1px solid rgba(127,127,127,.24);border-radius:10px;background:rgba(127,127,127,.07)}.tm-avatar-editor-settings label{display:contents}.tm-avatar-editor-settings input[type=number]{box-sizing:border-box;width:100%;min-width:0;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);color:inherit;padding:5px}.tm-avatar-editor-setting-toggle{grid-column:1/-1;display:flex!important;align-items:center;justify-content:space-between;gap:8px}.tm-avatar-editor-setting-toggle input{width:auto!important}.tm-avatar-editor-import-note{grid-column:1/-1;font-size:10px;line-height:1.35;opacity:.68}',
                 '.tm-avatar-editor-controls{display:grid;gap:5px}.tm-avatar-editor-row{display:grid;grid-template-columns:34px 32px minmax(100px,1fr) 58px 32px;align-items:center;gap:6px;min-height:34px}.tm-avatar-editor-label{white-space:nowrap;font-weight:600;opacity:.82}.tm-avatar-editor-row input{width:100%;min-width:0;margin:0;accent-color:var(--tm-avatar-accent)}.tm-avatar-editor-number-wrap{display:none;align-items:center;gap:2px;box-sizing:border-box;border:1px solid rgba(127,127,127,.3);border-radius:7px;background:rgba(127,127,127,.1);padding:0 5px;font-variant-numeric:tabular-nums}.tm-avatar-editor-value{display:block;box-sizing:border-box;padding:6px 5px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.tm-avatar-editor-bar.is-manual .tm-avatar-editor-number-wrap{display:flex}.tm-avatar-editor-bar.is-manual .tm-avatar-editor-value{display:none}.tm-avatar-editor-number{box-sizing:border-box;border:0!important;background:transparent!important;color:inherit;padding:5px 0;text-align:right;outline:none;-moz-appearance:textfield}.tm-avatar-editor-number::-webkit-inner-spin-button,.tm-avatar-editor-number::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}.tm-avatar-editor-number-wrap span{opacity:.7}',
                 'button{appearance:none;border:1px solid rgba(127,127,127,.28);border-radius:8px;background:rgba(127,127,127,.12);color:inherit;min-width:32px;min-height:32px;padding:5px 8px;font:inherit;white-space:nowrap;cursor:pointer}button:hover,button:focus-visible{border-color:var(--tm-avatar-accent);color:var(--tm-avatar-accent);outline:none}button:disabled{cursor:default;opacity:.38}.tm-avatar-editor-step{padding:0;font-size:17px;line-height:1}.tm-avatar-editor-bind{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;white-space:normal}.tm-avatar-editor-bind span{font-weight:650}.tm-avatar-editor-bind small{font-size:10px;opacity:.62;text-align:right}.tm-avatar-editor-bind.is-active{border-color:var(--tm-avatar-accent);background:color-mix(in srgb,var(--tm-avatar-accent) 18%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-scope-panel[hidden]{display:none}.tm-avatar-editor-scope-panel{display:flex;flex-direction:column;gap:5px;padding:7px;border:1px solid color-mix(in srgb,var(--tm-avatar-accent) 34%,transparent);border-radius:10px;background:rgba(127,127,127,.08)}.tm-avatar-editor-scope-title{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:1px 2px 4px;font-weight:700}.tm-avatar-editor-scope-title small{font-size:10px;font-weight:500;opacity:.64}.tm-avatar-editor-priority{padding:0 2px 4px;font-size:10px;line-height:1.35;opacity:.68}.tm-avatar-editor-scope-option{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:38px;text-align:left;white-space:normal}.tm-avatar-editor-scope-option span{display:flex;min-width:0;flex-direction:column;gap:2px}.tm-avatar-editor-scope-option strong{font-size:12px}.tm-avatar-editor-scope-option small{font-size:10px;opacity:.64}.tm-avatar-editor-scope-option em{font-size:9px;font-style:normal;opacity:.72}.tm-avatar-editor-footer{display:grid;grid-template-columns:repeat(6,minmax(0,auto));gap:5px;padding-top:2px}.tm-avatar-editor-footer button{min-width:0}.tm-avatar-editor-footer button.is-active{border-color:var(--tm-avatar-accent);background:rgba(127,127,127,.18);background:color-mix(in srgb,var(--tm-avatar-accent) 22%,transparent);color:var(--tm-avatar-accent)}.tm-avatar-editor-save{border-color:var(--tm-avatar-accent);background:var(--tm-avatar-accent);color:#fff;font-weight:700}.tm-avatar-editor-save:hover,.tm-avatar-editor-save:focus-visible{filter:brightness(1.08);color:#fff}',
