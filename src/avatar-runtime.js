@@ -509,9 +509,6 @@
         var toolbar = null;
         var styleNode = null;
         var toolbarViewport = null;
-        var toolbarLayoutSnapshot = null;
-        var toolbarLayoutUnsubscribe = null;
-        var toolbarLayoutToken = 0;
         var editorRenderFrame = null;
         var editorSettleTimer = null;
         var editorSyncAll = false;
@@ -1290,65 +1287,25 @@
         }
         function positionEditorToolbar() {
             if (!toolbarHost) return;
-            var visualViewport = win.visualViewport;
-            var layoutViewport = toolbarLayoutSnapshot && toolbarLayoutSnapshot.viewport;
-            var viewportWidth = Number(layoutViewport && layoutViewport.width) || Number(visualViewport && visualViewport.width) || Number(win.innerWidth) || 320;
-            var viewportHeight = Number(layoutViewport && layoutViewport.height) || Number(visualViewport && visualViewport.height) || Number(win.innerHeight) || 480;
-            var offsetLeft = Number(layoutViewport && layoutViewport.left);
-            if (!Number.isFinite(offsetLeft)) offsetLeft = Number(visualViewport && visualViewport.offsetLeft) || 0;
-            var offsetTop = Number(layoutViewport && layoutViewport.top);
-            if (!Number.isFinite(offsetTop)) offsetTop = Number(visualViewport && visualViewport.offsetTop) || 0;
-            var safeInsets = toolbarLayoutSnapshot && toolbarLayoutSnapshot.safeInsets || {};
-            var safeTop = Math.max(0, Number(safeInsets.top) || 0);
-            var safeBottom = Math.max(0, Number(safeInsets.bottom) || 0);
-            var ime = toolbarLayoutSnapshot && toolbarLayoutSnapshot.ime;
-            var keyboardOffset = ime && ime.activeSurface === toolbarHost ? Math.max(0, Number(ime.keyboardOffset) || 0) : 0;
-            var usableTop = offsetTop + safeTop;
-            var usableBottom = offsetTop + viewportHeight - safeBottom - keyboardOffset;
-            var rect = rectOf(toolbarHost);
-            var top = Math.max(usableTop + 8, usableBottom - rect.height - 12);
+            var viewport = win.visualViewport;
+            var viewportWidth = Number(viewport && viewport.width) || Number(win.innerWidth) || 320;
+            var viewportHeight = Number(viewport && viewport.height) || Number(win.innerHeight) || 480;
+            var offsetLeft = Number(viewport && viewport.offsetLeft) || 0;
+            var offsetTop = Number(viewport && viewport.offsetTop) || 0;
+            var isTauriSurface = toolbarHost.getAttribute('data-tt-mobile-surface') === 'fullscreen-window';
             setImportantStyle(toolbarHost, 'left', round(offsetLeft + viewportWidth / 2, 2) + 'px');
-            setImportantStyle(toolbarHost, 'top', toolbarLayoutSnapshot ? round(top, 2) + 'px' : 'calc(' + round(top, 2) + 'px - env(safe-area-inset-bottom,0px))');
             setImportantStyle(toolbarHost, 'max-width', Math.max(240, viewportWidth - 16) + 'px');
-            setImportantStyle(toolbarHost, '--tm-avatar-toolbar-max-height', Math.max(120, usableBottom - usableTop - 16) + 'px');
-        }
-        function bindToolbarLayout() {
-            var tauri = global.__TAURITAVERN__;
-            if (!tauri || !toolbarHost) return;
-            toolbarHost.setAttribute('data-tt-mobile-surface', 'fullscreen-window');
-            var token = ++toolbarLayoutToken;
-            var ready = tauri.ready || global.__TAURITAVERN_MAIN_READY__ || Promise.resolve();
-            Promise.resolve(ready).then(function () {
-                if (token !== toolbarLayoutToken || !toolbarHost) return null;
-                var layout = tauri.api && tauri.api.layout;
-                if (!layout || typeof layout.subscribe !== 'function') return null;
-                return layout.subscribe(function (snapshot) {
-                    if (token !== toolbarLayoutToken || !toolbarHost) return;
-                    toolbarLayoutSnapshot = snapshot || null;
-                    positionEditorToolbar();
-                });
-            }).then(function (unsubscribe) {
-                if (typeof unsubscribe !== 'function') return;
-                if (token !== toolbarLayoutToken || !toolbarHost) {
-                    try {
-                        var staleResult = unsubscribe();
-                        if (staleResult && typeof staleResult.catch === 'function') staleResult.catch(function () {});
-                    } catch (_) {}
-                    return;
-                }
-                toolbarLayoutUnsubscribe = unsubscribe;
-            }).catch(function () {});
-        }
-        function unbindToolbarLayout() {
-            toolbarLayoutToken += 1;
-            toolbarLayoutSnapshot = null;
-            var unsubscribe = toolbarLayoutUnsubscribe;
-            toolbarLayoutUnsubscribe = null;
-            if (typeof unsubscribe !== 'function') return;
-            try {
-                var result = unsubscribe();
-                if (result && typeof result.catch === 'function') result.catch(function () {});
-            } catch (_) {}
+            if (isTauriSurface) {
+                setImportantStyle(toolbarHost, 'top', 'auto');
+                setImportantStyle(toolbarHost, 'bottom', 'calc(var(--tt-viewport-bottom-inset, var(--tt-inset-bottom, 0px)) + 12px)');
+                setImportantStyle(toolbarHost, '--tm-avatar-toolbar-max-height', 'max(96px, calc(var(--tt-base-viewport-height, 100dvh) - var(--tt-inset-top, 0px) - var(--tt-viewport-bottom-inset, var(--tt-inset-bottom, 0px)) - 20px))');
+                return;
+            }
+            var rect = rectOf(toolbarHost);
+            var top = Math.max(offsetTop + 8, offsetTop + viewportHeight - rect.height - 12);
+            setImportantStyle(toolbarHost, 'top', 'calc(' + round(top, 2) + 'px - env(safe-area-inset-bottom,0px))');
+            setImportantStyle(toolbarHost, 'bottom', 'auto');
+            setImportantStyle(toolbarHost, '--tm-avatar-toolbar-max-height', Math.max(120, viewportHeight - 16) + 'px');
         }
         function bindToolbarViewport() {
             toolbarViewport = win.visualViewport || null;
@@ -1371,7 +1328,6 @@
                 win.removeEventListener('orientationchange', positionEditorToolbar);
             }
             toolbarViewport = null;
-            unbindToolbarLayout();
         }
         function ensureEditorUi() {
             var preferences = editorPreferences();
@@ -1385,7 +1341,7 @@
             toolbarHost = doc.createElement('div');
             toolbarHost.id = TOOLBAR_ID;
             toolbarHost.setAttribute('style', 'all:initial!important;position:fixed!important;left:50%!important;top:0!important;bottom:auto!important;transform:translateX(-50%)!important;z-index:2147483647!important;display:block!important;width:max-content!important;max-width:calc(100vw - 16px)!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;box-sizing:border-box!important');
-            bindToolbarLayout();
+            if (global.__TAURITAVERN__) toolbarHost.setAttribute('data-tt-mobile-surface', 'fullscreen-window');
             var toolbarRoot = typeof toolbarHost.attachShadow === 'function' ? toolbarHost.attachShadow({ mode: 'open' }) : toolbarHost;
             var toolbarStyle = doc.createElement('style');
             toolbarStyle.textContent = [
