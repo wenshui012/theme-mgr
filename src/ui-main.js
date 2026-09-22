@@ -370,6 +370,7 @@
                 themeRuntime: themeRuntime,
                 imageLoader: modules.imageLoader,
                 backgroundLibrary: backgroundLibraryApi,
+                archive: modules.avatarTransfer,
             });
             backgroundPageController = modules.createBackgroundPage({
                 document: document,
@@ -387,6 +388,10 @@
                 toast: toast,
                 confirm: global.confirm.bind(global),
                 onStateChange: renderBackgroundBottomStatus,
+                onBatchModeChange: function (enabled) {
+                    var button = document.getElementById('tm-background-batch-toggle');
+                    if (button) button.classList.toggle('on', enabled === true);
+                },
             });
             storageApi = modules.createStorage({
                 DB_NAME: DB_NAME,
@@ -4045,7 +4050,6 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
-            '<div class="tm-bottom-status tm-backgrounds-only" id="tm-background-status"></div>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="头像解绑" aria-label="头像解绑"><i class="fa-solid fa-eraser"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
@@ -4053,6 +4057,7 @@
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-backgrounds-only" id="tm-background-refresh" title="刷新背景" aria-label="刷新背景"><i class="fa-solid fa-rotate"></i></button>' +
+            '<button class="tm-bottom-btn tm-backgrounds-only" id="tm-background-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-backgrounds-only" id="tm-background-add" title="导入背景" aria-label="导入背景"><i class="fa-solid fa-plus"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
             '</div>' +
@@ -4117,6 +4122,9 @@
         ov.querySelector('#tm-background-refresh').addEventListener('click', function () {
             if (!backgroundPageController) return;
             backgroundPageController.refresh(true).catch(function (error) { toast(error.message || '背景刷新失败', true); });
+        });
+        ov.querySelector('#tm-background-batch-toggle').addEventListener('click', function () {
+            if (backgroundPageController) backgroundPageController.toggleBatchMode();
         });
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
@@ -5815,12 +5823,15 @@
     function renderBackgroundBottomStatus() {
         if (!backgroundPageController) return;
         var state = backgroundPageController.getState();
-        var status = document.getElementById('tm-background-status');
-        if (status) status.innerHTML = '<div class="tm-status-dot ' + (state.count ? 'green' : 'gray') + '"></div><span class="tm-status-text">背景 ' + state.count + ' 张 · 分类 ' + state.categories + ' 个</span>';
         var add = document.getElementById('tm-background-add');
         var refresh = document.getElementById('tm-background-refresh');
+        var batch = document.getElementById('tm-background-batch-toggle');
         if (add) add.disabled = state.busy;
         if (refresh) refresh.disabled = state.busy;
+        if (batch) {
+            batch.disabled = state.busy;
+            batch.classList.toggle('on', state.batchMode === true);
+        }
     }
 
     function openAvatarGlobalMenu() {
@@ -7241,7 +7252,7 @@
 
     function openSettingsSheet() {
         if (lastAppPage === 'avatars') return openAvatarSettingsSheet();
-        if (lastAppPage === 'backgrounds') return backgroundPageController.openCategoryManager();
+        if (lastAppPage === 'backgrounds') return backgroundPageController.openSettingsSheet();
         var d = load();
         var updateState = getExtensionUpdateState();
         var updateView = getExtensionUpdateView(updateState);

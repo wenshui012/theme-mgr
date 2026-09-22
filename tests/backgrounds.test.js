@@ -151,6 +151,38 @@ test('background export falls back to the HTTP path when a TT resource URL canno
     assert.deepEqual(downloads, [{ value: blob, filename: '夜 景.png' }]);
 });
 
+test('background batch export reads originals sequentially and downloads one ZIP', async () => {
+    const requests = [];
+    const downloads = [];
+    let archivedEntries = [];
+    const window = {
+        Blob,
+        innerWidth: 1200,
+        fetch: async (url) => {
+            requests.push(url);
+            return { ok: true, blob: async () => new Blob([url], { type: 'image/png' }) };
+        },
+    };
+    const modules = loadBackgrounds(window);
+    const backgrounds = modules.createBackgrounds(baseOptions({
+        backgroundLibrary: modules.backgroundLibrary,
+        archive: {
+            estimateZipSize: (entries) => entries.reduce((sum, entry) => sum + entry.data.length, 0),
+            buildStoredZip(entries) {
+                archivedEntries = entries;
+                return new Blob(entries.map((entry) => entry.data), { type: 'application/zip' });
+            },
+        },
+        downloadBlob: (value, filename) => downloads.push({ value, filename }),
+    }));
+    const result = await backgrounds.exportBackgroundBatch(['夜景.png', 'room.webp', '夜景.png']);
+    assert.deepEqual(requests, ['backgrounds/%E5%A4%9C%E6%99%AF.png', 'backgrounds/room.webp']);
+    assert.deepEqual(Array.from(archivedEntries, (entry) => entry.path), ['backgrounds/夜景.png', 'backgrounds/room.webp']);
+    assert.equal(downloads.length, 1);
+    assert.match(downloads[0].filename, /^backgrounds-.*\.zip$/);
+    assert.equal(result.count, 2);
+});
+
 test('background deletion clears local annotations, theme bindings, and deleted active host state', async () => {
     const state = {
         themeMeta: {

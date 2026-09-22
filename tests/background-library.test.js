@@ -50,6 +50,14 @@ test('background categories rename and delete without deleting image annotations
     assert.equal(library.peekMeta(state, 'room.png').starred, true);
 });
 
+test('background grid size supports compact mobile cards', () => {
+    const library = loadLibrary();
+    const compact = { backgroundLibrary: { cardSize: 1 } };
+    assert.equal(library.ensureState(compact).cardSize, 84);
+    const large = { backgroundLibrary: { cardSize: 999 } };
+    assert.equal(library.ensureState(large).cardSize, 260);
+});
+
 test('background metadata follows file rename and is removed after deletion', () => {
     const library = loadLibrary();
     const state = {};

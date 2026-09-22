@@ -33,7 +33,7 @@
         });
         library.sortMode = library.sortMode === 'starred' ? 'starred' : 'name';
         var cardSize = Number(library.cardSize);
-        library.cardSize = Number.isFinite(cardSize) ? Math.max(112, Math.min(260, Math.round(cardSize))) : 156;
+        library.cardSize = Number.isFinite(cardSize) ? Math.max(84, Math.min(260, Math.round(cardSize))) : 156;
         return library;
     }
 

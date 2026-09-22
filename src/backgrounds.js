@@ -16,6 +16,7 @@
         var themeRuntime = opts.themeRuntime;
         var imageLoaderApi = opts.imageLoader || ns.imageLoader;
         var backgroundLibraryApi = opts.backgroundLibrary || ns.backgroundLibrary;
+        var archiveApi = opts.archive || ns.avatarTransfer;
         var downloadBlob = typeof opts.downloadBlob === 'function' ? opts.downloadBlob : defaultDownloadBlob;
         var loadBoundBackgroundModules = typeof opts.loadBackgroundModules === 'function'
             ? opts.loadBackgroundModules
@@ -163,13 +164,65 @@
             });
         }
 
-        function exportBackground(name) {
+        function readBackgroundBlob(name) {
             var preferredPath = getBackgroundPath(name);
             var httpPath = getBackgroundHttpPath(name);
             return fetchBackgroundBlob(name, preferredPath).catch(function (error) {
                 if (preferredPath === httpPath) throw error;
                 return fetchBackgroundBlob(name, httpPath);
-            }).then(function (blob) {
+            });
+        }
+
+        function blobToBytes(blob) {
+            if (blob && typeof blob.arrayBuffer === 'function') {
+                return blob.arrayBuffer().then(function (buffer) { return new Uint8Array(buffer); });
+            }
+            if (typeof global.FileReader !== 'function') return Promise.reject(new Error('当前环境不支持读取背景原图'));
+            return new Promise(function (resolve, reject) {
+                var reader = new global.FileReader();
+                reader.onload = function () { resolve(new Uint8Array(reader.result)); };
+                reader.onerror = function () { reject(reader.error || new Error('读取背景原图失败')); };
+                reader.onabort = function () { reject(reader.error || new Error('读取背景原图已取消')); };
+                reader.readAsArrayBuffer(blob);
+            });
+        }
+
+        function isMobileRuntime() {
+            var userAgent = global.navigator && global.navigator.userAgent || '';
+            return /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) || Number(global.innerWidth) > 0 && Number(global.innerWidth) <= 768;
+        }
+
+        function exportBackgroundBatch(names) {
+            names = Array.from(new Set((names || []).map(function (name) { return String(name || '').trim(); }).filter(Boolean)));
+            if (!names.length) return Promise.reject(new Error('请先选择背景'));
+            if (!archiveApi || typeof archiveApi.buildStoredZip !== 'function' || typeof archiveApi.estimateZipSize !== 'function') {
+                return Promise.reject(new Error('当前环境不支持批量 ZIP 导出'));
+            }
+            var entries = [];
+            return names.reduce(function (promise, name) {
+                return promise.then(function () {
+                    return readBackgroundBlob(name).then(blobToBytes).then(function (bytes) {
+                        entries.push({ path: 'backgrounds/' + name, data: bytes });
+                    });
+                });
+            }, Promise.resolve()).then(function () {
+                var limit = (isMobileRuntime() ? 64 : 320) * 1024 * 1024;
+                var estimated = archiveApi.estimateZipSize(entries);
+                if (estimated > limit) {
+                    throw new Error('所选背景导出包超过当前设备安全上限，请减少选择后重试');
+                }
+                var now = new Date();
+                var blob = archiveApi.buildStoredZip(entries, now.toISOString(), global.Blob);
+                var stamp = now.toISOString().replace(/[:.]/g, '-');
+                var filename = 'backgrounds-' + stamp + '.zip';
+                return Promise.resolve(downloadBlob(blob, filename)).then(function () {
+                    return { filename: filename, count: names.length, bytes: blob.size };
+                });
+            });
+        }
+
+        function exportBackground(name) {
+            return readBackgroundBlob(name).then(function (blob) {
                 return Promise.resolve(downloadBlob(blob, name)).then(function () { return name; });
             });
         }
@@ -517,6 +570,7 @@
             getBackgroundListPromise: getBackgroundListPromise,
             uploadBackgroundFile: uploadBackgroundFile,
             exportBackground: exportBackground,
+            exportBackgroundBatch: exportBackgroundBatch,
             deleteBackgroundOnServer: deleteBackgroundOnServer,
             countThemeBindings: countThemeBindings,
             normalizeBackgroundRename: normalizeBackgroundRename,

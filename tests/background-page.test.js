@@ -6,6 +6,8 @@ const vm = require('node:vm');
 
 const librarySource = fs.readFileSync(path.join(__dirname, '..', 'src', 'background-library.js'), 'utf8');
 const pageSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'background-page.js'), 'utf8');
+const uiMainSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+const stylesSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.js'), 'utf8');
 
 function loadModules() {
     const window = { window: null, console };
@@ -23,9 +25,13 @@ test('background page exposes the compact image-library controls', () => {
     assert.match(html, /multiple/);
     assert.match(html, /data-background-search/);
     assert.match(html, /data-background-sort="starred"/);
+    assert.match(html, /data-background-grid-zoom="out"/);
+    assert.match(html, /data-background-batch-area/);
     assert.match(html, /data-background-catbar/);
     assert.match(html, /data-background-grid/);
-    assert.match(modules.backgroundPage.styleText(), /repeat\(2,minmax\(0,1fr\)\)/);
+    assert.match(modules.backgroundPage.styleText(), /repeat\(auto-fill,minmax\(var\(--tm-background-card-min\),1fr\)\)/);
+    assert.match(modules.backgroundPage.styleText(), /aspect-ratio:16\/9/);
+    assert.doesNotMatch(modules.backgroundPage.styleText(), /tm-background-info/);
 });
 
 test('background page state reports library counts before mounting', () => {
@@ -42,6 +48,18 @@ test('background page state reports library counts before mounting', () => {
     assert.equal(result.count, 0);
     assert.equal(result.categories, 2);
     assert.equal(result.busy, false);
+    assert.equal(result.batchMode, false);
+});
+
+test('background bottom bar mirrors avatar controls without a status block', () => {
+    assert.doesNotMatch(uiMainSource, /id="tm-background-status"/);
+    const refreshAt = uiMainSource.indexOf('id="tm-background-refresh"');
+    const batchAt = uiMainSource.indexOf('id="tm-background-batch-toggle"');
+    const addAt = uiMainSource.indexOf('id="tm-background-add"');
+    const settingsAt = uiMainSource.indexOf('id="tm-bottom-settings"');
+    assert.ok(refreshAt !== -1 && refreshAt < batchAt && batchAt < addAt && addAt < settingsAt);
+    assert.ok(stylesSource.includes('.tm-overlay[data-tm-active-page="backgrounds"] .tm-bottombar'));
+    assert.match(uiMainSource, /lastAppPage === 'backgrounds'\) return backgroundPageController\.openSettingsSheet\(\)/);
 });
 
 test('background import is sequential, skips existing names, and rejects unsafe filenames', async () => {
