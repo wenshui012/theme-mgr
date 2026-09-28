@@ -433,6 +433,7 @@
         var importAvatarFileToLibrary = options.importAvatarFileToLibrary;
         var processAvatarFile = options.processAvatarFile;
         var getEditorPreferences = options.getEditorPreferences || function () { return DEFAULT_EDITOR_PREFERENCES; };
+        var isChatAvatarLightboxDisabled = options.isChatAvatarLightboxDisabled || function () { return false; };
         var saveEditorPreferences = options.saveEditorPreferences || function () { return Promise.resolve(); };
         var bakesUserOriginalView = options.bakesUserOriginalView === true;
         var preloadHostImage = options.preloadHostImage || function (source) {
@@ -1208,6 +1209,25 @@
             if (editor) cancelEdit('theme-changed');
             else invalidateAndScheduleReconcile(80);
         }
+        function closestByClass(node, className) {
+            while (node && node !== doc) {
+                if (node.classList && node.classList.contains(className)) return node;
+                node = node.parentElement || node.parentNode;
+            }
+            return null;
+        }
+        function blockChatAvatarLightbox(event) {
+            try { if (!isChatAvatarLightboxDisabled()) return; }
+            catch (_) { return; }
+            var avatar = closestByClass(event && event.target, 'avatar');
+            var message = avatar && closestByClass(avatar, 'mes');
+            var chat = doc.getElementById && doc.getElementById('chat');
+            if (!avatar || !message || !chat || !chat.contains(message)) return;
+            if (editor && editor.representative && editor.representative.avatar === avatar) return;
+            if (event.preventDefault) event.preventDefault();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+            if (event.stopPropagation) event.stopPropagation();
+        }
         function start() {
             if (started) return Promise.resolve(false);
             if (!canStart()) return Promise.reject(Object.assign(new Error('头像本地存储不可用'), { code: 'AVATAR_STORAGE_NOT_READY' }));
@@ -1218,6 +1238,7 @@
             [types.CHAT_CHANGED, types.CHAT_LOADED, types.PERSONA_CHANGED, types.PERSONA_UPDATED, types.PERSONA_RENAMED, types.PERSONA_DELETED, types.CHARACTER_EDITED, types.CHARACTER_RENAMED, types.CHARACTER_DELETED].forEach(function (name) { addEvent(source, name, contextChanged); });
             [types.MESSAGE_SENT, types.MESSAGE_RECEIVED, types.MESSAGE_UPDATED, types.USER_MESSAGE_RENDERED, types.CHARACTER_MESSAGE_RENDERED].forEach(function (name) { addEvent(source, name, contentChanged); });
             doc.addEventListener('change', onThemeControlChange, true);
+            doc.addEventListener('click', blockChatAvatarLightbox, true);
             return Promise.resolve(store.ready).then(reconcile);
         }
         function stop() {
@@ -1228,6 +1249,7 @@
             });
             listeners = [];
             doc.removeEventListener('change', onThemeControlChange, true);
+            doc.removeEventListener('click', blockChatAvatarLightbox, true);
             if (chatObserver) chatObserver.disconnect();
             chatObserver = null;
             observedChat = null;

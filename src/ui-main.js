@@ -456,6 +456,7 @@
                 overwriteHostAvatar: overwriteSillyTavernAvatar,
                 bakesUserOriginalView: isTauriTavernRuntime(),
                 getEditorPreferences: function () { return load().avatarEditorPreferences; },
+                isChatAvatarLightboxDisabled: function () { return load().disableChatAvatarLightbox === true; },
                 saveEditorPreferences: function (preferences) {
                     var value = load();
                     value.avatarEditorPreferences = preferences;
@@ -591,11 +592,15 @@
             else d.nextThemeImportOrder = Math.max(d.nextThemeImportOrder, value + 1);
         });
         d.previewImageQuality = d.previewImageQuality === 'quality' ? 'quality' : 'performance';
+        if (typeof d.commonBackgroundName !== 'string') d.commonBackgroundName = '';
         if (typeof d.followThemeAppearance !== 'boolean') d.followThemeAppearance = false;
+        if (typeof d.followDayNightAppearance !== 'boolean') d.followDayNightAppearance = false;
         if (typeof d.showThemeAvatarFrame !== 'boolean') d.showThemeAvatarFrame = false;
         if (typeof d.followThemePreviewShape !== 'boolean') d.followThemePreviewShape = false;
         if (typeof d.simplifyGridText !== 'boolean') d.simplifyGridText = false;
         if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
+        if (typeof d.hideSeriesPreviews !== 'boolean') d.hideSeriesPreviews = false;
+        if (typeof d.disableChatAvatarLightbox !== 'boolean') d.disableChatAvatarLightbox = false;
         if (!d.avatarEditorPreferences || typeof d.avatarEditorPreferences !== 'object' || Array.isArray(d.avatarEditorPreferences)) d.avatarEditorPreferences = {};
         var avatarEditorDefaults = dd.avatarEditorPreferences;
         ['scaleStepPercent', 'positionStepPercent', 'rotationStepDegrees'].forEach(function (name) {
@@ -662,11 +667,15 @@
             themeImportOrder: Object.create(null),
             nextThemeImportOrder: 1,
             previewImageQuality: 'performance',
+            commonBackgroundName: '',
             followThemeAppearance: false,
+            followDayNightAppearance: false,
             showThemeAvatarFrame: false,
             followThemePreviewShape: false,
             simplifyGridText: false,
             autoHideHeader: false,
+            hideSeriesPreviews: false,
+            disableChatAvatarLightbox: false,
             avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, manualInput: false, quickImportToLibrary: true },
             dayNightPreference: { mode: 'system', manualVariant: '', dayStart: '07:00', nightStart: '19:00' },
             dayNight: { version: 1, pairs: Object.create(null) },
@@ -745,6 +754,7 @@
                 if (bindingController) bindingController.reconcile();
                 renderGrid();
                 renderBottomStatus();
+                syncManagerAppearance();
             },
         });
         colorSchemeWatcher.start();
@@ -3768,7 +3778,7 @@
         ov.classList.toggle('tm-follow-grid', followCardFrame || followPreviewShape);
     }
 
-    function updateAppearanceToggleButton(ov, following, mode) {
+    function updateAppearanceToggleButton(ov, following, mode, followingDayNight) {
         var button = ov && ov.querySelector('#tm-theme-toggle');
         if (!button) return;
         if (following) {
@@ -3780,7 +3790,9 @@
         button.innerHTML = isDark
             ? '<i class="fa-solid fa-moon"></i>'
             : '<i class="fa-regular fa-sun"></i>';
-        button.title = isDark ? '外观：固定深色（点击切换浅色）' : '外观：固定浅色（点击切换深色）';
+        button.title = followingDayNight
+            ? '外观：跟随日夜切换（点击改为固定' + (isDark ? '浅色' : '深色') + '）'
+            : (isDark ? '外观：固定深色（点击切换浅色）' : '外观：固定浅色（点击切换深色）');
     }
 
     function syncManagerAppearance() {
@@ -3788,6 +3800,7 @@
         if (!ov) return;
         var d = load();
         var following = d.followThemeAppearance === true && appearanceApi && typeof appearanceApi.createPalette === 'function';
+        var followingDayNight = !following && d.followDayNightAppearance === true;
         var autoHideHeader = d.autoHideHeader === true;
 
         ov.classList.toggle('tm-follow', following);
@@ -3804,12 +3817,13 @@
             }
         }
         if (!following) {
+            var effectiveDarkMode = followingDayNight ? getPreferredPairVariant() === 'night' : darkMode;
             clearManagerAppearanceVars(ov);
             ov.classList.remove('tm-compact-card-info');
-            ov.classList.toggle('tm-dark', darkMode);
-            ov.classList.toggle('tm-light', !darkMode);
-            ov.dataset.tmAppearanceMode = darkMode ? 'dark' : 'light';
-            updateAppearanceToggleButton(ov, false, ov.dataset.tmAppearanceMode);
+            ov.classList.toggle('tm-dark', effectiveDarkMode);
+            ov.classList.toggle('tm-light', !effectiveDarkMode);
+            ov.dataset.tmAppearanceMode = effectiveDarkMode ? 'dark' : 'light';
+            updateAppearanceToggleButton(ov, false, ov.dataset.tmAppearanceMode, followingDayNight);
             return;
         }
 
@@ -3840,7 +3854,7 @@
                 d.followThemePreviewShape === true
             )
         );
-        updateAppearanceToggleButton(ov, true, palette.mode);
+        updateAppearanceToggleButton(ov, true, palette.mode, false);
     }
 
     function scheduleManagerAppearanceSync() {
@@ -4096,8 +4110,9 @@
         ov.querySelector('#tm-avatar-global').addEventListener('click', openAvatarGlobalMenu);
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
-            if (dd.followThemeAppearance === true) {
+            if (dd.followThemeAppearance === true || dd.followDayNightAppearance === true) {
                 dd.followThemeAppearance = false;
+                dd.followDayNightAppearance = false;
                 darkMode = ov.dataset.tmAppearanceMode !== 'dark';
                 save(dd);
                 toast('已切换为固定' + (darkMode ? '深色' : '浅色') + '，可在设置中恢复跟随');
@@ -4278,9 +4293,12 @@
     function renderCatbar() {
         var catbar = document.getElementById('tm-catbar'); if (!catbar) return;
         var d = load();
-        if (d.categories.length === 0) { catbar.style.display = 'none'; return; }
+        var hasDayNight = buildLibraryView(d).items.some(function (item) { return item.kind === 'pair'; });
+        if (!hasDayNight && curCat === '__day-night__') curCat = '__all__';
+        if (d.categories.length === 0 && !hasDayNight) { catbar.style.display = 'none'; return; }
         catbar.style.display = '';
         var html = '<button class="tm-catbtn' + (curCat === '__all__' ? ' on' : '') + '" data-c="__all__">全部</button>';
+        if (hasDayNight) html += '<button class="tm-catbtn' + (curCat === '__day-night__' ? ' on' : '') + '" data-c="__day-night__"><i class="fa-solid fa-circle-half-stroke"></i> 日夜美化</button>';
         html += '<button class="tm-catbtn' + (curCat === '__uncategorized__' ? ' on' : '') + '" data-c="__uncategorized__">未分类</button>';
         d.categories.forEach(function (c) {
             html += '<button class="tm-catbtn' + (curCat === c ? ' on' : '') + '" data-c="' + esc(c) + '">' + esc(c) + '</button>';
@@ -4545,7 +4563,9 @@
         var unitBySeries = Object.create(null);
         var rawUnits = [];
 
+        var dayNightOnly = cat === '__day-night__';
         sortedItems.forEach(function (item) {
+            if (dayNightOnly && item.kind !== 'pair') return;
             var targetKey = item.kind === 'pair' ? 'pair:' + item.pairId : 'theme:' + item.themeName;
             var seriesId = targetKey ? membership[targetKey] : '';
             var group = seriesId ? groups[seriesId] : null;
@@ -4564,10 +4584,10 @@
 
         var filtered = rawUnits.filter(function (unit) {
             if (unit.type === 'item') {
-                if (!displayCategoryMatches((view.metaByKey[unit.item.key] || {}).category, cat)) return false;
+                if (!dayNightOnly && !displayCategoryMatches((view.metaByKey[unit.item.key] || {}).category, cat)) return false;
                 return itemMatchesSearch(d, unit.item, query);
             }
-            if (!displayCategoryMatches(unit.group.category, cat)) return false;
+            if (!dayNightOnly && !displayCategoryMatches(unit.group.category, cat)) return false;
             if (!query) return true;
             var q = String(query).toLocaleLowerCase();
             return unit.group.name.toLowerCase().indexOf(q) !== -1 || unit.items.some(function (item) {
@@ -4606,11 +4626,12 @@
     function buildSeriesBlockHtml(unit, d, curTheme, view) {
         var group = unit.group;
         var expanded = expandedSeriesId === group.id;
+        var previewsHidden = d.hideSeriesPreviews === true && !batchMode;
         var controlId = 'tm-series-members-' + group.id;
-        return '<section class="tm-series-block' + (expanded ? ' is-expanded' : '') + '" data-series-id="' + esc(group.id) + '">' +
+        return '<section class="tm-series-block' + (expanded ? ' is-expanded' : '') + (previewsHidden ? ' tm-series-preview-hidden' : '') + '" data-series-id="' + esc(group.id) + '">' +
             '<div class="tm-series-head">' +
             '<button type="button" class="tm-series-manage" data-series-id="' + esc(group.id) + '" title="管理系列">' +
-            '<i class="fa-solid fa-layer-group"></i><span>' + esc(group.name) + '</span><small>' + group.members.length + ' 款</small></button>' +
+            '<i class="fa-solid fa-layer-group"></i><span>' + esc(group.name) + '</span><small>' + (curCat === '__day-night__' ? unit.items.length : group.members.length) + ' 款</small></button>' +
             '<button type="button" class="tm-series-toggle" data-series-id="' + esc(group.id) + '" aria-expanded="' + (expanded ? 'true' : 'false') + '" aria-controls="' + esc(controlId) + '" title="' + (expanded ? '收起系列' : '展开全系列') + '">' +
             '<i class="fa-solid fa-chevron-down"></i></button></div>' +
             '<div class="tm-series-track" id="' + esc(controlId) + '">' +
@@ -4801,7 +4822,8 @@
     function registerGridImages(images, state) {
         if (!gridImageLoader || !state || state.generation !== gridRenderGeneration) return;
         (images || []).forEach(function (image) {
-            if (state.eagerImagesRemaining > 0) {
+            var hiddenSeries = image.closest && image.closest('.tm-series-preview-hidden:not(.is-expanded)');
+            if (!hiddenSeries && state.eagerImagesRemaining > 0) {
                 state.eagerImagesRemaining -= 1;
                 gridImageLoader.loadNow(image, state.generation);
             } else {
@@ -7075,6 +7097,7 @@
         var updateView = getExtensionUpdateView(updateState);
         var interfaceHtml =
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>跟随当前美化外观</span><small>沿用美化管理器的颜色、圆角与面板质感</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + '></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>禁用聊天头像大图</span><small>点击聊天消息头像时不再打开酒馆的大图预览</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-disable-chat-lightbox" ' + (d.disableChatAvatarLightbox === true ? 'checked' : '') + '></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + '></div>';
         var organizeHtml =
             '<button class="tm-btn tm-btn-outline" id="tm-avatar-open-categories" style="width:100%;text-align:left"><i class="fa-solid fa-tags"></i> 管理分类（' + state.categories + '个）</button>';
@@ -7094,6 +7117,7 @@
         var sheet = createSheet(['<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>设置</div>', organizeHtml, buildDisclosureHtml('tm-avatar-settings-interface', '界面显示', 'fa-display', interfaceHtml), buildDisclosureHtml('tm-avatar-settings-data', '数据管理', 'fa-database', dataHtml), extensionHtml].join(''));
         sheet.classList.add('tm-sheet-tall', 'tm-settings-sheet');
         sheet.querySelector('#tm-avatar-follow-appearance').addEventListener('change', function () { var next = load(); next.followThemeAppearance = this.checked; save(next); syncManagerAppearance(); });
+        sheet.querySelector('#tm-avatar-disable-chat-lightbox').addEventListener('change', function () { var next = load(); next.disableChatAvatarLightbox = this.checked; save(next); });
         sheet.querySelector('#tm-avatar-auto-hide-header').addEventListener('change', function () { var next = load(); next.autoHideHeader = this.checked; save(next); syncManagerAppearance(); });
         sheet.querySelector('#tm-avatar-open-categories').addEventListener('click', function () { closeSheet(sheet); avatarPageController.openCategoryManager(); });
         var sizeNode = sheet.querySelector('#tm-avatar-library-size');
@@ -7232,14 +7256,20 @@
             '<div class="tm-day-night-time-grid">' +
             '<div class="tm-field"><label>日间开始</label><input type="time" id="tm-day-night-day-start" value="' + esc(dayNightPreference.dayStart) + '" /></div>' +
             '<div class="tm-field"><label>夜间开始</label><input type="time" id="tm-day-night-night-start" value="' + esc(dayNightPreference.nightStart) + '" /></div>' +
-            '</div><div class="tm-hint">使用设备本地时间，支持跨零点时间段。</div></div>';
+            '</div><div class="tm-hint">使用设备本地时间，支持跨零点时间段。</div></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>管理器明暗跟随日夜切换</span><small>固定外观时，管理器会按上方规则切换浅色与深色</small></label><input type="checkbox" class="tm-chk" id="tm-follow-day-night-appearance" ' + (d.followDayNightAppearance === true ? 'checked' : '') + ' /></div>';
         var interfaceSettingsHtml =
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail tm-grid-text-detail"><label class="tm-setting-copy"><span>简洁网格文字</span><small>头像框或预览形状任一开启时，名称和标签取消底纹并居中</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>隐藏标题与按钮；点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>隐藏系列预览</span><small>系列收起时只显示标题，展开后显示全部美化</small></label><input type="checkbox" class="tm-chk" id="tm-hide-series-previews" ' + (d.hideSeriesPreviews === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>';
+        var otherSettingsHtml =
+            '<div class="tm-field"><label>绑定通用背景</label><button type="button" class="tm-bg-bind-card" id="tm-common-background">' +
+            backgroundsApi.buildBackgroundBindHtml(d.commonBackgroundName, { emptyTitle: '未设置通用背景', emptyHint: '当前美化没有绑定背景时保持酒馆现状', selectedHint: '当前美化没有绑定背景时使用此壁纸' }) +
+            '</button><div class="tm-hint">每个美化单独绑定的背景优先于通用背景。</div></div>';
         var fabSettingsHtml =
             '<div class="tm-row-inline"><label>显示悬浮球</label><input type="checkbox" class="tm-chk" id="tm-show-ball" ' + (d.showBall !== false ? 'checked' : '') + ' /></div>' +
             '<div class="tm-field"><label>自定义悬浮球图片 <span class="tm-hint">支持 gif 动图、透明底 png</span></label>' +
@@ -7293,6 +7323,7 @@
             '</div></div>',
             buildDisclosureHtml('tm-settings-interface', '界面显示', 'fa-display', interfaceSettingsHtml),
             buildDisclosureHtml('tm-settings-day-night', '日夜切换', 'fa-circle-half-stroke', dayNightSettingsHtml),
+            buildDisclosureHtml('tm-settings-other', '其他功能', 'fa-puzzle-piece', otherSettingsHtml),
             buildDisclosureHtml('tm-settings-fab', '悬浮球', 'fa-circle-dot', fabSettingsHtml),
             buildDisclosureHtml('tm-settings-data', '数据管理', 'fa-database', dataSettingsHtml),
             extensionInfoHtml,
@@ -7313,6 +7344,7 @@
         });
 
         var dayNightModeInput = sheet.querySelector('#tm-day-night-mode');
+        var followDayNightAppearanceInput = sheet.querySelector('#tm-follow-day-night-appearance');
         var dayNightManualDetail = sheet.querySelector('#tm-day-night-manual');
         var dayNightScheduleDetail = sheet.querySelector('#tm-day-night-schedule');
         var dayStartInput = sheet.querySelector('#tm-day-night-day-start');
@@ -7364,12 +7396,19 @@
         }
         dayStartInput.addEventListener('change', function () { saveDayNightTimes(dayStartInput); });
         nightStartInput.addEventListener('change', function () { saveDayNightTimes(nightStartInput); });
+        followDayNightAppearanceInput.addEventListener('change', function () {
+            var dd = load();
+            dd.followDayNightAppearance = this.checked;
+            save(dd);
+            syncManagerAppearance();
+        });
 
         var followAppearanceInput = sheet.querySelector('#tm-follow-appearance');
         var showThemeAvatarFrameInput = sheet.querySelector('#tm-show-theme-avatar-frame');
         var followThemePreviewShapeInput = sheet.querySelector('#tm-follow-preview-shape');
         var simplifyGridTextInput = sheet.querySelector('#tm-simplify-grid-text');
         var autoHideHeaderInput = sheet.querySelector('#tm-auto-hide-header');
+        var hideSeriesPreviewsInput = sheet.querySelector('#tm-hide-series-previews');
         var previewImageQualityInput = sheet.querySelector('#tm-preview-image-quality');
         previewImageQualityInput.addEventListener('change', function () {
             var dd = load();
@@ -7432,6 +7471,27 @@
             dd.autoHideHeader = this.checked;
             save(dd);
             syncManagerAppearance();
+        });
+        hideSeriesPreviewsInput.addEventListener('change', function () {
+            var dd = load();
+            dd.hideSeriesPreviews = this.checked;
+            save(dd);
+            renderGrid();
+        });
+        sheet.querySelector('#tm-common-background').addEventListener('click', function () {
+            var button = this;
+            var current = load();
+            openBackgroundPickerSheet(current.commonBackgroundName, function (name) {
+                var dd = load();
+                dd.commonBackgroundName = name || '';
+                Promise.resolve(save(dd)).then(function () {
+                    if (!button.parentNode) return;
+                    button.innerHTML = backgroundsApi.buildBackgroundBindHtml(dd.commonBackgroundName, { emptyTitle: '未设置通用背景', emptyHint: '当前美化没有绑定背景时保持酒馆现状', selectedHint: '当前美化没有绑定背景时使用此壁纸' });
+                    var themeName = getCurrentThemeName();
+                    var meta = dd.themeMeta && dd.themeMeta[themeName];
+                    if (!meta || !meta.backgroundName) applyBoundBackground(themeName);
+                }).catch(function () { toast('通用背景保存失败，请重试', true); });
+            });
         });
         sheet.querySelector('#tm-show-ball').addEventListener('change', function () {
             var dd = load(); dd.showBall = this.checked; save(dd);

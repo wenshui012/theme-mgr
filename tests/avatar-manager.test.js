@@ -312,6 +312,7 @@ function runtimeFixture(options = {}) {
         overwriteHostAvatar: options.overwriteHostAvatar,
         bakesUserOriginalView: options.bakesUserOriginalView,
         getEditorPreferences: options.getEditorPreferences,
+        isChatAvatarLightboxDisabled: options.isChatAvatarLightboxDisabled,
         saveEditorPreferences: options.saveEditorPreferences,
         importAvatarFileToLibrary: options.importAvatarFileToLibrary,
         processAvatarFile: options.processAvatarFile,
@@ -463,6 +464,20 @@ test('WebKit fallback bakes avatar crop into SVG without rejecting the edit', as
 test('27 mask and clip properties are not rewritten', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'character',avatarId:'a'}); assert.equal(f.chars[0].image.computed.clipPath,'circle(48%)'); assert.equal(f.chars[0].image.computed.maskImage,'url(mask.png)'); });
 test('28 a newly rendered message is reapplied on reconcile', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{version:1,themeKey:'theme-name:A',targetKey:'character:char.png',avatarId:'a',view:{}}]}}); await f.runtime.start(); const next=message('character',{x:20,y:350,width:60,height:60},'raw-new'); f.chat.appendChild(next.mes); await f.runtime.reconcile(); assert.match(next.image.getAttribute('src'),/main-a/); });
 test('29 a fresh runtime restores persisted bindings after reload', async () => { const seed={assets:[asset()],bindings:[{version:1,themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{}}]}; const f=runtimeFixture({seed}); await f.runtime.start(); assert.match(f.user.image.getAttribute('src'),/main-a/); });
+test('chat avatar lightbox clicks are blocked only while the setting is enabled', async () => {
+    let disabled = true;
+    const f = runtimeFixture({ isChatAvatarLightboxDisabled: () => disabled });
+    await f.runtime.start();
+    const blocked = { type: 'click', target: f.chars[0].image, preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.propagationStopped = true; }, stopImmediatePropagation() { this.immediateStopped = true; } };
+    f.doc.dispatchEvent(blocked);
+    assert.equal(blocked.defaultPrevented, true);
+    assert.equal(blocked.immediateStopped, true);
+    disabled = false;
+    const allowed = { type: 'click', target: f.chars[0].image, preventDefault() { this.defaultPrevented = true; } };
+    f.doc.dispatchEvent(allowed);
+    assert.notEqual(allowed.defaultPrevented, true);
+    f.runtime.stop();
+});
 test('30 a promoted default avatar keeps the same normalized crop across theme switches', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{version:1,themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{x:.1}}]}}); await f.runtime.start(); const a=f.user.image.getAttribute('style'); f.setTheme('B'); await f.runtime.reconcile(); const b=f.user.image.getAttribute('style'); const expected=modules.avatarRuntime.objectViewBoxForView({x:.1}); assert.ok(a.includes(expected)); assert.ok(b.includes(expected)); });
 test('31 switching to a theme without an explicit avatar keeps the default avatar', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{version:1,themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{}}]}}); await f.runtime.start(); f.setTheme('B'); await f.runtime.reconcile(); assert.match(f.user.image.getAttribute('src'),/main-a/); assert.ok(await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'user:global')); });
 test('32 deleting an avatar under edit safely cancels and clears binding references', async () => { const f=runtimeFixture({seed:{assets:[asset()]}}); await f.runtime.beginEdit({kind:'user',avatarId:'a'}); await f.runtime.deleteAsset('a'); assert.equal(f.runtime.getState().state,'idle'); assert.equal(await f.store.getAsset('a'),null); });

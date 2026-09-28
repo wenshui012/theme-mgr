@@ -114,6 +114,7 @@
             '.tm-series-track::-webkit-scrollbar{display:none;}',
             '.tm-series-track.is-dragging{cursor:grabbing;user-select:none;}',
             '.tm-series-track>.tm-card{min-width:0;scroll-snap-align:start;}',
+            '.tm-series-block.tm-series-preview-hidden:not(.is-expanded) .tm-series-track{display:none;}',
             '.tm-series-block.is-expanded{overflow:visible;}',
             '.tm-series-block.is-expanded .tm-series-track{grid-auto-flow:row;grid-auto-columns:initial;grid-template-columns:repeat(auto-fill,minmax(var(--tm-grid-card-min,108px),1fr));overflow:visible;padding-bottom:0;cursor:default;}',
             '.tm-loading{display:flex;flex-direction:column;align-items:center;gap:12px;padding:60px 20px;opacity:.5;}',

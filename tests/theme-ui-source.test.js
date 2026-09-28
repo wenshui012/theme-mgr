@@ -71,8 +71,24 @@ test('day night switching exposes three persistent modes and editor toggles sele
     assert.match(settings, /value="schedule"/);
     assert.match(settings, /id="tm-day-night-day-start"/);
     assert.match(settings, /id="tm-day-night-night-start"/);
+    assert.match(settings, /id="tm-follow-day-night-appearance"/);
     assert.match(editor, /persistManualDayNightVariant\(variant, 'editor-manual-switch', true\)/);
     assert.doesNotMatch(source, /temporaryPairOverride/);
+});
+
+test('theme settings expose common background and collapsed series controls', () => {
+    const settings = source.slice(source.indexOf('function openSettingsSheet'), source.indexOf('// ── 分类管理'));
+    assert.match(settings, /id="tm-common-background"/);
+    assert.match(settings, /id="tm-hide-series-previews"/);
+    assert.match(settings, /'tm-settings-other', '其他功能'/);
+    assert.match(source, /__day-night__/);
+    assert.match(source, /tm-series-preview-hidden/);
+});
+
+test('avatar settings expose the chat avatar lightbox guard', () => {
+    const settings = source.slice(source.indexOf('function openAvatarSettingsSheet'), source.indexOf('function openSettingsSheet'));
+    assert.match(settings, /id="tm-avatar-disable-chat-lightbox"/);
+    assert.match(source, /isChatAvatarLightboxDisabled/);
 });
 
 test('category and tag flows use sheets without theme-manager prompt dialogs', () => {

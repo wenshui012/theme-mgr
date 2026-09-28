@@ -105,6 +105,10 @@
         function syncRenamedBackground(oldName, newName, cb) {
             var data = load();
             var changed = false;
+            if (data.commonBackgroundName === oldName) {
+                data.commonBackgroundName = newName;
+                changed = true;
+            }
             Object.keys(data.themeMeta || {}).forEach(function (themeName) {
                 if (data.themeMeta[themeName] && data.themeMeta[themeName].backgroundName === oldName) {
                     data.themeMeta[themeName].backgroundName = newName;
@@ -150,12 +154,13 @@
                 });
         }
 
-        function buildBackgroundBindHtml(backgroundName) {
+        function buildBackgroundBindHtml(backgroundName, labels) {
+            labels = labels || {};
             var thumb = backgroundName
                 ? '<div class="tm-bg-bind-thumb" style="background-image:' + esc(getBackgroundCssUrl(backgroundName)) + '"></div>'
                 : '<div class="tm-bg-bind-thumb empty"><i class="fa-regular fa-image"></i></div>';
-            var title = backgroundName ? esc(backgroundName) : '不绑定背景';
-            var sub = backgroundName ? '点击更换绑定壁纸' : '点击选择 ST 已导入壁纸';
+            var title = backgroundName ? esc(backgroundName) : esc(labels.emptyTitle || '不绑定背景');
+            var sub = backgroundName ? esc(labels.selectedHint || '点击更换绑定壁纸') : esc(labels.emptyHint || '点击选择 ST 已导入壁纸');
             return thumb +
                 '<div class="tm-bg-bind-info"><div class="tm-bg-bind-name">' + title + '</div><div class="tm-bg-bind-sub">' + sub + '</div></div>' +
                 '<i class="fa-solid fa-chevron-right"></i>';
@@ -281,7 +286,9 @@
         function applyBoundBackground(themeName, cb, isCurrent) {
             var data = load();
             var meta = data.themeMeta[themeName];
-            var backgroundName = meta && meta.backgroundName ? meta.backgroundName : '';
+            var backgroundName = meta && meta.backgroundName
+                ? meta.backgroundName
+                : (typeof data.commonBackgroundName === 'string' ? data.commonBackgroundName : '');
             if (!backgroundName) { if (cb) cb(true); return; }
 
             var url = getBackgroundCssUrl(backgroundName);

@@ -38,6 +38,32 @@ test('TauriTavern background URLs use the host resource-path helper', () => {
     assert.equal(backgrounds.getBackgroundCssUrl('夜 景.png'), 'url("asset://background/%E5%A4%9C%20%E6%99%AF.png")');
 });
 
+test('theme background falls back to the configured common background', async () => {
+    const backgroundSettings = {};
+    const bg = { style: {} };
+    const window = { document: { getElementById: (id) => id === 'bg1' ? bg : null } };
+    const modules = loadBackgrounds(window);
+    const backgrounds = modules.createBackgrounds(baseOptions({
+        load: () => ({ themeMeta: { Plain: {} }, commonBackgroundName: 'common.png' }),
+        loadBackgroundModules: () => Promise.resolve([{ background_settings: backgroundSettings }, { saveSettingsDebounced() {} }]),
+    }));
+    await new Promise((resolve) => backgrounds.applyBoundBackground('Plain', resolve));
+    assert.equal(backgroundSettings.name, 'common.png');
+    assert.equal(bg.style.backgroundImage, 'url("backgrounds/common.png")');
+});
+
+test('theme-specific background takes precedence over the common background', async () => {
+    const backgroundSettings = {};
+    const window = { document: { getElementById: () => ({ style: {} }) } };
+    const modules = loadBackgrounds(window);
+    const backgrounds = modules.createBackgrounds(baseOptions({
+        load: () => ({ themeMeta: { Fancy: { backgroundName: 'theme.png' } }, commonBackgroundName: 'common.png' }),
+        loadBackgroundModules: () => Promise.resolve([{ background_settings: backgroundSettings }, {}]),
+    }));
+    await new Promise((resolve) => backgrounds.applyBoundBackground('Fancy', resolve));
+    assert.equal(backgroundSettings.name, 'theme.png');
+});
+
 test('background picker registers thumbnail placeholders with a viewport loader', async () => {
     let html = '';
     let loaderOptions = null;
