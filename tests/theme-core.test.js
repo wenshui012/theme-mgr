@@ -2445,6 +2445,19 @@ test('runtime replaces stale cached themes with the authoritative post-import in
     assert.deepEqual(runtime.getCached('Existing'), inventory[1]);
 });
 
+test('runtime inventory cache keeps the first duplicate to match SillyTavern native selection', () => {
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([]), getRawSettingsInventory: () => Promise.resolve([]) },
+    });
+    const first = completeTheme('Duplicate', { custom_css: '/* first */' });
+    const second = completeTheme('Duplicate', { custom_css: '/* second */' });
+
+    runtime.replaceInventory([first, second]);
+
+    assert.deepEqual(runtime.getCached('Duplicate'), first);
+});
+
 test('native custom CSS edits invalidate only that theme and reload its newest saved definition', async (t) => {
     const previousDocument = global.document;
     const previousHydrate = global.baibaokuHydrateTheme;
@@ -4716,6 +4729,7 @@ test('safe single delete removes a non-current theme without switching', async (
     assert.equal(result.switchedFromCurrent, false);
     assert.equal(result.fallbackTheme, '');
     assert.deepEqual(events, ['delete:B']);
+    assert.equal(harness.getInventoryCount(), 2);
     assert.equal(harness.store.A.name, 'A');
     assert.equal(harness.store.B, undefined);
 });
@@ -4737,6 +4751,7 @@ test('safe single delete applies and confirms a fallback before deleting the cur
     });
 
     assert.deepEqual(events, ['apply:B', 'delete:A']);
+    assert.equal(harness.getInventoryCount(), 3);
     assert.equal(result.switchedFromCurrent, true);
     assert.equal(result.fallbackTheme, 'B');
     assert.equal(currentTheme, 'B');
@@ -4827,7 +4842,7 @@ test('malformed safe-delete verification never runs caller metadata cleanup', as
     let cleanupRan = false;
     const harness = makeTransactionHarness([completeTheme('A'), completeTheme('B')], {
         transformInventory(inventory, count) {
-            return count === 3 ? { themes: null } : inventory;
+            return count === 2 ? { themes: null } : inventory;
         },
     });
 

@@ -139,8 +139,11 @@
         }
 
         function captureInventory(themes) {
+            var seenNames = Object.create(null);
             (themes || []).forEach(function (theme) {
                 if (!theme || !theme.name) return;
+                if (seenNames[theme.name]) return;
+                seenNames[theme.name] = true;
                 if (staleThemeCache[theme.name]) return;
                 if (!remember(theme)) forget(theme.name);
             });

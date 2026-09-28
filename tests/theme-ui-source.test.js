@@ -12,12 +12,14 @@ test('theme card ellipsis opens the editor directly while preserving click isola
     assert.match(delegated, /openEditSheet\(menu\.dataset\.key\)/);
     assert.match(delegated, /var card = event\.target\.closest\('\.tm-card'\)/);
     assert.match(delegated, /applyManualTheme\(themeName/);
+    assert.match(delegated, /if \(!item\) return;\s+if \(batchMode\) \{\s+if \(blockAmbiguousThemeItem\(item\)\) return;/);
     assert.doesNotMatch(source, /function openContextMenu/);
 });
 
 test('theme list uses the authoritative settings inventory without guessing from unrelated API controls', () => {
     const listLoader = source.slice(source.indexOf('function fetchThemeList'), source.indexOf('function getCurrentThemeName'));
     assert.match(listLoader, /themeApi\.getSettingsInventory\(/);
+    assert.match(listLoader, /themeRuntime\.replaceInventory\(themes\)/);
     assert.match(listLoader, /allowDuplicateNames: true/);
     assert.match(listLoader, /document\.getElementById\('themes'\)/);
     assert.doesNotMatch(listLoader, /querySelectorAll\('datalist'\)/);

@@ -790,7 +790,7 @@
     function blockAmbiguousThemeItem(item) {
         var names = getAmbiguousThemeNames(item);
         if (!names.length) return false;
-        toast('检测到同名主题「' + names.join('、') + '」，无法安全确定对应文件；已阻止本次操作', true);
+        toast('检测到同名主题「' + names.join('、') + '」，无法安全确定对应文件；已禁用编辑和删除', true);
         return true;
     }
 
@@ -974,8 +974,8 @@
             setThemeList(list, reliable, { conflictNames: conflictNames });
             console.log('[美化管理] 主题列表获取成功:', method, stThemeList.length + '个');
             if (themeNameConflicts.size > 0) {
-                console.warn('[美化管理] SillyTavern 主题库存存在同名歧义，危险操作已禁用:', Array.from(themeNameConflicts));
-                toast('检测到同名主题：' + Array.from(themeNameConflicts).join('、') + '；已合并显示并禁用相关操作', true);
+                console.warn('[美化管理] SillyTavern 主题库存存在同名歧义，编辑和删除已禁用:', Array.from(themeNameConflicts));
+                toast('检测到同名主题：' + Array.from(themeNameConflicts).join('、') + '；可以切换，但编辑和删除已禁用', true);
             }
             if (cb) cb(stThemeList.slice());
         }
@@ -1029,6 +1029,7 @@
             allowDuplicateNames: true,
             onDiagnostics: function (items) { diagnostics = items.slice(); },
         }).then(function (themes) {
+            themeRuntime.replaceInventory(themes);
             done(themes.map(function (theme) { return theme.name; }), '/api/settings/get', true, diagnostics);
         }).catch(fallbackToExactControl);
     }
@@ -4513,11 +4514,11 @@
         var conflictNames = getAmbiguousThemeNames(item);
         var inventoryConflict = conflictNames.length > 0;
         var tagText = inventoryConflict
-            ? '同名冲突 · 已禁用操作'
+            ? '同名冲突 · 禁止编辑删除'
             : ((meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || ''));
 
         return '<div class="tm-card' + (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + (inventoryConflict ? ' inventory-conflict' : '') + '" data-key="' + esc(item.key) + '"' +
-            (inventoryConflict ? ' title="同名主题无法安全确定对应文件，相关操作已禁用"' : '') + '>' +
+            (inventoryConflict ? ' title="同名主题可切换，但无法安全编辑或删除"' : '') + '>' +
             '<div class="tm-card-img">' + checkBox + imgContent + badge + starBadge + freqBadge + menuBtn + '</div>' +
             '<div class="tm-card-info"><div class="tm-card-name">' + esc(item.name) + '</div>' +
             (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
@@ -4944,8 +4945,9 @@
             var key = card.dataset.key;
             var d = load();
             var item = getLogicalItem(key, d);
-            if (!item || blockAmbiguousThemeItem(item)) return;
+            if (!item) return;
             if (batchMode) {
+                if (blockAmbiguousThemeItem(item)) return;
                 if (batchDeleting) return;
                 if (batchSelected.has(key)) batchSelected.delete(key); else batchSelected.add(key);
                 var selected = batchSelected.has(key);
@@ -5000,7 +5002,7 @@
         var list = layout.displayedItems;
         var inventoryWarning = themeNameConflicts.size > 0
             ? '<div class="tm-inventory-warning"><i class="fa-solid fa-triangle-exclamation"></i><span>检测到同名主题：' +
-                esc(Array.from(themeNameConflicts).join('、')) + '。管理器已合并显示，并禁用这些主题的切换、编辑和删除。</span></div>'
+                esc(Array.from(themeNameConflicts).join('、')) + '。管理器已合并显示；可以按 SillyTavern 原生顺序切换，但编辑和删除仍保持禁用。</span></div>'
             : '';
         syncSeriesCardWidth(area, d.gridCardSize);
 

@@ -575,7 +575,7 @@
 })(window);
 /* END MODULE 03/29: src/update-manager.js */
 
-/* BEGIN MODULE 04/29: src/theme-runtime.js | sha256:8cedec66ce712532a90ff84b79954c483aa31796dc4f09dcfd268e655e5bd280 */
+/* BEGIN MODULE 04/29: src/theme-runtime.js | sha256:23822c25a7eaec9d3ec15fa9066b2e674bc8e225a63ec9f8154cb68acce52695 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -717,8 +717,11 @@
         }
 
         function captureInventory(themes) {
+            var seenNames = Object.create(null);
             (themes || []).forEach(function (theme) {
                 if (!theme || !theme.name) return;
+                if (seenNames[theme.name]) return;
+                seenNames[theme.name] = true;
                 if (staleThemeCache[theme.name]) return;
                 if (!remember(theme)) forget(theme.name);
             });
@@ -1425,7 +1428,7 @@
 })(window);
 /* END MODULE 04/29: src/theme-runtime.js */
 
-/* BEGIN MODULE 05/29: src/theme-transactions.js | sha256:6a95628d45416e831d586f267deedee6d030c190a2da2ed95482f4baee4f5508 */
+/* BEGIN MODULE 05/29: src/theme-transactions.js | sha256:25d2057279a25858bff030196e4de2f369dc0002940b2298a931d7ba310b7860 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -1865,7 +1868,12 @@
             var requestError = null;
             var nativeThemeRef = null;
             var bridge = runtime.getBridge();
-            return freshInventory(options.readReason || 'theme-manager-delete-read')
+            var inventoryPromise = Object.prototype.hasOwnProperty.call(options, 'knownInventory')
+                ? Promise.resolve().then(function () {
+                    return requireValidInventory(options.knownInventory, 'theme-manager-known-delete-inventory');
+                })
+                : freshInventory(options.readReason || 'theme-manager-delete-read');
+            return inventoryPromise
                 .catch(function (err) {
                     throw error('delete-read-failed', err && err.message ? err.message : '删除前无法读取主题库存', {
                         inventory: err,
@@ -1879,6 +1887,7 @@
                             themes: initialInventory,
                             requestError: null,
                             nativeThemeRef: null,
+                            initialInventory: initialInventory,
                             alreadyAbsent: true,
                         };
                     }
@@ -1899,7 +1908,13 @@
                             return verifyThemeAbsent(themeName, options.verifyReason || 'theme-manager-delete-verify');
                         })
                         .then(function (themes) {
-                            return { name: themeName, themes: themes, requestError: requestError, nativeThemeRef: nativeThemeRef };
+                            return {
+                                name: themeName,
+                                themes: themes,
+                                requestError: requestError,
+                                nativeThemeRef: nativeThemeRef,
+                                initialInventory: initialInventory,
+                            };
                         })
                         .catch(function (verifyError) {
                             throw error('delete-failed', requestError ? requestError.message : verifyError.message, {
@@ -1994,16 +2009,18 @@
                         });
                 })
                 .then(function () {
-                    return deleteThemeVerified(themeName, {
+                    var deleteOptions = {
                         readReason: options.deleteReadReason || 'theme-manager-safe-delete-final-read',
                         deleteReason: options.deleteReason || 'theme-manager-safe-delete-written',
                         verifyReason: options.verifyReason || 'theme-manager-safe-delete-verify',
-                    });
+                    };
+                    if (!switchedFromCurrent) deleteOptions.knownInventory = initialInventory;
+                    return deleteThemeVerified(themeName, deleteOptions);
                 })
                 .then(function (result) {
                     result.switchedFromCurrent = switchedFromCurrent;
                     result.fallbackTheme = fallbackThemeName;
-                    result.initialInventory = initialInventory;
+                    result.initialInventory = result.initialInventory || initialInventory;
                     return result;
                 });
         }
@@ -16144,7 +16161,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:ab19a8c4db6bbf87460ed9ba8ea3e2480dd1b6335fb6e4a62b167ce27c25393e */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:d84e23abfdb31af5ac814327d722acff058996712cceeda27133f1eed7323f0f */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16937,7 +16954,7 @@
     function blockAmbiguousThemeItem(item) {
         var names = getAmbiguousThemeNames(item);
         if (!names.length) return false;
-        toast('检测到同名主题「' + names.join('、') + '」，无法安全确定对应文件；已阻止本次操作', true);
+        toast('检测到同名主题「' + names.join('、') + '」，无法安全确定对应文件；已禁用编辑和删除', true);
         return true;
     }
 
@@ -17121,8 +17138,8 @@
             setThemeList(list, reliable, { conflictNames: conflictNames });
             console.log('[美化管理] 主题列表获取成功:', method, stThemeList.length + '个');
             if (themeNameConflicts.size > 0) {
-                console.warn('[美化管理] SillyTavern 主题库存存在同名歧义，危险操作已禁用:', Array.from(themeNameConflicts));
-                toast('检测到同名主题：' + Array.from(themeNameConflicts).join('、') + '；已合并显示并禁用相关操作', true);
+                console.warn('[美化管理] SillyTavern 主题库存存在同名歧义，编辑和删除已禁用:', Array.from(themeNameConflicts));
+                toast('检测到同名主题：' + Array.from(themeNameConflicts).join('、') + '；可以切换，但编辑和删除已禁用', true);
             }
             if (cb) cb(stThemeList.slice());
         }
@@ -17176,6 +17193,7 @@
             allowDuplicateNames: true,
             onDiagnostics: function (items) { diagnostics = items.slice(); },
         }).then(function (themes) {
+            themeRuntime.replaceInventory(themes);
             done(themes.map(function (theme) { return theme.name; }), '/api/settings/get', true, diagnostics);
         }).catch(fallbackToExactControl);
     }
@@ -20660,11 +20678,11 @@
         var conflictNames = getAmbiguousThemeNames(item);
         var inventoryConflict = conflictNames.length > 0;
         var tagText = inventoryConflict
-            ? '同名冲突 · 已禁用操作'
+            ? '同名冲突 · 禁止编辑删除'
             : ((meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || ''));
 
         return '<div class="tm-card' + (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + (inventoryConflict ? ' inventory-conflict' : '') + '" data-key="' + esc(item.key) + '"' +
-            (inventoryConflict ? ' title="同名主题无法安全确定对应文件，相关操作已禁用"' : '') + '>' +
+            (inventoryConflict ? ' title="同名主题可切换，但无法安全编辑或删除"' : '') + '>' +
             '<div class="tm-card-img">' + checkBox + imgContent + badge + starBadge + freqBadge + menuBtn + '</div>' +
             '<div class="tm-card-info"><div class="tm-card-name">' + esc(item.name) + '</div>' +
             (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
@@ -21091,8 +21109,9 @@
             var key = card.dataset.key;
             var d = load();
             var item = getLogicalItem(key, d);
-            if (!item || blockAmbiguousThemeItem(item)) return;
+            if (!item) return;
             if (batchMode) {
+                if (blockAmbiguousThemeItem(item)) return;
                 if (batchDeleting) return;
                 if (batchSelected.has(key)) batchSelected.delete(key); else batchSelected.add(key);
                 var selected = batchSelected.has(key);
@@ -21147,7 +21166,7 @@
         var list = layout.displayedItems;
         var inventoryWarning = themeNameConflicts.size > 0
             ? '<div class="tm-inventory-warning"><i class="fa-solid fa-triangle-exclamation"></i><span>检测到同名主题：' +
-                esc(Array.from(themeNameConflicts).join('、')) + '。管理器已合并显示，并禁用这些主题的切换、编辑和删除。</span></div>'
+                esc(Array.from(themeNameConflicts).join('、')) + '。管理器已合并显示；可以按 SillyTavern 原生顺序切换，但编辑和删除仍保持禁用。</span></div>'
             : '';
         syncSeriesCardWidth(area, d.gridCardSize);
 

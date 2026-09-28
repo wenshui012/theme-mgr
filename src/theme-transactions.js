@@ -437,7 +437,12 @@
             var requestError = null;
             var nativeThemeRef = null;
             var bridge = runtime.getBridge();
-            return freshInventory(options.readReason || 'theme-manager-delete-read')
+            var inventoryPromise = Object.prototype.hasOwnProperty.call(options, 'knownInventory')
+                ? Promise.resolve().then(function () {
+                    return requireValidInventory(options.knownInventory, 'theme-manager-known-delete-inventory');
+                })
+                : freshInventory(options.readReason || 'theme-manager-delete-read');
+            return inventoryPromise
                 .catch(function (err) {
                     throw error('delete-read-failed', err && err.message ? err.message : '删除前无法读取主题库存', {
                         inventory: err,
@@ -451,6 +456,7 @@
                             themes: initialInventory,
                             requestError: null,
                             nativeThemeRef: null,
+                            initialInventory: initialInventory,
                             alreadyAbsent: true,
                         };
                     }
@@ -471,7 +477,13 @@
                             return verifyThemeAbsent(themeName, options.verifyReason || 'theme-manager-delete-verify');
                         })
                         .then(function (themes) {
-                            return { name: themeName, themes: themes, requestError: requestError, nativeThemeRef: nativeThemeRef };
+                            return {
+                                name: themeName,
+                                themes: themes,
+                                requestError: requestError,
+                                nativeThemeRef: nativeThemeRef,
+                                initialInventory: initialInventory,
+                            };
                         })
                         .catch(function (verifyError) {
                             throw error('delete-failed', requestError ? requestError.message : verifyError.message, {
@@ -566,16 +578,18 @@
                         });
                 })
                 .then(function () {
-                    return deleteThemeVerified(themeName, {
+                    var deleteOptions = {
                         readReason: options.deleteReadReason || 'theme-manager-safe-delete-final-read',
                         deleteReason: options.deleteReason || 'theme-manager-safe-delete-written',
                         verifyReason: options.verifyReason || 'theme-manager-safe-delete-verify',
-                    });
+                    };
+                    if (!switchedFromCurrent) deleteOptions.knownInventory = initialInventory;
+                    return deleteThemeVerified(themeName, deleteOptions);
                 })
                 .then(function (result) {
                     result.switchedFromCurrent = switchedFromCurrent;
                     result.fallbackTheme = fallbackThemeName;
-                    result.initialInventory = initialInventory;
+                    result.initialInventory = result.initialInventory || initialInventory;
                     return result;
                 });
         }
