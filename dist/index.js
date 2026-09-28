@@ -11600,7 +11600,7 @@
 })(window);
 /* END MODULE 21/29: src/avatar-recovery.js */
 
-/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:24d75f0574821d71871b5dc20632c3a080897d013b79ab15f3296e23510d4daf */
+/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:1426e47844be8dd9e0388f6ee5ae30a61925e2c38db2abe5efd9f010119add66 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -12109,6 +12109,7 @@
         var started = false;
         var editor = null;
         var editorClosing = false;
+        var editorManagerBrowsing = false;
         var toolbarHost = null;
         var toolbar = null;
         var styleNode = null;
@@ -12847,6 +12848,7 @@
         function stop() {
             if (editor) finishEditorUi();
             editor = null;
+            editorManagerBrowsing = false;
             listeners.forEach(function (item) {
                 if (item.source && typeof item.source.removeListener === 'function') item.source.removeListener(item.name, item.handler);
             });
@@ -13069,7 +13071,7 @@
                     scopeOptionHtml('save-original', editor.target.kind === 'user' ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', originalHint, scopes.original, false);
             } else {
                 panel.innerHTML = '<div class="tm-avatar-editor-scope-title"><span>解除头像绑定</span><small>只清除所选范围</small></div>' +
-                    '<div class="tm-avatar-editor-priority">清除后立即退出调整，并按聊天 ＞ 美化 ＞ 全局 ＞ 原头像回退。</div>' +
+                    '<div class="tm-avatar-editor-priority">清除后继续停留在调整页；退出调整后按聊天 ＞ 美化 ＞ 全局 ＞ 原头像回退。</div>' +
                     scopeOptionHtml('clear-chat', '清除当前聊天绑定', '只影响当前聊天', scopes.chat, true, '当前有绑定') +
                     scopeOptionHtml('clear-theme', '清除当前美化绑定', '清除当前目标在此美化下的全部头像', scopes.theme, true, '已绑定 ' + Number(scopes.theme && scopes.theme.count || 1) + ' 张头像') +
                     scopeOptionHtml('clear-global', editor.target.kind === 'user' ? '清除 User 全局头像' : '清除该角色全局头像', '不会清除聊天或美化绑定', scopes.global, true, '当前有绑定');
@@ -13399,6 +13401,7 @@
         function cancelEdit(reason) {
             if (!editor || editorClosing) return Promise.resolve(null);
             editorClosing = true;
+            editorManagerBrowsing = false;
             var result = { saved: false, reason: reason || 'cancelled', previousBinding: clone(editor.previousBinding) };
             finishEditorUi();
             editor = null;
@@ -13559,7 +13562,7 @@
             editorPreviewSettled = true;
             ensureSourceCache(asset);
             ensureSourceCache(editorPreviewAsset(asset));
-            rebuildEditorUi();
+            if (!editorManagerBrowsing) rebuildEditorUi();
             return getState();
         }
         function importEditorAvatar(file) {
@@ -13582,8 +13585,31 @@
         }
         function openManagerFromEditor() {
             if (!editor || typeof openAvatarManager !== 'function') return Promise.reject(new Error('头像管理入口不可用'));
-            if (typeof win.confirm === 'function' && !win.confirm('打开头像管理会放弃本次尚未保存的调整，是否继续？')) return Promise.resolve(false);
-            return cancelEdit('manager-open').then(function () { return openAvatarManager(); });
+            if (editorManagerBrowsing) return Promise.resolve(true);
+            editorManagerBrowsing = true;
+            finishEditorUi();
+            return Promise.resolve().then(function () { return openAvatarManager(); }).then(function (opened) {
+                if (opened === false) resumeEditFromManager();
+                return opened;
+            }, function (error) {
+                resumeEditFromManager();
+                throw error;
+            });
+        }
+        function resumeEditFromManager() {
+            if (!editor || !editorManagerBrowsing) return false;
+            editorManagerBrowsing = false;
+            rebuildEditorUi();
+            return getState();
+        }
+        function selectManagerAsset(avatarId) {
+            if (!editor || !editorManagerBrowsing) {
+                return Promise.reject(Object.assign(new Error('当前没有等待选择图片的头像调整'), { code: 'EDITOR_MANAGER_INACTIVE' }));
+            }
+            return getAsset(avatarId).then(function (asset) {
+                if (!asset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
+                return replaceEditorAsset(asset, 'library');
+            });
         }
         function persistEditorPreference(input) {
             var preferences = editorPreferences();
@@ -13639,7 +13665,10 @@
                 var clearKind = editor.target.kind;
                 var clearScope = action.slice(6);
                 button.disabled = true;
-                clearApplicationScope(clearKind, clearScope, editor.target).catch(function (error) { button.disabled = false; onError(error); });
+                clearApplicationScope(clearKind, clearScope, editor.target).then(function () {
+                    closeScopePanel();
+                    updateToolbar();
+                }).catch(function (error) { button.disabled = false; onError(error); });
             }
         }
         function onToolbarInput(event) {
@@ -13743,7 +13772,6 @@
             scope = clean(scope);
             var cap = capability(kind, targetOverride);
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
-            if (editor) return cancelEdit('binding-cleared').then(function () { return clearApplicationScope(kind, scope, targetOverride); });
             var scopeKey = scope === 'chat' ? currentChatBindingKey() : (scope === 'theme' ? currentThemeKey() : DEFAULT_BINDING_KEY);
             if ((scope === 'chat' || scope === 'theme') && !scopeKey) {
                 return Promise.reject(Object.assign(new Error(scope === 'chat' ? '无法可靠识别当前聊天' : '无法识别当前美化'), { code: scope === 'chat' ? 'CHAT_UNAVAILABLE' : 'THEME_UNAVAILABLE' }));
@@ -14069,6 +14097,7 @@
                 previousBinding: clone(editor.previousBinding),
                 previousNativeView: clone(editor.previousNativeView),
                 diagnostics: clone(editor.diagnostics),
+                managerBrowsing: editorManagerBrowsing,
             } : { state: 'idle' };
         }
         function getActiveAvatarIds() {
@@ -14091,6 +14120,9 @@
             beginNativeEdit: beginNativeEdit,
             beginMessageEdit: beginMessageEdit,
             importEditorAvatar: importEditorAvatar,
+            openManagerFromEditor: openManagerFromEditor,
+            resumeEditFromManager: resumeEditFromManager,
+            selectManagerAsset: selectManagerAsset,
             clearNativeView: clearNativeView,
             cancelEdit: cancelEdit,
             saveEdit: saveEdit,
@@ -14121,6 +14153,7 @@
             getState: getState,
             getActiveAvatarIds: getActiveAvatarIds,
             isEditing: function () { return !!editor; },
+            isManagerBrowsing: function () { return !!editor && editorManagerBrowsing; },
         };
     };
 
@@ -14155,7 +14188,7 @@
 })(window);
 /* END MODULE 22/29: src/avatar-runtime.js */
 
-/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:ee2669df91fee99c0ae6c7067aa3758bf1e7ddaa37d070a55802f590e3216572 */
+/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:570eb3ce89b240a6e575d00be1a69a1d469e41232022383522206adb8087bfe1 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -14363,11 +14396,11 @@
         function beginEdit(kind, avatarId, overlay) { if (mutationBlocked()) return; var caps = runtime.getCapabilities(), cap = kind === 'character' ? caps.character : caps.user; if (!cap || !cap.available) { setNotice(cap && cap.reason || '当前目标不可用'); return; } if (overlay) closeSheet(overlay); if (closeManager() === false) return; global.setTimeout(function () { runtime.beginEdit({ kind: kind, avatarId: avatarId, bindingMode: 'deferred' }).catch(function (error) { toast(error.message || '无法启动头像调整', true); }); }, 32); }
         function beginNativeEdit(kind, overlay) { if (mutationBlocked()) return; var cap = runtime.getCapabilities()[kind]; if (!cap || !cap.available) { setNotice(cap && cap.reason || '原头像无法调整'); return; } if (overlay) closeSheet(overlay); closeManager(); global.setTimeout(function () { runtime.beginNativeEdit(kind).catch(function (error) { toast(error.message || '无法启动原头像调整', true); }); }, 32); }
         function dialogItem(action, icon, label, hint, disabled, weak) { return '<button type="button" class="tm-action-dialog-item' + (weak ? ' is-weak' : '') + '" data-avatar-dialog-action="' + action + '"' + (disabled ? ' disabled' : '') + '><i class="fa-solid ' + icon + '"></i><span><strong>' + esc(label) + '</strong>' + (hint ? '<small>' + esc(hint) + '</small>' : '') + '</span></button>'; }
-        function openNativeMenu() { var caps = runtime.getCapabilities(), character = caps.character || {}, user = caps.user || {}, overlay = createActionDialog('<div class="tm-action-dialog-title"><i class="fa-regular fa-circle-user"></i>调整原头像</div><div class="tm-action-dialog-list">' + dialogItem('native-user', 'fa-user', '调整 User 原头像', user.reason, !canMutate() || !user.available) + dialogItem('native-character', 'fa-address-card', '调整当前角色原头像', character.reason, !canMutate() || !character.available) + '</div>'); overlay.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-dialog-action]'); if (!button || button.disabled) return; beginNativeEdit(button.dataset.avatarDialogAction === 'native-user' ? 'user' : 'character', overlay); }); return Promise.resolve(overlay); }
+        function openNativeMenu() { if (runtime.isManagerBrowsing && runtime.isManagerBrowsing()) { setNotice('当前正在为调整中的头像选择图片，请点击头像库中的一张图片'); return Promise.resolve(false); } var caps = runtime.getCapabilities(), character = caps.character || {}, user = caps.user || {}, overlay = createActionDialog('<div class="tm-action-dialog-title"><i class="fa-regular fa-circle-user"></i>调整原头像</div><div class="tm-action-dialog-list">' + dialogItem('native-user', 'fa-user', '调整 User 原头像', user.reason, !canMutate() || !user.available) + dialogItem('native-character', 'fa-address-card', '调整当前角色原头像', character.reason, !canMutate() || !character.available) + '</div>'); overlay.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-dialog-action]'); if (!button || button.disabled) return; beginNativeEdit(button.dataset.avatarDialogAction === 'native-user' ? 'user' : 'character', overlay); }); return Promise.resolve(overlay); }
         function viewAsset(id) { if (typeof openImageLightbox !== 'function') return Promise.reject(new Error('大图查看器不可用')); return store.getAsset(id).then(function (asset) { if (!asset || !asset.imageData) throw new Error('头像主图不存在'); openImageLightbox([{ key: asset.id, label: asset.name, source: asset.imageData }], asset.id); return asset; }); }
         function exportAsset(id) { return runExport(function () { return transfer.exportSingle(id); }, '正在读取并校验头像主图…', '头像主图已导出'); }
         function exportBatchSelection() { var state = data(); var ids = assets.slice().sort(function (a, b) { return library.compareAssets(state, a, b, library.ensureState(state).sortMode); }).filter(function (asset) { return batchSelected.has(asset.id); }).map(function (asset) { return asset.id; }); if (!ids.length) { toast('请先选择头像', true); return Promise.resolve(false); } return runExport(function () { return transfer.exportBatch(ids); }, '正在创建并校验图片 ZIP…', '已导出 ' + ids.length + ' 张头像主图'); }
-        function openAssetMenu(id) { var asset = assets.find(function (item) { return item.id === id; }); if (!asset) return Promise.reject(new Error('头像不存在')); var caps = runtime.getCapabilities(), character = caps.character || {}, user = caps.user || {}, overlay = createActionDialog('<div class="tm-action-dialog-title"><i class="fa-solid fa-user"></i>使用这张头像</div><div class="tm-action-dialog-list">' + dialogItem('apply-user', 'fa-user', '调整为 User 头像', user.reason, !canMutate() || !user.available) + dialogItem('apply-character', 'fa-address-card', '调整为当前角色头像', character.reason, !canMutate() || !character.available) + dialogItem('view', 'fa-expand', '查看完整大图', '', false) + dialogItem('export', 'fa-download', '导出主图', '使用头像库中实际保存的主图', importing || exporting || !transfer) + '<div class="tm-action-dialog-divider"></div>' + dialogItem('manage', 'fa-sliders', '管理头像', '分类、标签、系列与删除', false, true) + '</div>'); overlay.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-dialog-action]'); if (!button || button.disabled) return; var action = button.dataset.avatarDialogAction; if (action === 'apply-user' || action === 'apply-character') beginEdit(action === 'apply-user' ? 'user' : 'character', id, overlay); else if (action === 'view') { closeSheet(overlay); viewAsset(id).catch(function (error) { setNotice(error.message, 'error'); }); } else if (action === 'export') { closeSheet(overlay); exportAsset(id).catch(function () {}); } else if (action === 'manage') { closeSheet(overlay); openManageSheet(id); } }); return Promise.resolve(overlay); }
+        function openAssetMenu(id) { var asset = assets.find(function (item) { return item.id === id; }); if (!asset) return Promise.reject(new Error('头像不存在')); var browsing = runtime.isManagerBrowsing && runtime.isManagerBrowsing(), caps = runtime.getCapabilities(), character = caps.character || {}, user = caps.user || {}, applyItems = browsing ? dialogItem('apply-current', 'fa-check', '用于当前调整', '保留当前目标，改用这张头像继续调整', !canMutate()) : dialogItem('apply-user', 'fa-user', '调整为 User 头像', user.reason, !canMutate() || !user.available) + dialogItem('apply-character', 'fa-address-card', '调整为当前角色头像', character.reason, !canMutate() || !character.available), overlay = createActionDialog('<div class="tm-action-dialog-title"><i class="fa-solid fa-user"></i>使用这张头像</div><div class="tm-action-dialog-list">' + applyItems + dialogItem('view', 'fa-expand', '查看完整大图', '', false) + dialogItem('export', 'fa-download', '导出主图', '使用头像库中实际保存的主图', importing || exporting || !transfer) + '<div class="tm-action-dialog-divider"></div>' + dialogItem('manage', 'fa-sliders', '管理头像', '分类、标签、系列与删除', false, true) + '</div>'); overlay.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-dialog-action]'); if (!button || button.disabled) return; var action = button.dataset.avatarDialogAction; if (action === 'apply-current') { closeSheet(overlay); Promise.resolve(runtime.selectManagerAsset(id)).then(function () { if (closeManager() === false) runtime.resumeEditFromManager(); }).catch(function (error) { setNotice(error.message || '无法使用这张头像', 'error'); }); } else if (action === 'apply-user' || action === 'apply-character') beginEdit(action === 'apply-user' ? 'user' : 'character', id, overlay); else if (action === 'view') { closeSheet(overlay); viewAsset(id).catch(function (error) { setNotice(error.message, 'error'); }); } else if (action === 'export') { closeSheet(overlay); exportAsset(id).catch(function () {}); } else if (action === 'manage') { closeSheet(overlay); openManageSheet(id); } }); return Promise.resolve(overlay); }
         function pickerSummary(icon, title, value, action) { return '<button type="button" class="tm-picker-trigger" data-avatar-manage="' + action + '"><span class="tm-picker-trigger-icon"><i class="fa-solid ' + icon + '"></i></span><span class="tm-picker-trigger-copy"><strong>' + esc(title) + '</strong><small>' + esc(value || '未设置') + '</small></span><i class="fa-solid fa-chevron-right tm-picker-trigger-chevron"></i></button>'; }
         function openManageSheet(id) { var asset = assets.find(function (item) { return item.id === id; }); if (!asset) return; var state = data(), meta = library.peekMeta(state, id), series = library.findSeries(state, id); store.getThumbnail(id).then(function (src) { var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-sliders"></i>管理头像</div><div class="tm-avatar-manage-summary"><img class="tm-avatar-manage-thumb" src="' + esc(src) + '" alt=""><span><strong>头像资源</strong><small>只整理关系与标注，不修改图片</small></span></div>' + pickerSummary('fa-folder', '分类', meta.category || '无分类', 'category') + pickerSummary('fa-tags', '标签', meta.tags.join('、') || '无标签', 'tags') + pickerSummary('fa-layer-group', '系列', series ? series.name : '未加入系列', 'series') + '<div class="tm-divider"></div><button class="tm-btn tm-btn-danger" data-avatar-manage="delete" style="width:100%"><i class="fa-solid fa-trash"></i> 删除头像</button>'); sheet.addEventListener('click', function (event) { var button = event.target.closest('[data-avatar-manage]'); if (!button) return; var action = button.dataset.avatarManage; if (action === 'category') openCategoryPicker({ categories: library.ensureState(data()).categories, selected: library.peekMeta(data(), id).category, allowClear: true, title: '选择头像分类', onSelect: function (value) { var next = data(); library.ensureMeta(next, id).category = value; persist(next).then(function () { closeSheet(sheet); render(); openManageSheet(id); }); } }); else if (action === 'tags') openTagPicker({ knownTags: library.listTags(data()), selectedTags: library.peekMeta(data(), id).tags, allowClear: true, title: '管理头像标签', onApply: function (values) { var next = data(); library.ensureMeta(next, id).tags = values; persist(next).then(function () { closeSheet(sheet); render(); openManageSheet(id); }); } }); else if (action === 'series') { closeSheet(sheet); var owner = library.findSeries(data(), id); if (owner) openSeriesManageSheet(owner.id); else openJoinSeriesSheet(id); } else if (action === 'delete') deleteAvatar(id, sheet); }); }); }
         function deleteAvatar(id, sheet) { if (mutationBlocked() || !confirmAction('确定删除这张头像吗？使用它的绑定会同时清理。')) return; runtime.deleteAsset(id).then(function () { var state = data(); library.removeAssetReferences(state, id); return persist(state); }).then(function () { if (sheet) closeSheet(sheet); toast('已删除头像并清理相关绑定'); return refresh(); }).catch(function (error) { setNotice('删除失败：' + error.message, 'error'); }); }
@@ -16191,7 +16224,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:466b288f27386659a66723899cd1a14aab6a646d71ca395d50b8ed762034c6ca */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:f3d608b1834d66302c4bd02478c93962d86903c75cc0780c3d90dcca46fb687a */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16794,6 +16827,7 @@
         if (typeof d.simplifyGridText !== 'boolean') d.simplifyGridText = false;
         if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
         if (typeof d.hideSeriesPreviews !== 'boolean') d.hideSeriesPreviews = false;
+        if (typeof d.avatarManagerEnabled !== 'boolean') d.avatarManagerEnabled = true;
         if (typeof d.disableChatAvatarLightbox !== 'boolean') d.disableChatAvatarLightbox = false;
         if (!d.avatarEditorPreferences || typeof d.avatarEditorPreferences !== 'object' || Array.isArray(d.avatarEditorPreferences)) d.avatarEditorPreferences = {};
         var avatarEditorDefaults = dd.avatarEditorPreferences;
@@ -16869,6 +16903,7 @@
             simplifyGridText: false,
             autoHideHeader: false,
             hideSeriesPreviews: false,
+            avatarManagerEnabled: true,
             disableChatAvatarLightbox: false,
             avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, manualInput: false, quickImportToLibrary: true },
             dayNightPreference: { mode: 'system', manualVariant: '', dayStart: '07:00', nightStart: '19:00' },
@@ -20122,18 +20157,37 @@
         renderBottomStatus();
     }
 
+    function isAvatarManagerEnabled() {
+        return !isStorageReady() || load().avatarManagerEnabled !== false;
+    }
+
+    function initializeAvatarManagerRuntime() {
+        if (!avatarCoordinator || !avatarRuntime) return Promise.resolve(false);
+        return avatarCoordinator.initialize().then(function () {
+            if (!isAvatarManagerEnabled() || !avatarCoordinator.isRuntimeReady()) return false;
+            return avatarRuntime.start();
+        });
+    }
+
+    function stopAvatarManagerRuntime() {
+        if (avatarPageController) avatarPageController.unmount();
+        if (avatarRuntime) avatarRuntime.stop();
+        if (lastAppPage === 'avatars') lastAppPage = 'themes';
+    }
+
     function createAppShellController(overlay) {
         if (appShellController) appShellController.destroy();
+        var pages = [
+            { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
+        ];
+        if (isAvatarManagerEnabled()) pages.push({ id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
+            avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
+        }, unmount: function () { avatarPageController.unmount(); } });
+        pages.push({ id: 'backgrounds', label: '背景管理', icon: 'fa-image' });
         appShellController = appShellApi.createAppShell({
             root: overlay,
             defaultPage: lastAppPage,
-            pages: [
-                { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
-                { id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
-                    avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
-                }, unmount: function () { avatarPageController.unmount(); } },
-                { id: 'backgrounds', label: '背景管理', icon: 'fa-image' },
-            ],
+            pages: pages,
             beforeChange: function () {
                 return !uiSheetsApi || uiSheetsApi.requestCloseAll(overlay, 'page-change');
             },
@@ -20149,8 +20203,9 @@
     // ── 打开全屏主界面 ────────────────────────────────────────
     var popupWaitingForStorage = false;
     function openPopup(requestedPage) {
+        if (requestedPage === 'avatars' && !isAvatarManagerEnabled()) requestedPage = 'themes';
         if (requestedPage === 'themes' || requestedPage === 'avatars' || requestedPage === 'backgrounds') lastAppPage = requestedPage;
-        if (avatarRuntime && avatarRuntime.isEditing()) {
+        if (avatarRuntime && avatarRuntime.isEditing() && !(requestedPage === 'avatars' && avatarRuntime.isManagerBrowsing && avatarRuntime.isManagerBrowsing())) {
             if (pendingOpenAfterAvatarCancel) return;
             pendingOpenAfterAvatarCancel = true;
             avatarRuntime.cancelEdit('manager-open').then(function () {
@@ -20205,21 +20260,23 @@
             '<div class="tm-catbar" id="tm-catbar" style="display:none"></div>' +
             '<div class="tm-batch-area" id="tm-batch-area"></div>' +
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
+        var avatarManagerEnabled = isAvatarManagerEnabled();
+        if (!avatarManagerEnabled && lastAppPage === 'avatars') lastAppPage = 'themes';
         var appPages = [
             { id: 'themes', label: '美化管理', icon: 'fa-palette', html: themePageHtml },
-            {
+        ];
+        if (avatarManagerEnabled) appPages.push({
                 id: 'avatars',
                 label: '头像管理',
                 icon: 'fa-user',
                 html: modules.avatarPage.buildPageHtml(imageLoaderApi.PLACEHOLDER_SRC),
-            },
-            {
+            });
+        appPages.push({
                 id: 'backgrounds',
                 label: '背景管理',
                 icon: 'fa-image',
                 html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景管理</h2><p>背景管理功能将在后续版本加入</p></div>',
-            },
-        ];
+            });
         var shellOptions = {
             defaultPage: lastAppPage,
             pages: appPages,
@@ -20241,10 +20298,10 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="头像解绑" aria-label="头像解绑"><i class="fa-solid fa-eraser"></i></button>' +
+            (avatarManagerEnabled ? '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="头像解绑" aria-label="头像解绑"><i class="fa-solid fa-eraser"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
-            (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
+            (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' : '') +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
@@ -20295,13 +20352,16 @@
             e.preventDefault();
         });
         ov.querySelector('#tm-x').addEventListener('click', closePopup);
-        ov.querySelector('#tm-avatar-add').addEventListener('click', function () {
+        var avatarAddButton = ov.querySelector('#tm-avatar-add');
+        var avatarBatchButton = ov.querySelector('#tm-avatar-batch-toggle');
+        var avatarGlobalButton = ov.querySelector('#tm-avatar-global');
+        if (avatarAddButton) avatarAddButton.addEventListener('click', function () {
             if (avatarPageController) avatarPageController.pickFiles();
         });
-        ov.querySelector('#tm-avatar-batch-toggle').addEventListener('click', function () {
+        if (avatarBatchButton) avatarBatchButton.addEventListener('click', function () {
             if (avatarPageController) avatarPageController.toggleBatchMode();
         });
-        ov.querySelector('#tm-avatar-global').addEventListener('click', openAvatarGlobalMenu);
+        if (avatarGlobalButton) avatarGlobalButton.addEventListener('click', openAvatarGlobalMenu);
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
             if (dd.followThemeAppearance === true || dd.followDayNightAppearance === true) {
@@ -20428,6 +20488,7 @@
         if (appShellController) appShellController.destroy();
         appShellController = null;
         var ov = document.querySelector('.tm-overlay'); if (ov) ov.parentNode.removeChild(ov);
+        if (avatarRuntime && avatarRuntime.resumeEditFromManager) avatarRuntime.resumeEditFromManager();
         return true;
     }
 
@@ -23461,6 +23522,7 @@
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>隐藏系列预览</span><small>系列收起时只显示标题，展开后显示全部美化</small></label><input type="checkbox" class="tm-chk" id="tm-hide-series-previews" ' + (d.hideSeriesPreviews === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>';
         var otherSettingsHtml =
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>启用头像管理</span><small>开启后可从左上角切换到头像管理，使用头像库、绑定与原头像调整；关闭后同时停用聊天头像替换</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-manager-enabled" ' + (d.avatarManagerEnabled !== false ? 'checked' : '') + ' /></div>' +
             '<div class="tm-field"><label>绑定通用背景</label><button type="button" class="tm-bg-bind-card" id="tm-common-background">' +
             backgroundsApi.buildBackgroundBindHtml(d.commonBackgroundName, { emptyTitle: '未设置通用背景', emptyHint: '当前美化没有绑定背景时保持酒馆现状', selectedHint: '当前美化没有绑定背景时使用此壁纸' }) +
             '</button><div class="tm-hint">每个美化单独绑定的背景优先于通用背景。</div></div>';
@@ -23671,6 +23733,36 @@
             dd.hideSeriesPreviews = this.checked;
             save(dd);
             renderGrid();
+        });
+        sheet.querySelector('#tm-avatar-manager-enabled').addEventListener('change', function () {
+            var input = this;
+            var enabled = input.checked;
+            var dd = load();
+            dd.avatarManagerEnabled = enabled;
+            input.disabled = true;
+            Promise.resolve(save(dd)).then(function () {
+                if (!enabled) {
+                    stopAvatarManagerRuntime();
+                    return false;
+                }
+                return initializeAvatarManagerRuntime().catch(function (error) {
+                    console.warn('[头像管理] 启用后启动失败:', error);
+                    toast(error.message || '头像管理启动失败', true);
+                    return false;
+                });
+            }).then(function () {
+                var managerOpen = Boolean(document.querySelector('.tm-overlay'));
+                closeSheet(sheet);
+                if (managerOpen) {
+                    closePopup();
+                    openPopup('themes');
+                }
+                toast(enabled ? '头像管理已启用' : '头像管理已停用');
+            }).catch(function () {
+                input.checked = !enabled;
+                input.disabled = false;
+                toast('头像管理开关保存失败，请重试', true);
+            });
         });
         sheet.querySelector('#tm-common-background').addEventListener('click', function () {
             var button = this;
@@ -24218,10 +24310,7 @@
             bindColorSchemeListener();
             if (bindingController && !avatarRecoveryGateLocked) bindingController.start();
             if (avatarCoordinator && avatarRuntime) {
-                avatarCoordinator.initialize().then(function () {
-                    if (!avatarCoordinator.isRuntimeReady()) return;
-                    return avatarRuntime.start();
-                }).catch(function (error) {
+                initializeAvatarManagerRuntime().catch(function (error) {
                     console.warn('[头像管理] 本地存储初始化失败或数据冲突:', error);
                     toast(error.message || '头像本地存储初始化失败', true);
                 });

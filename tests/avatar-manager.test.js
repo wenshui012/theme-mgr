@@ -354,7 +354,7 @@ function pageFixture(seed = [], bindings = [], options = {}) {
     const doc = new Document(); const pageRoot = new PageRoot(); doc.pageRoot = pageRoot;
     const { store } = memoryStore({ assets: seed, bindings }); let disconnected = 0; let observed = 0;
     const imageLoader = { PLACEHOLDER_SRC: 'placeholder', createImageLoader: () => ({ observe: () => { observed++; }, disconnect: () => { disconnected++; } }) };
-    const runtime = { getCapabilities: () => ({ themeKey: 'theme-name:A', character: { available: true, target: { key: 'character:c' } }, user: { available: true, target: { key: 'user:global' } } }), getActiveAvatarIds: () => options.activeAvatarIds || { user: '', character: '' }, notifyAssetChanged: async () => {}, deleteAsset: (id) => store.deleteAsset(id), clearBinding: async () => {}, beginEdit: async () => {} };
+    const runtime = { getCapabilities: () => ({ themeKey: 'theme-name:A', character: { available: true, target: { key: 'character:c' } }, user: { available: true, target: { key: 'user:global' } } }), getActiveAvatarIds: () => options.activeAvatarIds || { user: '', character: '' }, notifyAssetChanged: async () => {}, deleteAsset: (id) => store.deleteAsset(id), clearBinding: async () => {}, beginEdit: async () => {}, isManagerBrowsing: () => options.managerBrowsing === true, selectManagerAsset: options.selectManagerAsset || (async () => true), resumeEditFromManager: () => true };
     const win = { document: doc, confirm: () => true, setTimeout, clearTimeout };
     if (options.gridTemplateColumns) win.getComputedStyle = () => ({ gridTemplateColumns: options.gridTemplateColumns });
     const mods = loadModules(win);
@@ -477,6 +477,34 @@ test('chat avatar lightbox clicks are blocked only while the setting is enabled'
     f.doc.dispatchEvent(allowed);
     assert.notEqual(allowed.defaultPrevented, true);
     f.runtime.stop();
+});
+test('avatar editor can browse the library without discarding its draft', async () => {
+    let managerOpens = 0;
+    const f = runtimeFixture({ seed: { assets: [asset('first'), asset('second')] }, openAvatarManager: () => { managerOpens += 1; return true; } });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'first', bindingMode: 'deferred' });
+    f.runtime.setScale(1.37);
+    const draft = f.runtime.getState();
+    await f.runtime.openManagerFromEditor();
+    assert.equal(managerOpens, 1);
+    assert.equal(f.runtime.isManagerBrowsing(), true);
+    assert.equal(f.runtime.getState().view.scale, draft.view.scale);
+    f.runtime.resumeEditFromManager();
+    assert.equal(f.runtime.isManagerBrowsing(), false);
+    assert.equal(f.runtime.getState().view.scale, draft.view.scale);
+    await f.runtime.openManagerFromEditor();
+    await f.runtime.selectManagerAsset('second');
+    assert.equal(f.runtime.getState().avatarId, 'second');
+    assert.equal(f.runtime.getState().managerBrowsing, true);
+    f.runtime.resumeEditFromManager();
+    assert.equal(f.runtime.getState().avatarId, 'second');
+});
+test('avatar library offers the suspended editor as the only apply target', async () => {
+    const f = pageFixture([asset('picker')], [], { managerBrowsing: true });
+    await f.page.mount();
+    await f.page.openAssetMenu('picker');
+    assert.match(f.lastDialog(), /data-avatar-dialog-action="apply-current"/);
+    assert.match(f.lastDialog(), /用于当前调整/);
+    assert.doesNotMatch(f.lastDialog(), /data-avatar-dialog-action="apply-user"/);
 });
 test('30 a promoted default avatar keeps the same normalized crop across theme switches', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{version:1,themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{x:.1}}]}}); await f.runtime.start(); const a=f.user.image.getAttribute('style'); f.setTheme('B'); await f.runtime.reconcile(); const b=f.user.image.getAttribute('style'); const expected=modules.avatarRuntime.objectViewBoxForView({x:.1}); assert.ok(a.includes(expected)); assert.ok(b.includes(expected)); });
 test('31 switching to a theme without an explicit avatar keeps the default avatar', async () => { const f=runtimeFixture({seed:{assets:[asset()],bindings:[{version:1,themeKey:'theme-name:A',targetKey:'user:global',avatarId:'a',view:{}}]}}); await f.runtime.start(); f.setTheme('B'); await f.runtime.reconcile(); assert.match(f.user.image.getAttribute('src'),/main-a/); assert.ok(await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY,'user:global')); });
@@ -1599,7 +1627,7 @@ test('85 Avatar Page does not open import while storage is not writable', async 
 test('86 UI reuses Theme Manager backend availability before starting Avatar runtime', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
     assert.match(source, /isBackendAvailable: getServerMode/);
-    assert.match(source, /avatarCoordinator\.initialize\(\)\.then\(function \(\) \{\s*if \(!avatarCoordinator\.isRuntimeReady\(\)\) return;\s*return avatarRuntime\.start\(\);/);
+    assert.match(source, /avatarCoordinator\.initialize\(\)\.then\(function \(\) \{\s*if \(!isAvatarManagerEnabled\(\) \|\| !avatarCoordinator\.isRuntimeReady\(\)\) return false;\s*return avatarRuntime\.start\(\);/);
     assert.match(source, /avatarStore = avatarCoordinator\.store/);
     assert.doesNotMatch(source, /avatarStore = modules\.createAvatarStore\(\{\}\);/);
     assert.doesNotMatch(source, /toast\(error\.message \|\| '头像存储尚未安全就绪'/);
@@ -1663,6 +1691,18 @@ test('91 clearing one application scope preserves every other binding', async ()
     assert.equal((await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'user:global')).avatarId, 'global');
     assert.equal((await f.store.getBinding('theme-name:A', 'user:global')).avatarId, 'theme');
     assert.equal((await f.store.getBinding('chat-integrity:chat-uuid-1', 'character:char.png')).avatarId, 'character');
+});
+
+test('clearing an application scope keeps the current adjustment open', async () => {
+    const f = runtimeFixture({ seed: { assets: [asset('chat')], bindings: [
+        { version: 4, themeKey: 'chat-integrity:chat-uuid-1', targetKey: 'user:global', avatarId: 'chat', view: {} },
+    ] } });
+    await f.runtime.beginEdit({ kind: 'user', avatarId: 'chat', bindingMode: 'deferred' });
+    f.runtime.setScale(1.42);
+    await f.runtime.clearApplicationScope('user', 'chat', f.runtime.getState().target);
+    assert.equal(await f.store.getBinding('chat-integrity:chat-uuid-1', 'user:global'), null);
+    assert.equal(f.runtime.getState().state, 'editing');
+    assert.equal(f.runtime.getState().view.scale, 1.42);
 });
 
 test('application scope status reports the current theme multi-avatar count', async () => {
@@ -1869,6 +1909,7 @@ test('94 Avatar adjustment opens directly and its toolbar owns four save scopes 
     assert.match(panelBlock, /save-global/);
     assert.match(panelBlock, /当前聊天 ＞ 当前美化 ＞ 全局 ＞ SillyTavern 原头像/);
     assert.match(panelBlock, /保存到低权重范围不会清除高权重绑定/);
+    assert.match(panelBlock, /清除后继续停留在调整页/);
     assert.match(runtimeSource, /data-action="flip-x"[^>]*>水平<\/button>/);
     assert.match(runtimeSource, /data-action="flip-y"[^>]*>垂直<\/button>/);
     assert.match(runtimeSource, /data-action="clear-bindings"[^>]*>解绑<\/button>/);

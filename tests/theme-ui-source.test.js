@@ -79,10 +79,20 @@ test('day night switching exposes three persistent modes and editor toggles sele
 test('theme settings expose common background and collapsed series controls', () => {
     const settings = source.slice(source.indexOf('function openSettingsSheet'), source.indexOf('// ── 分类管理'));
     assert.match(settings, /id="tm-common-background"/);
+    assert.match(settings, /id="tm-avatar-manager-enabled"/);
+    assert.match(settings, /左上角切换到头像管理/);
     assert.match(settings, /id="tm-hide-series-previews"/);
     assert.match(settings, /'tm-settings-other', '其他功能'/);
     assert.match(source, /__day-night__/);
     assert.match(source, /tm-series-preview-hidden/);
+});
+
+test('avatar manager switch owns both runtime startup and manager navigation', () => {
+    assert.match(source, /avatarManagerEnabled: true/);
+    assert.match(source, /if \(!isAvatarManagerEnabled\(\) \|\| !avatarCoordinator\.isRuntimeReady\(\)\) return false/);
+    assert.match(source, /if \(isAvatarManagerEnabled\(\)\) pages\.push\(\{ id: 'avatars'/);
+    assert.match(source, /if \(avatarManagerEnabled\) appPages\.push\(\{/);
+    assert.match(source, /stopAvatarManagerRuntime\(\)/);
 });
 
 test('avatar settings expose the chat avatar lightbox guard', () => {

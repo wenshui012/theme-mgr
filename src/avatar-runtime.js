@@ -506,6 +506,7 @@
         var started = false;
         var editor = null;
         var editorClosing = false;
+        var editorManagerBrowsing = false;
         var toolbarHost = null;
         var toolbar = null;
         var styleNode = null;
@@ -1244,6 +1245,7 @@
         function stop() {
             if (editor) finishEditorUi();
             editor = null;
+            editorManagerBrowsing = false;
             listeners.forEach(function (item) {
                 if (item.source && typeof item.source.removeListener === 'function') item.source.removeListener(item.name, item.handler);
             });
@@ -1466,7 +1468,7 @@
                     scopeOptionHtml('save-original', editor.target.kind === 'user' ? '覆盖当前人设原头像' : '覆盖当前角色卡卡面', originalHint, scopes.original, false);
             } else {
                 panel.innerHTML = '<div class="tm-avatar-editor-scope-title"><span>解除头像绑定</span><small>只清除所选范围</small></div>' +
-                    '<div class="tm-avatar-editor-priority">清除后立即退出调整，并按聊天 ＞ 美化 ＞ 全局 ＞ 原头像回退。</div>' +
+                    '<div class="tm-avatar-editor-priority">清除后继续停留在调整页；退出调整后按聊天 ＞ 美化 ＞ 全局 ＞ 原头像回退。</div>' +
                     scopeOptionHtml('clear-chat', '清除当前聊天绑定', '只影响当前聊天', scopes.chat, true, '当前有绑定') +
                     scopeOptionHtml('clear-theme', '清除当前美化绑定', '清除当前目标在此美化下的全部头像', scopes.theme, true, '已绑定 ' + Number(scopes.theme && scopes.theme.count || 1) + ' 张头像') +
                     scopeOptionHtml('clear-global', editor.target.kind === 'user' ? '清除 User 全局头像' : '清除该角色全局头像', '不会清除聊天或美化绑定', scopes.global, true, '当前有绑定');
@@ -1796,6 +1798,7 @@
         function cancelEdit(reason) {
             if (!editor || editorClosing) return Promise.resolve(null);
             editorClosing = true;
+            editorManagerBrowsing = false;
             var result = { saved: false, reason: reason || 'cancelled', previousBinding: clone(editor.previousBinding) };
             finishEditorUi();
             editor = null;
@@ -1956,7 +1959,7 @@
             editorPreviewSettled = true;
             ensureSourceCache(asset);
             ensureSourceCache(editorPreviewAsset(asset));
-            rebuildEditorUi();
+            if (!editorManagerBrowsing) rebuildEditorUi();
             return getState();
         }
         function importEditorAvatar(file) {
@@ -1979,8 +1982,31 @@
         }
         function openManagerFromEditor() {
             if (!editor || typeof openAvatarManager !== 'function') return Promise.reject(new Error('头像管理入口不可用'));
-            if (typeof win.confirm === 'function' && !win.confirm('打开头像管理会放弃本次尚未保存的调整，是否继续？')) return Promise.resolve(false);
-            return cancelEdit('manager-open').then(function () { return openAvatarManager(); });
+            if (editorManagerBrowsing) return Promise.resolve(true);
+            editorManagerBrowsing = true;
+            finishEditorUi();
+            return Promise.resolve().then(function () { return openAvatarManager(); }).then(function (opened) {
+                if (opened === false) resumeEditFromManager();
+                return opened;
+            }, function (error) {
+                resumeEditFromManager();
+                throw error;
+            });
+        }
+        function resumeEditFromManager() {
+            if (!editor || !editorManagerBrowsing) return false;
+            editorManagerBrowsing = false;
+            rebuildEditorUi();
+            return getState();
+        }
+        function selectManagerAsset(avatarId) {
+            if (!editor || !editorManagerBrowsing) {
+                return Promise.reject(Object.assign(new Error('当前没有等待选择图片的头像调整'), { code: 'EDITOR_MANAGER_INACTIVE' }));
+            }
+            return getAsset(avatarId).then(function (asset) {
+                if (!asset) throw Object.assign(new Error('所选头像不存在'), { code: 'AVATAR_NOT_FOUND' });
+                return replaceEditorAsset(asset, 'library');
+            });
         }
         function persistEditorPreference(input) {
             var preferences = editorPreferences();
@@ -2036,7 +2062,10 @@
                 var clearKind = editor.target.kind;
                 var clearScope = action.slice(6);
                 button.disabled = true;
-                clearApplicationScope(clearKind, clearScope, editor.target).catch(function (error) { button.disabled = false; onError(error); });
+                clearApplicationScope(clearKind, clearScope, editor.target).then(function () {
+                    closeScopePanel();
+                    updateToolbar();
+                }).catch(function (error) { button.disabled = false; onError(error); });
             }
         }
         function onToolbarInput(event) {
@@ -2140,7 +2169,6 @@
             scope = clean(scope);
             var cap = capability(kind, targetOverride);
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
-            if (editor) return cancelEdit('binding-cleared').then(function () { return clearApplicationScope(kind, scope, targetOverride); });
             var scopeKey = scope === 'chat' ? currentChatBindingKey() : (scope === 'theme' ? currentThemeKey() : DEFAULT_BINDING_KEY);
             if ((scope === 'chat' || scope === 'theme') && !scopeKey) {
                 return Promise.reject(Object.assign(new Error(scope === 'chat' ? '无法可靠识别当前聊天' : '无法识别当前美化'), { code: scope === 'chat' ? 'CHAT_UNAVAILABLE' : 'THEME_UNAVAILABLE' }));
@@ -2466,6 +2494,7 @@
                 previousBinding: clone(editor.previousBinding),
                 previousNativeView: clone(editor.previousNativeView),
                 diagnostics: clone(editor.diagnostics),
+                managerBrowsing: editorManagerBrowsing,
             } : { state: 'idle' };
         }
         function getActiveAvatarIds() {
@@ -2488,6 +2517,9 @@
             beginNativeEdit: beginNativeEdit,
             beginMessageEdit: beginMessageEdit,
             importEditorAvatar: importEditorAvatar,
+            openManagerFromEditor: openManagerFromEditor,
+            resumeEditFromManager: resumeEditFromManager,
+            selectManagerAsset: selectManagerAsset,
             clearNativeView: clearNativeView,
             cancelEdit: cancelEdit,
             saveEdit: saveEdit,
@@ -2518,6 +2550,7 @@
             getState: getState,
             getActiveAvatarIds: getActiveAvatarIds,
             isEditing: function () { return !!editor; },
+            isManagerBrowsing: function () { return !!editor && editorManagerBrowsing; },
         };
     };
 

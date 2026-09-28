@@ -600,6 +600,7 @@
         if (typeof d.simplifyGridText !== 'boolean') d.simplifyGridText = false;
         if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
         if (typeof d.hideSeriesPreviews !== 'boolean') d.hideSeriesPreviews = false;
+        if (typeof d.avatarManagerEnabled !== 'boolean') d.avatarManagerEnabled = true;
         if (typeof d.disableChatAvatarLightbox !== 'boolean') d.disableChatAvatarLightbox = false;
         if (!d.avatarEditorPreferences || typeof d.avatarEditorPreferences !== 'object' || Array.isArray(d.avatarEditorPreferences)) d.avatarEditorPreferences = {};
         var avatarEditorDefaults = dd.avatarEditorPreferences;
@@ -675,6 +676,7 @@
             simplifyGridText: false,
             autoHideHeader: false,
             hideSeriesPreviews: false,
+            avatarManagerEnabled: true,
             disableChatAvatarLightbox: false,
             avatarEditorPreferences: { scaleStepPercent: 1, positionStepPercent: 1, rotationStepDegrees: 1, manualInput: false, quickImportToLibrary: true },
             dayNightPreference: { mode: 'system', manualVariant: '', dayStart: '07:00', nightStart: '19:00' },
@@ -3928,18 +3930,37 @@
         renderBottomStatus();
     }
 
+    function isAvatarManagerEnabled() {
+        return !isStorageReady() || load().avatarManagerEnabled !== false;
+    }
+
+    function initializeAvatarManagerRuntime() {
+        if (!avatarCoordinator || !avatarRuntime) return Promise.resolve(false);
+        return avatarCoordinator.initialize().then(function () {
+            if (!isAvatarManagerEnabled() || !avatarCoordinator.isRuntimeReady()) return false;
+            return avatarRuntime.start();
+        });
+    }
+
+    function stopAvatarManagerRuntime() {
+        if (avatarPageController) avatarPageController.unmount();
+        if (avatarRuntime) avatarRuntime.stop();
+        if (lastAppPage === 'avatars') lastAppPage = 'themes';
+    }
+
     function createAppShellController(overlay) {
         if (appShellController) appShellController.destroy();
+        var pages = [
+            { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
+        ];
+        if (isAvatarManagerEnabled()) pages.push({ id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
+            avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
+        }, unmount: function () { avatarPageController.unmount(); } });
+        pages.push({ id: 'backgrounds', label: '背景管理', icon: 'fa-image' });
         appShellController = appShellApi.createAppShell({
             root: overlay,
             defaultPage: lastAppPage,
-            pages: [
-                { id: 'themes', label: '美化管理', icon: 'fa-palette', mount: mountThemePage, unmount: unmountThemePage },
-                { id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
-                    avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
-                }, unmount: function () { avatarPageController.unmount(); } },
-                { id: 'backgrounds', label: '背景管理', icon: 'fa-image' },
-            ],
+            pages: pages,
             beforeChange: function () {
                 return !uiSheetsApi || uiSheetsApi.requestCloseAll(overlay, 'page-change');
             },
@@ -3955,8 +3976,9 @@
     // ── 打开全屏主界面 ────────────────────────────────────────
     var popupWaitingForStorage = false;
     function openPopup(requestedPage) {
+        if (requestedPage === 'avatars' && !isAvatarManagerEnabled()) requestedPage = 'themes';
         if (requestedPage === 'themes' || requestedPage === 'avatars' || requestedPage === 'backgrounds') lastAppPage = requestedPage;
-        if (avatarRuntime && avatarRuntime.isEditing()) {
+        if (avatarRuntime && avatarRuntime.isEditing() && !(requestedPage === 'avatars' && avatarRuntime.isManagerBrowsing && avatarRuntime.isManagerBrowsing())) {
             if (pendingOpenAfterAvatarCancel) return;
             pendingOpenAfterAvatarCancel = true;
             avatarRuntime.cancelEdit('manager-open').then(function () {
@@ -4011,21 +4033,23 @@
             '<div class="tm-catbar" id="tm-catbar" style="display:none"></div>' +
             '<div class="tm-batch-area" id="tm-batch-area"></div>' +
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
+        var avatarManagerEnabled = isAvatarManagerEnabled();
+        if (!avatarManagerEnabled && lastAppPage === 'avatars') lastAppPage = 'themes';
         var appPages = [
             { id: 'themes', label: '美化管理', icon: 'fa-palette', html: themePageHtml },
-            {
+        ];
+        if (avatarManagerEnabled) appPages.push({
                 id: 'avatars',
                 label: '头像管理',
                 icon: 'fa-user',
                 html: modules.avatarPage.buildPageHtml(imageLoaderApi.PLACEHOLDER_SRC),
-            },
-            {
+            });
+        appPages.push({
                 id: 'backgrounds',
                 label: '背景管理',
                 icon: 'fa-image',
                 html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景管理</h2><p>背景管理功能将在后续版本加入</p></div>',
-            },
-        ];
+            });
         var shellOptions = {
             defaultPage: lastAppPage,
             pages: appPages,
@@ -4047,10 +4071,10 @@
             pagePanelsHtml +
             '<div class="tm-bottombar">' +
             '<div class="tm-bottom-status tm-themes-only" id="tm-bottom-status"></div>' +
-            '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="头像解绑" aria-label="头像解绑"><i class="fa-solid fa-eraser"></i></button>' +
+            (avatarManagerEnabled ? '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-global" title="头像解绑" aria-label="头像解绑"><i class="fa-solid fa-eraser"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-batch-toggle" title="多选" aria-label="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn tm-avatars-only" id="tm-avatar-add" title="添加头像" aria-label="添加头像"' +
-            (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' +
+            (avatarCoordinator && !avatarCoordinator.canMutate() ? ' disabled' : '') + '><i class="fa-solid fa-plus"></i></button>' : '') +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-refresh" title="刷新"><i class="fa-solid fa-rotate"></i></button>' +
             '<button class="tm-bottom-btn tm-themes-only" id="tm-batch-toggle" title="多选"><i class="fa-solid fa-list-check"></i></button>' +
             '<button class="tm-bottom-btn" id="tm-bottom-settings" title="设置"><i class="fa-solid fa-sliders"></i><span class="tm-update-dot" hidden aria-hidden="true"></span></button>' +
@@ -4101,13 +4125,16 @@
             e.preventDefault();
         });
         ov.querySelector('#tm-x').addEventListener('click', closePopup);
-        ov.querySelector('#tm-avatar-add').addEventListener('click', function () {
+        var avatarAddButton = ov.querySelector('#tm-avatar-add');
+        var avatarBatchButton = ov.querySelector('#tm-avatar-batch-toggle');
+        var avatarGlobalButton = ov.querySelector('#tm-avatar-global');
+        if (avatarAddButton) avatarAddButton.addEventListener('click', function () {
             if (avatarPageController) avatarPageController.pickFiles();
         });
-        ov.querySelector('#tm-avatar-batch-toggle').addEventListener('click', function () {
+        if (avatarBatchButton) avatarBatchButton.addEventListener('click', function () {
             if (avatarPageController) avatarPageController.toggleBatchMode();
         });
-        ov.querySelector('#tm-avatar-global').addEventListener('click', openAvatarGlobalMenu);
+        if (avatarGlobalButton) avatarGlobalButton.addEventListener('click', openAvatarGlobalMenu);
         ov.querySelector('#tm-theme-toggle').addEventListener('click', function () {
             var dd = load();
             if (dd.followThemeAppearance === true || dd.followDayNightAppearance === true) {
@@ -4234,6 +4261,7 @@
         if (appShellController) appShellController.destroy();
         appShellController = null;
         var ov = document.querySelector('.tm-overlay'); if (ov) ov.parentNode.removeChild(ov);
+        if (avatarRuntime && avatarRuntime.resumeEditFromManager) avatarRuntime.resumeEditFromManager();
         return true;
     }
 
@@ -7267,6 +7295,7 @@
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>隐藏系列预览</span><small>系列收起时只显示标题，展开后显示全部美化</small></label><input type="checkbox" class="tm-chk" id="tm-hide-series-previews" ' + (d.hideSeriesPreviews === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>';
         var otherSettingsHtml =
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>启用头像管理</span><small>开启后可从左上角切换到头像管理，使用头像库、绑定与原头像调整；关闭后同时停用聊天头像替换</small></label><input type="checkbox" class="tm-chk" id="tm-avatar-manager-enabled" ' + (d.avatarManagerEnabled !== false ? 'checked' : '') + ' /></div>' +
             '<div class="tm-field"><label>绑定通用背景</label><button type="button" class="tm-bg-bind-card" id="tm-common-background">' +
             backgroundsApi.buildBackgroundBindHtml(d.commonBackgroundName, { emptyTitle: '未设置通用背景', emptyHint: '当前美化没有绑定背景时保持酒馆现状', selectedHint: '当前美化没有绑定背景时使用此壁纸' }) +
             '</button><div class="tm-hint">每个美化单独绑定的背景优先于通用背景。</div></div>';
@@ -7477,6 +7506,36 @@
             dd.hideSeriesPreviews = this.checked;
             save(dd);
             renderGrid();
+        });
+        sheet.querySelector('#tm-avatar-manager-enabled').addEventListener('change', function () {
+            var input = this;
+            var enabled = input.checked;
+            var dd = load();
+            dd.avatarManagerEnabled = enabled;
+            input.disabled = true;
+            Promise.resolve(save(dd)).then(function () {
+                if (!enabled) {
+                    stopAvatarManagerRuntime();
+                    return false;
+                }
+                return initializeAvatarManagerRuntime().catch(function (error) {
+                    console.warn('[头像管理] 启用后启动失败:', error);
+                    toast(error.message || '头像管理启动失败', true);
+                    return false;
+                });
+            }).then(function () {
+                var managerOpen = Boolean(document.querySelector('.tm-overlay'));
+                closeSheet(sheet);
+                if (managerOpen) {
+                    closePopup();
+                    openPopup('themes');
+                }
+                toast(enabled ? '头像管理已启用' : '头像管理已停用');
+            }).catch(function () {
+                input.checked = !enabled;
+                input.disabled = false;
+                toast('头像管理开关保存失败，请重试', true);
+            });
         });
         sheet.querySelector('#tm-common-background').addEventListener('click', function () {
             var button = this;
@@ -8024,10 +8083,7 @@
             bindColorSchemeListener();
             if (bindingController && !avatarRecoveryGateLocked) bindingController.start();
             if (avatarCoordinator && avatarRuntime) {
-                avatarCoordinator.initialize().then(function () {
-                    if (!avatarCoordinator.isRuntimeReady()) return;
-                    return avatarRuntime.start();
-                }).catch(function (error) {
+                initializeAvatarManagerRuntime().catch(function (error) {
                     console.warn('[头像管理] 本地存储初始化失败或数据冲突:', error);
                     toast(error.message || '头像本地存储初始化失败', true);
                 });
