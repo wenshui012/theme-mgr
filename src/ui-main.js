@@ -4772,6 +4772,7 @@
         var loaderOptions = {
             root: area,
             rootMargin: GRID_IMAGE_ROOT_MARGIN,
+            maxConcurrent: 4,
             generation: generation,
             resolveSource: resolveGridImageSource,
             onError: showGridImageFallback,
@@ -6357,6 +6358,7 @@
                     loader = imageLoaderApi.createImageLoader({
                         root: body,
                         IntersectionObserver: null,
+                        maxConcurrent: 4,
                         resolveSource: function (avatarId) { return avatarStore.getThumbnail(avatarId); },
                     });
                     loader.observe(body.querySelectorAll('.tm-user-avatar-bind-thumb img'));

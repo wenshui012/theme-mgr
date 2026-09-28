@@ -223,8 +223,9 @@
                 }
                 list.innerHTML = html;
                 thumbnailLoader = imageLoaderApi.createImageLoader({
-                    root: list,
+                    root: sheet,
                     rootMargin: '240px 0px',
+                    maxConcurrent: 4,
                     getKey: function (image) { return image.dataset.backgroundName || ''; },
                     resolveSource: function (name) { return getBackgroundThumbnailSource(name); },
                 });

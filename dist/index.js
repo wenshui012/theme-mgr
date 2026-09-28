@@ -5645,7 +5645,7 @@
 })(window);
 /* END MODULE 12/29: src/theme-appearance.js */
 
-/* BEGIN MODULE 13/29: src/storage.js | sha256:d3dc1ae794893f3f979c07d0ae103be137823770599a4884fb548725f0d49d57 */
+/* BEGIN MODULE 13/29: src/storage.js | sha256:68bac8e024f78ec9ee93698c43ce973b75aa03cc2dcfa315359ffd5a9c5a469f */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -6528,8 +6528,11 @@
                     },
                 ));
             }
-            var dataSnapshot = cloneValue(data);
-            var syncSnapshot = cloneValue(normalizeSyncState(state));
+            // queueLocalPersist already captured detached snapshots before this
+            // serialized write. Cloning the full image-bearing data again here
+            // doubles peak memory usage on every settings change.
+            var dataSnapshot = data;
+            var syncSnapshot = state;
             if (localStore && typeof localStore.write === 'function') {
                 return Promise.resolve()
                     .then(function () { return localStore.write(dataSnapshot, syncSnapshot); })
@@ -15360,7 +15363,7 @@
 })(window);
 /* END MODULE 25/29: src/styles.js */
 
-/* BEGIN MODULE 26/29: src/backgrounds.js | sha256:71450ae3f316f06aa59543d7f6dc592099a27eaf3829fc2b0ded2dacc41f64b6 */
+/* BEGIN MODULE 26/29: src/backgrounds.js | sha256:2a0ded9544d406dee56bcd5e544d0025d6f60c28f88a980b5409f2265b9c57a5 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -15586,8 +15589,9 @@
                 }
                 list.innerHTML = html;
                 thumbnailLoader = imageLoaderApi.createImageLoader({
-                    root: list,
+                    root: sheet,
                     rootMargin: '240px 0px',
+                    maxConcurrent: 4,
                     getKey: function (image) { return image.dataset.backgroundName || ''; },
                     resolveSource: function (name) { return getBackgroundThumbnailSource(name); },
                 });
@@ -16138,7 +16142,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:cd86a79f470707a239e16b93d471b5c705caa4f8f1aaa1c1fe1a3ae0a307dd9b */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:74999de44cf282256999c5f66349ab074f629b36b782e83137ed06e74638ca83 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -20913,6 +20917,7 @@
         var loaderOptions = {
             root: area,
             rootMargin: GRID_IMAGE_ROOT_MARGIN,
+            maxConcurrent: 4,
             generation: generation,
             resolveSource: resolveGridImageSource,
             onError: showGridImageFallback,
@@ -22498,6 +22503,7 @@
                     loader = imageLoaderApi.createImageLoader({
                         root: body,
                         IntersectionObserver: null,
+                        maxConcurrent: 4,
                         resolveSource: function (avatarId) { return avatarStore.getThumbnail(avatarId); },
                     });
                     loader.observe(body.querySelectorAll('.tm-user-avatar-bind-thumb img'));

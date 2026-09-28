@@ -880,8 +880,11 @@
                     },
                 ));
             }
-            var dataSnapshot = cloneValue(data);
-            var syncSnapshot = cloneValue(normalizeSyncState(state));
+            // queueLocalPersist already captured detached snapshots before this
+            // serialized write. Cloning the full image-bearing data again here
+            // doubles peak memory usage on every settings change.
+            var dataSnapshot = data;
+            var syncSnapshot = state;
             if (localStore && typeof localStore.write === 'function') {
                 return Promise.resolve()
                     .then(function () { return localStore.write(dataSnapshot, syncSnapshot); })

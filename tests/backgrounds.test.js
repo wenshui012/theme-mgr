@@ -90,8 +90,9 @@ test('background picker registers thumbnail placeholders with a viewport loader'
     assert.match(html, /placeholder\.gif/);
     assert.match(html, /data-background-name="large\.png"/);
     assert.doesNotMatch(html, /background-image:[^>]*large\.png/);
-    assert.equal(loaderOptions.root, list);
+    assert.equal(loaderOptions.root, sheet);
     assert.equal(loaderOptions.rootMargin, '240px 0px');
+    assert.equal(loaderOptions.maxConcurrent, 4);
     assert.equal(observed.length, 1);
     assert.equal(await loaderOptions.resolveSource('large.png'), 'data:image/png;base64,thumbnail');
     assert.deepEqual(requests, ['/api/backgrounds/all', '/thumbnail?type=bg&file=large.png']);
