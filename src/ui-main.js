@@ -194,6 +194,7 @@
     var stThemeList = [];
     var stThemeListReliable = false;
     var themeNameConflicts = new Set();
+    var themeNameConflictCounts = Object.create(null);
     var themeListLoadError = '';
     var themeListRevision = 0;
     var metadataRevision = 0;
@@ -767,11 +768,16 @@
             counts[name] = (counts[name] || 0) + 1;
             if (counts[name] === 1) normalized.push(name);
         });
-        themeNameConflicts = new Set(Object.keys(counts).filter(function (name) { return counts[name] > 1; }));
-        (Array.isArray(options.conflictNames) ? options.conflictNames : []).forEach(function (name) {
-            name = typeof name === 'string' ? name.trim() : '';
-            if (name) themeNameConflicts.add(name);
+        themeNameConflictCounts = Object.create(null);
+        Object.keys(counts).forEach(function (name) {
+            if (counts[name] > 1) themeNameConflictCounts[name] = counts[name];
         });
+        Object.keys(options.conflictCounts || {}).forEach(function (sourceName) {
+            var name = typeof sourceName === 'string' ? sourceName.trim() : '';
+            var count = Number(options.conflictCounts[sourceName]);
+            if (name && Number.isFinite(count) && count > 1) themeNameConflictCounts[name] = count;
+        });
+        themeNameConflicts = new Set(Object.keys(themeNameConflictCounts));
         themeListLoadError = typeof options.error === 'string' ? options.error : '';
         stThemeList = normalized;
         stThemeListReliable = reliable === true && themeNameConflicts.size === 0;
@@ -787,10 +793,16 @@
         return Array.from(new Set(names.filter(function (name) { return themeNameConflicts.has(name); })));
     }
 
+    function formatThemeNameConflicts(names) {
+        return (names || Array.from(themeNameConflicts)).map(function (name) {
+            return name + '（' + (themeNameConflictCounts[name] || 2) + '份）';
+        }).join('、');
+    }
+
     function blockAmbiguousThemeItem(item) {
         var names = getAmbiguousThemeNames(item);
         if (!names.length) return false;
-        toast('检测到同名主题「' + names.join('、') + '」，无法安全确定对应文件；已禁用编辑和删除', true);
+        toast('酒馆主题库存中「' + formatThemeNameConflicts(names) + '」各自重复，无法安全确定对应文件；已禁用编辑和删除', true);
         return true;
     }
 
@@ -968,14 +980,15 @@
         function done(list, method, reliable, diagnostics) {
             if (found) return;
             found = true;
-            var conflictNames = (Array.isArray(diagnostics) ? diagnostics : []).filter(function (item) {
-                return item && item.code === 'inventory-name-duplicate';
-            }).map(function (item) { return item.name; });
-            setThemeList(list, reliable, { conflictNames: conflictNames });
+            var conflictCounts = Object.create(null);
+            (Array.isArray(diagnostics) ? diagnostics : []).forEach(function (item) {
+                if (item && item.code === 'inventory-name-duplicate' && typeof item.name === 'string') conflictCounts[item.name] = item.count;
+            });
+            setThemeList(list, reliable, { conflictCounts: conflictCounts });
             console.log('[美化管理] 主题列表获取成功:', method, stThemeList.length + '个');
             if (themeNameConflicts.size > 0) {
                 console.warn('[美化管理] SillyTavern 主题库存存在同名歧义，编辑和删除已禁用:', Array.from(themeNameConflicts));
-                toast('检测到同名主题：' + Array.from(themeNameConflicts).join('、') + '；可以切换，但编辑和删除已禁用', true);
+                toast('酒馆主题库存中，以下每个名称都各出现多份：' + formatThemeNameConflicts() + '；可以切换，编辑和删除已禁用', true);
             }
             if (cb) cb(stThemeList.slice());
         }
@@ -4514,11 +4527,11 @@
         var conflictNames = getAmbiguousThemeNames(item);
         var inventoryConflict = conflictNames.length > 0;
         var tagText = inventoryConflict
-            ? '同名冲突 · 禁止编辑删除'
+            ? '酒馆库存重复 ' + (themeNameConflictCounts[conflictNames[0]] || 2) + ' 份 · 禁止编辑删除'
             : ((meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || ''));
 
         return '<div class="tm-card' + (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + (inventoryConflict ? ' inventory-conflict' : '') + '" data-key="' + esc(item.key) + '"' +
-            (inventoryConflict ? ' title="同名主题可切换，但无法安全编辑或删除"' : '') + '>' +
+            (inventoryConflict ? ' title="酒馆主题库存中这个名称出现多份；可切换，但无法安全编辑或删除"' : '') + '>' +
             '<div class="tm-card-img">' + checkBox + imgContent + badge + starBadge + freqBadge + menuBtn + '</div>' +
             '<div class="tm-card-info"><div class="tm-card-name">' + esc(item.name) + '</div>' +
             (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
@@ -5001,8 +5014,8 @@
         var units = alignSeriesUnitsForGrid(layout.units, metrics.columns);
         var list = layout.displayedItems;
         var inventoryWarning = themeNameConflicts.size > 0
-            ? '<div class="tm-inventory-warning"><i class="fa-solid fa-triangle-exclamation"></i><span>检测到同名主题：' +
-                esc(Array.from(themeNameConflicts).join('、')) + '。管理器已合并显示；可以按 SillyTavern 原生顺序切换，但编辑和删除仍保持禁用。</span></div>'
+            ? '<div class="tm-inventory-warning"><i class="fa-solid fa-triangle-exclamation"></i><span>酒馆主题库存中，以下每个名称都各出现多份：' +
+                esc(formatThemeNameConflicts()) + '。常见原因是复制或重命名了主题 JSON，但文件内 name 没有改变。管理器已合并卡片显示；可以切换，请在酒馆主题目录清理重复文件后再编辑或删除。</span></div>'
             : '';
         syncSeriesCardWidth(area, d.gridCardSize);
 

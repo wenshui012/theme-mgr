@@ -676,6 +676,22 @@ test('batch avatar selection updates only the clicked card and count while delet
     assert.doesNotMatch(deleteHandler, /refresh\(\)|store\.listAssets/);
 });
 
+test('avatar batch select all is limited to the current category', async () => {
+    const uiData = { avatarLibrary: { categories: ['A', 'B'], assetMeta: {
+        a1: { category: 'A' }, a2: { category: 'A' }, b1: { category: 'B' },
+    } } };
+    const f = pageFixture([asset('a1'), asset('a2'), asset('b1')], [], { uiData });
+    await f.page.mount();
+    const target = (selector, dataset) => ({
+        dataset,
+        closest(requested) { return requested === selector ? this : null; },
+    });
+    f.pageRoot.dispatchEvent({ type: 'click', target: target('[data-avatar-category]', { avatarCategory: 'A' }) });
+    f.page.enterBatchMode();
+    f.pageRoot.dispatchEvent({ type: 'click', target: target('[data-avatar-batch]', { avatarBatch: 'all' }) });
+    assert.equal(f.page.getState().batchSelected, 2);
+});
+
 test('active User and Character avatars are promoted after the fixed original-avatar slot', async () => {
     const f = pageFixture([asset('a'), asset('b'), asset('c')], [], { activeAvatarIds: { user: 'b', character: 'c' } });
     await f.page.mount();

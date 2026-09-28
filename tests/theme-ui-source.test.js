@@ -21,11 +21,14 @@ test('theme list uses the authoritative settings inventory without guessing from
     assert.match(listLoader, /themeApi\.getSettingsInventory\(/);
     assert.match(listLoader, /themeRuntime\.replaceInventory\(themes\)/);
     assert.match(listLoader, /allowDuplicateNames: true/);
+    assert.match(listLoader, /conflictCounts\[item\.name\] = item\.count/);
     assert.match(listLoader, /document\.getElementById\('themes'\)/);
     assert.doesNotMatch(listLoader, /querySelectorAll\('datalist'\)/);
     assert.doesNotMatch(listLoader, /\/api\/themes\/all|var apiPaths/);
     assert.match(source, /blockAmbiguousThemeItem\(item\)/);
     assert.match(source, /themeNameConflicts\.has\(themeName\)/);
+    assert.match(source, /以下每个名称都各出现多份/);
+    assert.match(source, /复制或重命名了主题 JSON，但文件内 name 没有改变/);
 });
 
 test('theme editor keeps the name permanent, moves annotations first and leaves preview last', () => {

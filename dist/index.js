@@ -14133,7 +14133,7 @@
 })(window);
 /* END MODULE 22/29: src/avatar-runtime.js */
 
-/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:1829e93ecd3a6892dd6cc0ad3c77fbba257ae75e0af19c7d5eb150d3ba4c1e6e */
+/* BEGIN MODULE 23/29: src/avatar-page.js | sha256:ee2669df91fee99c0ae6c7067aa3758bf1e7ddaa37d070a55802f590e3216572 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var STYLE_ID = 'tm-avatar-page-style';
@@ -14482,7 +14482,7 @@
         function createSeriesFromSelection() { var state = data(), sorted = assets.slice().sort(function (a, b) { return library.compareAssets(state, a, b, library.ensureState(state).sortMode); }), ids = sorted.filter(function (asset) { return batchSelected.has(asset.id); }).map(function (asset) { return asset.id; }); if (!ids.length) { toast('请先选择头像', true); return; } if (ids.length === 1) { openJoinSeriesSheet(ids[0]); return; } if (ids.some(function (id) { return !!library.findSeries(state, id); })) { toast('所选头像中已有系列成员，请先移出原系列', true); return; } var sheet = createSheet('<div class="tm-sheet-title"><i class="fa-solid fa-layer-group"></i>创建头像系列</div><div class="tm-field"><label>系列名称</label><input type="text" data-avatar-new-series maxlength="80" placeholder="例如：情侣头像"></div><div class="tm-hint">成员顺序按当前显示顺序保存，之后可在系列管理中调整。</div><div class="tm-edit-foot"><button class="tm-btn tm-btn-outline" data-avatar-series-cancel>取消</button><button class="tm-btn tm-btn-safe" data-avatar-series-create>创建系列</button></div>'); sheet.querySelector('[data-avatar-series-cancel]').addEventListener('click', function () { closeSheet(sheet); }); sheet.querySelector('[data-avatar-series-create]').addEventListener('click', function () { var name = sheet.querySelector('[data-avatar-new-series]').value.trim(), next = data(), result = library.createSeries(next, name, ids); if (!result.ok) { toast(name ? '无法创建系列' : '请输入系列名称', true); return; } persist(next, '已创建系列').then(function () { closeSheet(sheet); batchSelected.clear(); batchMode = false; render(); }); }); }
         function applyBatchCategory() { if (!batchSelected.size) { toast('请先选择头像', true); return; } openCategoryPicker({ categories: library.ensureState(data()).categories, allowClear: true, title: '批量设置分类', onSelect: function (value) { var state = data(); batchSelected.forEach(function (id) { library.ensureMeta(state, id).category = value; }); persist(state, '已批量更新分类').then(render); } }); }
         function applyBatchTags() { if (!batchSelected.size) { toast('请先选择头像', true); return; } openTagPicker({ knownTags: library.listTags(data()), requireSelection: true, title: '批量添加标签', onApply: function (values) { var state = data(); batchSelected.forEach(function (id) { var meta = library.ensureMeta(state, id); meta.tags = Array.from(new Set(meta.tags.concat(values))); }); persist(state, '已批量添加标签').then(render); } }); }
-        function handleClick(event) { var native = event.target.closest('[data-avatar-action="native"]'); if (native) { openNativeMenu(); return; } var manage = event.target.closest('[data-avatar-series-manage]'); if (manage) { event.stopPropagation(); openSeriesManageSheet(manage.dataset.avatarSeriesManage); return; } var toggle = event.target.closest('[data-avatar-series-toggle]'); if (toggle) { event.stopPropagation(); toggleSeriesExpanded(toggle); return; } var cat = event.target.closest('[data-avatar-category]'); if (cat) { category = cat.dataset.avatarCategory; render(); return; } var sort = event.target.closest('[data-avatar-sort]'); if (sort) { var state = data(); library.ensureState(state).sortMode = sort.dataset.avatarSort; persist(state).then(render); return; } var batch = event.target.closest('[data-avatar-batch]'); if (batch) { var action = batch.dataset.avatarBatch; if (batchDeleting || exporting) return; if (action === 'all') assets.forEach(function (asset) { batchSelected.add(asset.id); }); else if (action === 'none') batchSelected.clear(); else if (action === 'exit') { setBatchMode(false); return; } else if (action === 'category') { applyBatchCategory(); return; } else if (action === 'tags') { applyBatchTags(); return; } else if (action === 'series') { createSeriesFromSelection(); return; } else if (action === 'export') { exportBatchSelection().catch(function () {}); return; } else if (action === 'delete') { deleteBatchSelection(); return; } syncRenderedBatchCards(); return; } var card = event.target.closest('.tm-avatar-page-card'); if (!card || !root.contains(card)) return; var id = card.dataset.avatarId; if (batchMode) { if (batchDeleting || exporting) return; if (batchSelected.has(id)) batchSelected.delete(id); else batchSelected.add(id); syncBatchCard(card); updateBatchCount(); } else openAssetMenu(id).catch(function (error) { setNotice(error.message || '头像操作无法打开', 'error'); }); }
+        function handleClick(event) { var native = event.target.closest('[data-avatar-action="native"]'); if (native) { openNativeMenu(); return; } var manage = event.target.closest('[data-avatar-series-manage]'); if (manage) { event.stopPropagation(); openSeriesManageSheet(manage.dataset.avatarSeriesManage); return; } var toggle = event.target.closest('[data-avatar-series-toggle]'); if (toggle) { event.stopPropagation(); toggleSeriesExpanded(toggle); return; } var cat = event.target.closest('[data-avatar-category]'); if (cat) { category = cat.dataset.avatarCategory; render(); return; } var sort = event.target.closest('[data-avatar-sort]'); if (sort) { var state = data(); library.ensureState(state).sortMode = sort.dataset.avatarSort; persist(state).then(render); return; } var batch = event.target.closest('[data-avatar-batch]'); if (batch) { var action = batch.dataset.avatarBatch; if (batchDeleting || exporting) return; if (action === 'all') matchingAssets(data()).forEach(function (asset) { batchSelected.add(asset.id); }); else if (action === 'none') batchSelected.clear(); else if (action === 'exit') { setBatchMode(false); return; } else if (action === 'category') { applyBatchCategory(); return; } else if (action === 'tags') { applyBatchTags(); return; } else if (action === 'series') { createSeriesFromSelection(); return; } else if (action === 'export') { exportBatchSelection().catch(function () {}); return; } else if (action === 'delete') { deleteBatchSelection(); return; } syncRenderedBatchCards(); return; } var card = event.target.closest('.tm-avatar-page-card'); if (!card || !root.contains(card)) return; var id = card.dataset.avatarId; if (batchMode) { if (batchDeleting || exporting) return; if (batchSelected.has(id)) batchSelected.delete(id); else batchSelected.add(id); syncBatchCard(card); updateBatchCount(); } else openAssetMenu(id).catch(function (error) { setNotice(error.message || '头像操作无法打开', 'error'); }); }
         function handleKeydown(event) { if (event.key !== 'Enter' && event.key !== ' ') return; var target = event.target.closest('.tm-avatar-page-card,.tm-avatar-native-slot'); if (!target) return; event.preventDefault(); target.click(); }
         function handleFileChange(event) { var input = event.currentTarget || fileInput, files = imageToolsApi.snapshotInputFiles(input); if (!files.length) return; var pending = importFiles(files); input.value = ''; pending.catch(function (error) { reportError('file input import rejected', error); }); }
         function mount() { if (mounted) return refresh().then(function (value) { renderImportState(); return value; }); root = getRoot(); if (!root) return Promise.reject(new Error('头像管理页面不存在')); mounted = true; ensureStyle(); fileInput = root.querySelector('[data-avatar-file]'); root.addEventListener('click', handleClick); root.addEventListener('keydown', handleKeydown); fileInput.addEventListener('change', handleFileChange); var search = root.querySelector('[data-avatar-search]'); search.addEventListener('input', function () { query = search.value.trim(); render(); }); root.querySelector('[data-avatar-search-clear]').addEventListener('click', function () { query = ''; search.value = ''; render(); search.focus(); }); if (global.ResizeObserver) { resizeObserver = new global.ResizeObserver(function () { var next = columns(); if (next !== lastColumnCount) render(); }); resizeObserver.observe(root.querySelector('[data-avatar-grid]')); } return refresh().then(function (value) { renderImportState(); return value; }); }
@@ -14526,7 +14526,7 @@
             });
             return sheet;
         }
-        return { mount: mount, unmount: unmount, refresh: refresh, importFiles: importFiles, getImportState: getImportState, exportAsset: exportAsset, exportBatchSelection: exportBatchSelection, pickFiles: function () { if (!mounted || !fileInput || importing || exporting || mutationBlocked()) return false; fileInput.click(); return true; }, beginNativeEdit: beginNativeEdit, openNativeMenu: openNativeMenu, openAssetMenu: openAssetMenu, viewAsset: viewAsset, toggleSearch: toggleSearch, toggleSort: toggleSort, enterBatchMode: enterBatchMode, toggleBatchMode: toggleBatchMode, openCategoryManager: openCategoryManager, getNativeStatus: function (kind) { kind = kind === 'user' ? 'user' : 'character'; var cap = runtime.getCapabilities()[kind] || {}; return { available: !!cap.available, reason: cap.reason || '', label: cap.target && cap.target.label || '', targetKey: cap.target && cap.target.key || '' }; }, getState: function () { var state = data(); return { mounted: mounted, count: assets.length, importing: importing, importTask: getImportState(), exporting: exporting, batchMode: batchMode, categories: library.ensureState(state).categories.length, series: Object.keys(library.ensureState(state).series.groups).length }; } };
+        return { mount: mount, unmount: unmount, refresh: refresh, importFiles: importFiles, getImportState: getImportState, exportAsset: exportAsset, exportBatchSelection: exportBatchSelection, pickFiles: function () { if (!mounted || !fileInput || importing || exporting || mutationBlocked()) return false; fileInput.click(); return true; }, beginNativeEdit: beginNativeEdit, openNativeMenu: openNativeMenu, openAssetMenu: openAssetMenu, viewAsset: viewAsset, toggleSearch: toggleSearch, toggleSort: toggleSort, enterBatchMode: enterBatchMode, toggleBatchMode: toggleBatchMode, openCategoryManager: openCategoryManager, getNativeStatus: function (kind) { kind = kind === 'user' ? 'user' : 'character'; var cap = runtime.getCapabilities()[kind] || {}; return { available: !!cap.available, reason: cap.reason || '', label: cap.target && cap.target.label || '', targetKey: cap.target && cap.target.key || '' }; }, getState: function () { var state = data(); return { mounted: mounted, count: assets.length, importing: importing, importTask: getImportState(), exporting: exporting, batchMode: batchMode, batchSelected: batchSelected.size, categories: library.ensureState(state).categories.length, series: Object.keys(library.ensureState(state).series.groups).length }; } };
     };
     ns.avatarPage = { buildPageHtml: buildPageHtml, styleText: styleText };
 })(window);
@@ -16161,7 +16161,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:d84e23abfdb31af5ac814327d722acff058996712cceeda27133f1eed7323f0f */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:4f142aae6a063b993a68dae61fe29277b06ac283047d595760e16b1ccdaba733 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16358,6 +16358,7 @@
     var stThemeList = [];
     var stThemeListReliable = false;
     var themeNameConflicts = new Set();
+    var themeNameConflictCounts = Object.create(null);
     var themeListLoadError = '';
     var themeListRevision = 0;
     var metadataRevision = 0;
@@ -16931,11 +16932,16 @@
             counts[name] = (counts[name] || 0) + 1;
             if (counts[name] === 1) normalized.push(name);
         });
-        themeNameConflicts = new Set(Object.keys(counts).filter(function (name) { return counts[name] > 1; }));
-        (Array.isArray(options.conflictNames) ? options.conflictNames : []).forEach(function (name) {
-            name = typeof name === 'string' ? name.trim() : '';
-            if (name) themeNameConflicts.add(name);
+        themeNameConflictCounts = Object.create(null);
+        Object.keys(counts).forEach(function (name) {
+            if (counts[name] > 1) themeNameConflictCounts[name] = counts[name];
         });
+        Object.keys(options.conflictCounts || {}).forEach(function (sourceName) {
+            var name = typeof sourceName === 'string' ? sourceName.trim() : '';
+            var count = Number(options.conflictCounts[sourceName]);
+            if (name && Number.isFinite(count) && count > 1) themeNameConflictCounts[name] = count;
+        });
+        themeNameConflicts = new Set(Object.keys(themeNameConflictCounts));
         themeListLoadError = typeof options.error === 'string' ? options.error : '';
         stThemeList = normalized;
         stThemeListReliable = reliable === true && themeNameConflicts.size === 0;
@@ -16951,10 +16957,16 @@
         return Array.from(new Set(names.filter(function (name) { return themeNameConflicts.has(name); })));
     }
 
+    function formatThemeNameConflicts(names) {
+        return (names || Array.from(themeNameConflicts)).map(function (name) {
+            return name + '（' + (themeNameConflictCounts[name] || 2) + '份）';
+        }).join('、');
+    }
+
     function blockAmbiguousThemeItem(item) {
         var names = getAmbiguousThemeNames(item);
         if (!names.length) return false;
-        toast('检测到同名主题「' + names.join('、') + '」，无法安全确定对应文件；已禁用编辑和删除', true);
+        toast('酒馆主题库存中「' + formatThemeNameConflicts(names) + '」各自重复，无法安全确定对应文件；已禁用编辑和删除', true);
         return true;
     }
 
@@ -17132,14 +17144,15 @@
         function done(list, method, reliable, diagnostics) {
             if (found) return;
             found = true;
-            var conflictNames = (Array.isArray(diagnostics) ? diagnostics : []).filter(function (item) {
-                return item && item.code === 'inventory-name-duplicate';
-            }).map(function (item) { return item.name; });
-            setThemeList(list, reliable, { conflictNames: conflictNames });
+            var conflictCounts = Object.create(null);
+            (Array.isArray(diagnostics) ? diagnostics : []).forEach(function (item) {
+                if (item && item.code === 'inventory-name-duplicate' && typeof item.name === 'string') conflictCounts[item.name] = item.count;
+            });
+            setThemeList(list, reliable, { conflictCounts: conflictCounts });
             console.log('[美化管理] 主题列表获取成功:', method, stThemeList.length + '个');
             if (themeNameConflicts.size > 0) {
                 console.warn('[美化管理] SillyTavern 主题库存存在同名歧义，编辑和删除已禁用:', Array.from(themeNameConflicts));
-                toast('检测到同名主题：' + Array.from(themeNameConflicts).join('、') + '；可以切换，但编辑和删除已禁用', true);
+                toast('酒馆主题库存中，以下每个名称都各出现多份：' + formatThemeNameConflicts() + '；可以切换，编辑和删除已禁用', true);
             }
             if (cb) cb(stThemeList.slice());
         }
@@ -20678,11 +20691,11 @@
         var conflictNames = getAmbiguousThemeNames(item);
         var inventoryConflict = conflictNames.length > 0;
         var tagText = inventoryConflict
-            ? '同名冲突 · 禁止编辑删除'
+            ? '酒馆库存重复 ' + (themeNameConflictCounts[conflictNames[0]] || 2) + ' 份 · 禁止编辑删除'
             : ((meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || ''));
 
         return '<div class="tm-card' + (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + (inventoryConflict ? ' inventory-conflict' : '') + '" data-key="' + esc(item.key) + '"' +
-            (inventoryConflict ? ' title="同名主题可切换，但无法安全编辑或删除"' : '') + '>' +
+            (inventoryConflict ? ' title="酒馆主题库存中这个名称出现多份；可切换，但无法安全编辑或删除"' : '') + '>' +
             '<div class="tm-card-img">' + checkBox + imgContent + badge + starBadge + freqBadge + menuBtn + '</div>' +
             '<div class="tm-card-info"><div class="tm-card-name">' + esc(item.name) + '</div>' +
             (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
@@ -21165,8 +21178,8 @@
         var units = alignSeriesUnitsForGrid(layout.units, metrics.columns);
         var list = layout.displayedItems;
         var inventoryWarning = themeNameConflicts.size > 0
-            ? '<div class="tm-inventory-warning"><i class="fa-solid fa-triangle-exclamation"></i><span>检测到同名主题：' +
-                esc(Array.from(themeNameConflicts).join('、')) + '。管理器已合并显示；可以按 SillyTavern 原生顺序切换，但编辑和删除仍保持禁用。</span></div>'
+            ? '<div class="tm-inventory-warning"><i class="fa-solid fa-triangle-exclamation"></i><span>酒馆主题库存中，以下每个名称都各出现多份：' +
+                esc(formatThemeNameConflicts()) + '。常见原因是复制或重命名了主题 JSON，但文件内 name 没有改变。管理器已合并卡片显示；可以切换，请在酒馆主题目录清理重复文件后再编辑或删除。</span></div>'
             : '';
         syncSeriesCardWidth(area, d.gridCardSize);
 
