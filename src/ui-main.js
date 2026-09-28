@@ -1247,6 +1247,9 @@
                         }
                     });
                     powerUserModule.power_user.theme = theme.name;
+                    if (Object.prototype.hasOwnProperty.call(powerUserModule.power_user, 'theme_fallback')) {
+                        powerUserModule.power_user.theme_fallback = theme.name;
+                    }
                 }
                 applyThemeVisuals(theme);
                 if (scriptModule && typeof scriptModule.saveSettingsDebounced === 'function') {
@@ -4953,7 +4956,7 @@
                 return;
             }
             var themeName = getItemDisplayTheme(d, item);
-            applyManualTheme(themeName, function (ok, reason) {
+            applyManualTheme(themeName, function (ok, reason, error) {
                 if (ok) {
                     var dd = load();
                     var refreshedItem = getLogicalItem(item.key, dd);
@@ -4968,7 +4971,7 @@
                     updateBtn();
                 } else if (reason !== 'superseded') {
                     if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
-                    else if (reason === 'load-failed') toast('主题加载失败，已保留当前主题', true);
+                    else if (reason === 'load-failed') toast('主题加载失败：' + (error && error.message ? error.message : '已保留当前主题'), true);
                     else if (reason === 'state-verify-failed') toast('主题状态未能确认切换成功，未切换绑定背景', true);
                     else if (reason === 'verify-failed') toast('主题状态或视觉验证失败，未切换绑定背景', true);
                     else toast('切换失败，请重试', true);
@@ -6619,9 +6622,9 @@
             if (!confirm('删除美化「' + deletingName + '」？\n这会从 SillyTavern 主题列表中真实删除，不只是从插件移除。')) return;
             editorSession.invalidate();
             closeSheet(sheet, { force: true });
-            deleteThemeEverywhere(deletingName, function (ok) {
+            deleteThemeEverywhere(deletingName, function (ok, reason) {
                 if (ok) toast('已删除美化');
-                else toast('删除失败', true);
+                else toast('删除失败：' + (reason || '请查看控制台'), true);
             });
         });
 

@@ -727,9 +727,11 @@
             });
 
             function applyAndConfirm(prepared, fn, path) {
-                return Promise.resolve(fn(prepared, requestId, function () {
-                    return isApplyCurrent(requestId);
-                })).then(function (applyResult) {
+                return Promise.resolve().then(function () {
+                    return fn(prepared, requestId, function () {
+                        return isApplyCurrent(requestId);
+                    });
+                }).then(function (applyResult) {
                     if (!isApplyCurrent(requestId)) throw makeError('superseded', '主题切换已被更新请求取代');
                     console.info('[ThemeManager] ST theme apply completed', {
                         requestedTheme: themeName,

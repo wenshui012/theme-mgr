@@ -2919,6 +2919,57 @@ test('newly imported theme falls back from stale native state and keeps the appl
     assert.equal(rollbackCount, 0);
 });
 
+test('native apply synchronous failure uses the verified fallback', async (t) => {
+    const previousDocument = global.document;
+    const previousRaf = global.requestAnimationFrame;
+    t.after(() => {
+        global.document = previousDocument;
+        global.requestAnimationFrame = previousRaf;
+    });
+
+    const cssValues = { '--SmartThemeBodyColor': '#old' };
+    const themeControl = {
+        tagName: 'SELECT',
+        selectedIndex: 0,
+        options: [{ value: 'Old' }, { value: 'New' }],
+    };
+    global.document = {
+        documentElement: { style: { getPropertyValue: (name) => cssValues[name] || '' } },
+        getElementById: (id) => id === 'themes' ? themeControl : null,
+    };
+    global.requestAnimationFrame = (callback) => { callback(); return 1; };
+
+    const powerUser = { theme: 'Old', main_text_color: '#old' };
+    const expected = { name: 'New', main_text_color: '#new' };
+    const runtime = modules.createThemeRuntime({
+        schema,
+        api: { getSettingsInventory: () => Promise.resolve([]), getRawSettingsInventory: () => Promise.resolve([]) },
+        loadPowerUserModule: () => Promise.resolve({ power_user: powerUser }),
+        stateVerifyTimeoutMs: 0,
+        stateVerifyIntervalMs: 0,
+        visualMaxAttempts: 1,
+        visualRetryDelayMs: 0,
+    });
+    runtime.remember(expected);
+    let fallbackCount = 0;
+
+    const result = await runtime.applyThemeAndWait(expected.name, () => {
+        throw new Error('native apply failed synchronously');
+    }, () => {
+        fallbackCount += 1;
+        themeControl.selectedIndex = 1;
+        powerUser.theme = expected.name;
+        powerUser.main_text_color = expected.main_text_color;
+        cssValues['--SmartThemeBodyColor'] = expected.main_text_color;
+    }, null);
+
+    assert.equal(fallbackCount, 1);
+    assert.equal(result.fallbackUsed, true);
+    assert.equal(result.nativeError.message, 'native apply failed synchronously');
+    assert.equal(result.stateVerification.ok, true);
+    assert.equal(result.visualVerification.ok, true);
+});
+
 test('visual verification waits for frames and retries a slow CSS update', async (t) => {
     const previousDocument = global.document;
     const previousRaf = global.requestAnimationFrame;

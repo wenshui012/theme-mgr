@@ -575,7 +575,7 @@
 })(window);
 /* END MODULE 03/29: src/update-manager.js */
 
-/* BEGIN MODULE 04/29: src/theme-runtime.js | sha256:66b2e98d917a4c45237c09ea654ccaac900fcc41b1cba433269b32e466973aee */
+/* BEGIN MODULE 04/29: src/theme-runtime.js | sha256:8cedec66ce712532a90ff84b79954c483aa31796dc4f09dcfd268e655e5bd280 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -1305,9 +1305,11 @@
             });
 
             function applyAndConfirm(prepared, fn, path) {
-                return Promise.resolve(fn(prepared, requestId, function () {
-                    return isApplyCurrent(requestId);
-                })).then(function (applyResult) {
+                return Promise.resolve().then(function () {
+                    return fn(prepared, requestId, function () {
+                        return isApplyCurrent(requestId);
+                    });
+                }).then(function (applyResult) {
                     if (!isApplyCurrent(requestId)) throw makeError('superseded', '主题切换已被更新请求取代');
                     console.info('[ThemeManager] ST theme apply completed', {
                         requestedTheme: themeName,
@@ -16142,7 +16144,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:74999de44cf282256999c5f66349ab074f629b36b782e83137ed06e74638ca83 */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:ab19a8c4db6bbf87460ed9ba8ea3e2480dd1b6335fb6e4a62b167ce27c25393e */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -17392,6 +17394,9 @@
                         }
                     });
                     powerUserModule.power_user.theme = theme.name;
+                    if (Object.prototype.hasOwnProperty.call(powerUserModule.power_user, 'theme_fallback')) {
+                        powerUserModule.power_user.theme_fallback = theme.name;
+                    }
                 }
                 applyThemeVisuals(theme);
                 if (scriptModule && typeof scriptModule.saveSettingsDebounced === 'function') {
@@ -21098,7 +21103,7 @@
                 return;
             }
             var themeName = getItemDisplayTheme(d, item);
-            applyManualTheme(themeName, function (ok, reason) {
+            applyManualTheme(themeName, function (ok, reason, error) {
                 if (ok) {
                     var dd = load();
                     var refreshedItem = getLogicalItem(item.key, dd);
@@ -21113,7 +21118,7 @@
                     updateBtn();
                 } else if (reason !== 'superseded') {
                     if (reason === 'incomplete') toast('主题尚未完整加载，不能安全切换', true);
-                    else if (reason === 'load-failed') toast('主题加载失败，已保留当前主题', true);
+                    else if (reason === 'load-failed') toast('主题加载失败：' + (error && error.message ? error.message : '已保留当前主题'), true);
                     else if (reason === 'state-verify-failed') toast('主题状态未能确认切换成功，未切换绑定背景', true);
                     else if (reason === 'verify-failed') toast('主题状态或视觉验证失败，未切换绑定背景', true);
                     else toast('切换失败，请重试', true);
@@ -22764,9 +22769,9 @@
             if (!confirm('删除美化「' + deletingName + '」？\n这会从 SillyTavern 主题列表中真实删除，不只是从插件移除。')) return;
             editorSession.invalidate();
             closeSheet(sheet, { force: true });
-            deleteThemeEverywhere(deletingName, function (ok) {
+            deleteThemeEverywhere(deletingName, function (ok, reason) {
                 if (ok) toast('已删除美化');
-                else toast('删除失败', true);
+                else toast('删除失败：' + (reason || '请查看控制台'), true);
             });
         });
 
