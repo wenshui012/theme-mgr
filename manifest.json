@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v4.7.0",
-  "version": "4.7.0",
+  "display_name": "美化管理 v4.7.1",
+  "version": "4.7.1",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v4.7.0: 优化 TT/iOS 兼容性，新增无图浏览、网格设置与头像管理控制"
+  "description": "v4.7.1: 修复头像管理分类栏在移动端被纵向拉伸的问题"
 }
