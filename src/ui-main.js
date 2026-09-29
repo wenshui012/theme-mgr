@@ -2621,7 +2621,6 @@
     var sortOpen = false;
     var categoryPanelOpen = false;
     var categoryCreateOpen = false;
-    var gridSizeSaveTimer = null;
     var expandedSeriesId = '';
     var seriesScrollPositions = Object.create(null);
     var seriesResizeBound = false;
@@ -2706,11 +2705,6 @@
         else overlay.style.removeProperty('--tm-grid-aspect');
         overlay.classList.toggle('tm-compact-card-info', data.simplifyGridText === true);
         overlay.classList.toggle('tm-no-image-mode', data.noImageMode === true);
-        var button = overlay.querySelector('#tm-grid-aspect');
-        if (button) {
-            button.innerHTML = '<i class="fa-solid fa-crop-simple"></i><span>比例</span><strong>' + esc(option.label) + '</strong>';
-            button.title = '预览图片比例：' + option.label;
-        }
     }
 
     function applyGridCardSize(size) {
@@ -2769,24 +2763,6 @@
             seriesGridResizeObserver = new ResizeObserver(scheduleSeriesResizeCheck);
             seriesGridResizeObserver.observe(area);
         }
-    }
-
-    function adjustGridCardSize(delta) {
-        var d = load();
-        var current = normalizeGridCardSize(d.gridCardSize || 108);
-        var next = normalizeGridCardSize(current + delta);
-        if (next === current) {
-            applyGridCardSize(next);
-            return;
-        }
-        d.gridCardSize = next;
-        applyGridCardSize(next);
-        renderGrid();
-        if (gridSizeSaveTimer) clearTimeout(gridSizeSaveTimer);
-        gridSizeSaveTimer = setTimeout(function () {
-            gridSizeSaveTimer = null;
-            save(load());
-        }, 120);
     }
 
     var MANAGER_APPEARANCE_VARS = [
@@ -4080,12 +4056,6 @@
             '<button class="tm-sort-chip" data-sort="day-night"><i class="fa-solid fa-circle-half-stroke"></i> 日夜美化优先</button>' +
             '<button class="tm-sort-chip" data-sort="import-asc">导入时间正序</button>' +
             '<button class="tm-sort-chip" data-sort="import-desc">导入时间倒序</button>' +
-            '<span class="tm-sort-divider"></span>' +
-            '<span class="tm-grid-size-label">网格</span>' +
-            '<button class="tm-grid-size-btn" id="tm-grid-zoom-out" title="缩小卡片"><i class="fa-solid fa-minus"></i></button>' +
-            '<button class="tm-grid-size-btn" id="tm-grid-zoom-in" title="放大卡片"><i class="fa-solid fa-plus"></i></button>' +
-            '<span class="tm-sort-divider"></span>' +
-            '<button type="button" class="tm-grid-aspect-btn" id="tm-grid-aspect" title="选择预览图片比例"><i class="fa-solid fa-crop-simple"></i><span>比例</span><strong>自动</strong></button>' +
             '</div>' +
             '<div class="tm-category-nav" id="tm-category-nav" style="display:none">' +
             '<div class="tm-catbar" id="tm-catbar"></div>' +
@@ -4268,28 +4238,6 @@
                 renderGrid();
             });
         });
-        ov.querySelector('#tm-grid-zoom-out').addEventListener('click', function () {
-            adjustGridCardSize(-12);
-        });
-        ov.querySelector('#tm-grid-zoom-in').addEventListener('click', function () {
-            adjustGridCardSize(12);
-        });
-        ov.querySelector('#tm-grid-aspect').addEventListener('click', function () {
-            openChoicePicker({
-                title: '预览图片比例',
-                icon: 'fa-crop-simple',
-                hint: '固定比例只改变网格展示，不修改截图或裁切数据。',
-                items: GRID_ASPECT_OPTIONS,
-                selected: load().gridAspectRatio,
-                onSelect: function (value) {
-                    var dd = load();
-                    dd.gridAspectRatio = getGridAspectOption(value).value;
-                    save(dd);
-                    syncGridDisplayPreferences(ov, dd);
-                },
-            });
-        });
-
         // 底栏
         ov.querySelector('#tm-batch-toggle').addEventListener('click', function () {
             if (batchDeleting) return;
@@ -7446,11 +7394,18 @@
             '<div class="tm-field"><label>夜间开始</label><input type="time" id="tm-day-night-night-start" value="' + esc(dayNightPreference.nightStart) + '" /></div>' +
             '</div><div class="tm-hint">使用设备本地时间，支持跨零点时间段。</div></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>管理器明暗跟随日夜切换</span><small>固定外观时，管理器会按上方规则切换浅色与深色</small></label><input type="checkbox" class="tm-chk" id="tm-follow-day-night-appearance" ' + (d.followDayNightAppearance === true ? 'checked' : '') + ' /></div>';
+        var gridAspectOptionsHtml = GRID_ASPECT_OPTIONS.map(function (option) {
+            return '<option value="' + esc(option.value) + '"' + (d.gridAspectRatio === option.value ? ' selected' : '') + '>' + esc(option.label) + '</option>';
+        }).join('');
         var interfaceSettingsHtml =
+            '<div class="tm-field"><label>网格大小：<span id="tm-grid-card-size-value">' + normalizeGridCardSize(d.gridCardSize) + 'px</span></label>' +
+            '<input type="range" class="tm-range" id="tm-grid-card-size" min="84" max="220" step="4" value="' + normalizeGridCardSize(d.gridCardSize) + '" /></div>' +
+            '<div class="tm-field"><label>预览图片比例</label><select id="tm-grid-aspect-setting">' + gridAspectOptionsHtml + '</select>' +
+            '<div class="tm-hint">固定比例只改变网格展示，不修改截图或裁切数据；自动会保留当前美化的预览形状。</div></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>' +
-            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>简洁网格文字</span><small>名称和标签取消底纹并居中；不受界面跟随设置影响</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>简洁网格文字</span><small>预览图与名称分开显示，文字取消底纹并居中；不受界面跟随设置影响</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>无图模式</span><small>以文字条目显示美化；系列仍可展开，条目右侧可进入编辑</small></label><input type="checkbox" class="tm-chk" id="tm-no-image-mode" ' + (d.noImageMode === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>隐藏标题与按钮；点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>隐藏系列预览</span><small>系列收起时只显示标题，展开后显示全部美化</small></label><input type="checkbox" class="tm-chk" id="tm-hide-series-previews" ' + (d.hideSeriesPreviews === true ? 'checked' : '') + ' /></div>' +
@@ -7601,6 +7556,29 @@
         var autoHideHeaderInput = sheet.querySelector('#tm-auto-hide-header');
         var hideSeriesPreviewsInput = sheet.querySelector('#tm-hide-series-previews');
         var previewImageQualityInput = sheet.querySelector('#tm-preview-image-quality');
+        var gridCardSizeInput = sheet.querySelector('#tm-grid-card-size');
+        var gridCardSizeValue = sheet.querySelector('#tm-grid-card-size-value');
+        var gridAspectInput = sheet.querySelector('#tm-grid-aspect-setting');
+        gridCardSizeInput.addEventListener('input', function () {
+            var next = normalizeGridCardSize(this.value);
+            gridCardSizeValue.textContent = next + 'px';
+            applyGridCardSize(next);
+        });
+        gridCardSizeInput.addEventListener('change', function () {
+            var dd = load();
+            dd.gridCardSize = normalizeGridCardSize(this.value);
+            this.value = dd.gridCardSize;
+            gridCardSizeValue.textContent = dd.gridCardSize + 'px';
+            save(dd);
+            renderGrid();
+        });
+        gridAspectInput.addEventListener('change', function () {
+            var dd = load();
+            dd.gridAspectRatio = getGridAspectOption(this.value).value;
+            this.value = dd.gridAspectRatio;
+            save(dd);
+            syncGridDisplayPreferences(document.getElementById('tm-overlay'), dd);
+        });
         previewImageQualityInput.addEventListener('change', function () {
             var dd = load();
             dd.previewImageQuality = this.value === 'quality' ? 'quality' : 'performance';

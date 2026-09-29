@@ -105,6 +105,7 @@ test('category navigation uses an expandable panel without a dedicated day-night
     assert.match(categoryNavigation, /id="tm-category-panel-sort"/);
     assert.match(categoryNavigation, /openCatsSheet\(\)/);
     assert.match(categoryNavigation, /categoryPanelOpen = false/);
+    assert.match(styles, /\.tm-category-expand\{width:38px;flex:0 0 38px;/);
 });
 
 test('day-night priority is a stable sort mode instead of a category shortcut', () => {
@@ -115,12 +116,16 @@ test('day-night priority is a stable sort mode instead of a category shortcut', 
 });
 
 test('grid aspect presets persist independently while auto preserves theme shape behavior', () => {
+    const popup = source.slice(source.indexOf('var themePageHtml'), source.indexOf('var avatarManagerEnabled'));
+    const settings = source.slice(source.indexOf('function openSettingsSheet'), source.indexOf('// ── 分类管理'));
     assert.match(source, /gridAspectRatio: 'auto'/);
     assert.match(source, /value: '4-3'/);
     assert.match(source, /value: '1-1'/);
     assert.match(source, /value: '3-4'/);
     assert.match(source, /value: '2-3'/);
-    assert.match(source, /id="tm-grid-aspect"/);
+    assert.match(settings, /id="tm-grid-aspect-setting"/);
+    assert.match(settings, /id="tm-grid-card-size"/);
+    assert.doesNotMatch(popup, /tm-grid-zoom|tm-grid-aspect/);
     assert.match(source, /overlay\.classList\.toggle\('tm-grid-aspect-fixed', option\.value !== 'auto'\)/);
     assert.match(styles, /\.tm-card-img\{[^}]*aspect-ratio:var\(--tm-grid-aspect,4 \/ 3\)/);
     assert.match(styles, /\.tm-overlay\.tm-grid-aspect-fixed \.tm-card-img\{aspect-ratio:var\(--tm-grid-aspect,4 \/ 3\) !important;/);
@@ -135,6 +140,7 @@ test('compact grid text is a general display preference', () => {
     assert.doesNotMatch(followState, /simplifyGridTextInput\.disabled/);
     assert.match(source, /overlay\.classList\.toggle\('tm-compact-card-info', data\.simplifyGridText === true\)/);
     assert.match(styles, /\.tm-compact-card-info \.tm-card-info/);
+    assert.match(styles, /\.tm-compact-card-info:not\(\.tm-no-image-mode\) \.tm-card\{[^}]*overflow:visible !important;[^}]*background:transparent !important;/);
     assert.doesNotMatch(styles, /\.tm-follow\.tm-compact-card-info/);
 });
 
@@ -150,6 +156,8 @@ test('no-image mode builds text entries without creating or resolving preview im
     assert.doesNotMatch(textBranch, /<img/);
     assert.match(source, /if \(d\.noImageMode === true\) \{\s*if \(gridImageLoader\) gridImageLoader\.disconnect\(\);\s*\} else \{\s*resetGridImageLoader/);
     assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-grid\{grid-template-columns:minmax\(0,1fr\);gap:0;\}/);
+    assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-card-text-icon\{width:18px;[^}]*background:transparent;/);
+    assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-card-text \.tm-card-menu\{[^}]*width:44px;height:52px;border-left:/);
 });
 
 test('no-image series preserve the existing series header and item interactions', () => {

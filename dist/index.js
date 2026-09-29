@@ -15040,7 +15040,7 @@
 })(window);
 /* END MODULE 24/29: src/app-shell.js */
 
-/* BEGIN MODULE 25/29: src/styles.js | sha256:b7157a5841f8f59cfc105667fdb06ac4ff30b4fe10a749ffaa6b41860e5ac153 */
+/* BEGIN MODULE 25/29: src/styles.js | sha256:b731da3d50e7f463baad35b717f18bb1a6ed4e7eaf34fe60fd155661a1f30dbd */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -15128,7 +15128,7 @@
             '.tm-catbar{display:flex;min-width:0;flex:1;gap:6px;padding:8px 8px 8px 15px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none;cursor:grab;}',
             '.tm-catbar.dragging{cursor:grabbing;}',
             '.tm-catbar::-webkit-scrollbar{display:none;}',
-            '.tm-category-expand{width:46px;flex:0 0 46px;border:0;border-left:1px solid var(--tm-border,rgba(127,127,127,.08));background:color-mix(in srgb,var(--tm-head-bg,transparent) 82%,transparent);color:inherit;cursor:pointer;display:grid;place-items:center;}',
+            '.tm-category-expand{width:38px;flex:0 0 38px;border:0;border-left:1px solid var(--tm-border,rgba(127,127,127,.08));background:color-mix(in srgb,var(--tm-head-bg,transparent) 82%,transparent);color:inherit;cursor:pointer;display:grid;place-items:center;}',
             '.tm-category-expand:hover{color:var(--SmartThemeQuoteColor,#7c6daf);background:var(--tm-control-hover,rgba(127,127,127,.1));}',
             '.tm-category-panel{flex-shrink:0;max-height:min(48vh,420px);overflow-y:auto;overscroll-behavior:contain;padding:12px 15px 14px;border-bottom:1px solid var(--tm-border,rgba(127,127,127,.1));background:color-mix(in srgb,var(--tm-head-bg,transparent) 88%,var(--tm-bg2,transparent));box-shadow:0 8px 18px rgba(0,0,0,.08);}',
             '.tm-category-panel[hidden]{display:none!important;}',
@@ -15151,18 +15151,12 @@
             '.tm-sort-chip:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-sort-chip.on{background:var(--SmartThemeQuoteColor,#7c6daf);color:var(--tm-accent-text,#fff);border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-sort-divider{width:1px;height:18px;background:rgba(127,127,127,.18);flex-shrink:0;margin:0 2px;}',
-            '.tm-grid-size-label{font-size:.72em;opacity:.4;flex-shrink:0;white-space:nowrap;}',
-            '.tm-grid-size-btn{width:26px;height:26px;border-radius:var(--tm-control-radius,50%);border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));background:var(--tm-control-bg,rgba(127,127,127,.06));color:inherit;box-shadow:var(--tm-control-shadow,none);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.72em;transition:.15s;flex-shrink:0;}',
-            '.tm-grid-size-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.12);}',
-            '.tm-grid-aspect-btn{height:28px;display:flex;align-items:center;gap:5px;padding:0 9px;border-radius:var(--tm-control-radius,14px);border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));background:var(--tm-control-bg,rgba(127,127,127,.06));color:inherit;box-shadow:var(--tm-control-shadow,none);font:inherit;font-size:.72em;white-space:nowrap;cursor:pointer;transition:.15s;flex-shrink:0;}',
-            '.tm-grid-aspect-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.12);}',
-            '.tm-grid-aspect-btn strong{font-weight:650;color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-grid-area{flex:1;overflow-y:auto;padding:12px 12px 8px;}',
             '.tm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--tm-grid-card-min,108px),1fr));gap:9px;}',
             '.tm-series-block{grid-column:1/-1;min-width:0;position:relative;margin:2px 0 3px;padding:0;background:transparent;box-shadow:none;overflow:visible;}',
             '.tm-series-head{height:44px;display:flex;align-items:center;gap:5px;padding-left:4px;border-bottom:1px solid rgba(127,127,127,.08);}',
             '.tm-series-manage{min-width:0;flex:1;height:100%;display:flex;align-items:center;gap:7px;padding:0 8px;border:0;background:transparent;color:inherit;font-family:inherit;text-align:left;cursor:pointer;}',
-            '.tm-series-manage>i{color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.62;flex-shrink:0;}',
+            '.tm-series-manage>i{width:18px;text-align:center;color:var(--SmartThemeQuoteColor,#7c6daf);opacity:.62;flex-shrink:0;}',
             '.tm-series-manage>span{min-width:0;font-size:.84em;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
             '.tm-series-manage>small{font-size:.68em;opacity:.45;white-space:nowrap;flex-shrink:0;}',
             '.tm-series-manage:hover>span{color:var(--SmartThemeQuoteColor,#7c6daf);}',
@@ -15546,8 +15540,11 @@
             '.tm-follow.tm-follow-preview-shape .tm-card-img,.tm-follow.tm-follow-card-frame .tm-card-img{aspect-ratio:var(--tm-preview-aspect,4 / 3) !important;border-radius:var(--tm-preview-radius,0) !important;border:var(--tm-preview-border-style,1px solid transparent) !important;box-shadow:var(--tm-preview-shadow,none) !important;clip-path:var(--tm-preview-clip-path,none) !important;-webkit-mask-image:var(--tm-preview-mask-image,none) !important;mask-image:var(--tm-preview-mask-image,none) !important;-webkit-mask-size:var(--tm-preview-mask-size,cover) !important;mask-size:var(--tm-preview-mask-size,cover) !important;-webkit-mask-position:var(--tm-preview-mask-position,center) !important;mask-position:var(--tm-preview-mask-position,center) !important;-webkit-mask-repeat:var(--tm-preview-mask-repeat,no-repeat) !important;mask-repeat:var(--tm-preview-mask-repeat,no-repeat) !important;}',
             '.tm-overlay.tm-grid-aspect-fixed .tm-card-img{aspect-ratio:var(--tm-grid-aspect,4 / 3) !important;}',
             '.tm-follow.tm-follow-grid .tm-card-info{border-radius:var(--tm-card-radius,0) !important;background:var(--tm-card-bg,rgba(127,127,127,.08)) !important;}',
+            '.tm-compact-card-info:not(.tm-no-image-mode) .tm-card{border:0 solid transparent !important;border-radius:0 !important;overflow:visible !important;background:transparent !important;box-shadow:none !important;backdrop-filter:none !important;}',
+            '.tm-compact-card-info:not(.tm-no-image-mode) .tm-card:hover{box-shadow:none !important;}',
             '.tm-compact-card-info .tm-card-info{background:transparent !important;border-radius:0 !important;text-align:center !important;padding:6px 2px !important;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;}',
             '.tm-compact-card-info .tm-card-name,.tm-compact-card-info .tm-card-tag{width:100%;text-align:center;}',
+            '.tm-compact-card-info:not(.tm-no-image-mode) .tm-card.on .tm-card-img,.tm-compact-card-info:not(.tm-no-image-mode) .tm-card.batch-sel .tm-card-img{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf) !important;outline-offset:1px;}',
             '.tm-follow.tm-follow-grid .tm-card.on .tm-card-img,.tm-follow.tm-follow-grid .tm-card.batch-sel .tm-card-img{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf) !important;outline-offset:1px;}',
             '.tm-follow.tm-follow-card-frame .tm-card-img{background:transparent !important;}',
             '.tm-follow.tm-follow-card-frame.tm-card-frame-blended .tm-card-img{background:var(--tm-card-bg,rgba(127,127,127,.08)) !important;}',
@@ -15560,26 +15557,27 @@
             '.tm-follow.tm-follow-card-frame .tm-card.no-img .tm-card-img::before{opacity:0 !important;}',
             '.tm-follow .tm-head,.tm-follow .tm-bottombar{backdrop-filter:var(--tm-panel-blur,none) !important;box-shadow:var(--tm-panel-shadow,none) !important;}',
             '.tm-follow .tm-sheet{background:var(--tm-bg2,var(--SmartThemeBackgroundColor,#1a1a1e)) !important;border-radius:var(--tm-panel-radius,18px) var(--tm-panel-radius,18px) 0 0 !important;box-shadow:var(--tm-panel-shadow,none) !important;backdrop-filter:var(--tm-panel-blur,none) !important;}',
-            '.tm-follow .tm-icon-btn,.tm-follow .tm-catbtn,.tm-follow .tm-sort-chip,.tm-follow .tm-grid-size-btn,.tm-follow .tm-grid-aspect-btn,.tm-follow .tm-batch-btn,.tm-follow .tm-bottom-btn,.tm-follow .tm-card-menu,.tm-follow .tm-search-inp,.tm-follow .tm-field input[type=text],.tm-follow .tm-field select,.tm-follow .tm-field textarea{border-radius:var(--tm-control-radius,8px) !important;box-shadow:var(--tm-control-shadow,none) !important;}',
-            '.tm-follow .tm-catbtn,.tm-follow .tm-sort-chip,.tm-follow .tm-grid-size-btn,.tm-follow .tm-grid-aspect-btn,.tm-follow .tm-batch-btn,.tm-follow .tm-bottom-btn,.tm-follow .tm-search-inp,.tm-follow .tm-field input[type=text],.tm-follow .tm-field select,.tm-follow .tm-field textarea{border:var(--tm-control-border-style,1px solid transparent) !important;}',
+            '.tm-follow .tm-icon-btn,.tm-follow .tm-catbtn,.tm-follow .tm-sort-chip,.tm-follow .tm-batch-btn,.tm-follow .tm-bottom-btn,.tm-follow .tm-card-menu,.tm-follow .tm-search-inp,.tm-follow .tm-field input[type=text],.tm-follow .tm-field select,.tm-follow .tm-field textarea{border-radius:var(--tm-control-radius,8px) !important;box-shadow:var(--tm-control-shadow,none) !important;}',
+            '.tm-follow .tm-catbtn,.tm-follow .tm-sort-chip,.tm-follow .tm-batch-btn,.tm-follow .tm-bottom-btn,.tm-follow .tm-search-inp,.tm-follow .tm-field input[type=text],.tm-follow .tm-field select,.tm-follow .tm-field textarea{border:var(--tm-control-border-style,1px solid transparent) !important;}',
             '.tm-follow .tm-catbtn.on,.tm-follow .tm-sort-chip.on,.tm-follow .tm-bottom-btn.on{background:var(--SmartThemeQuoteColor,#7c6daf) !important;border-color:var(--SmartThemeQuoteColor,#7c6daf) !important;color:var(--tm-accent-text,#fff) !important;}',
-            '.tm-follow .tm-catbtn:hover,.tm-follow .tm-sort-chip:hover,.tm-follow .tm-grid-size-btn:hover,.tm-follow .tm-grid-aspect-btn:hover,.tm-follow .tm-batch-btn:hover,.tm-follow .tm-bottom-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf) !important;}',
+            '.tm-follow .tm-catbtn:hover,.tm-follow .tm-sort-chip:hover,.tm-follow .tm-batch-btn:hover,.tm-follow .tm-bottom-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf) !important;}',
             '.tm-overlay.tm-no-image-mode .tm-grid{grid-template-columns:minmax(0,1fr);gap:0;}',
-            '.tm-overlay.tm-no-image-mode .tm-card.tm-card-text{min-width:0;min-height:52px;display:flex !important;flex-direction:row !important;align-items:center;gap:9px;padding:0 5px;border:0 !important;border-bottom:1px solid var(--tm-border,rgba(127,127,127,.1)) !important;border-radius:0 !important;background:transparent !important;box-shadow:none !important;backdrop-filter:none !important;overflow:visible;transform:none !important;}',
+            '.tm-overlay.tm-no-image-mode .tm-card.tm-card-text{min-width:0;min-height:52px;display:flex !important;flex-direction:row !important;align-items:center;gap:0;padding:0;border:0 !important;border-bottom:1px solid var(--tm-border,rgba(127,127,127,.1)) !important;border-radius:0 !important;background:transparent !important;box-shadow:none !important;backdrop-filter:none !important;overflow:visible;transform:none !important;}',
             '.tm-overlay.tm-no-image-mode .tm-card.tm-card-text:hover{background:var(--tm-control-bg,rgba(127,127,127,.06)) !important;}',
             '.tm-overlay.tm-no-image-mode .tm-card.tm-card-text.on{background:var(--tm-control-bg,rgba(127,127,127,.08)) !important;box-shadow:inset 3px 0 0 var(--SmartThemeQuoteColor,#7c6daf) !important;}',
-            '.tm-overlay.tm-no-image-mode .tm-card-text-icon{width:34px;height:34px;display:grid;place-items:center;flex-shrink:0;border-radius:9px;background:var(--tm-control-bg,rgba(127,127,127,.08));color:var(--SmartThemeQuoteColor,#7c6daf);font-size:.82em;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text-icon{width:18px;height:auto;margin-left:13px;margin-right:7px;display:block;flex-shrink:0;border-radius:0;background:transparent;color:var(--SmartThemeQuoteColor,#7c6daf);font-size:.82em;text-align:center;opacity:.62;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-info{min-width:0;min-height:0;flex:1;padding:8px 0 !important;border-radius:0 !important;background:transparent !important;text-align:left !important;display:block !important;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name,.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-tag{width:100%;text-align:left;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name{font-size:.86em;}',
-            '.tm-overlay.tm-no-image-mode .tm-card-text-actions{min-height:44px;display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-shrink:0;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text-actions{min-height:52px;display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-shrink:0;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-on,.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-star,.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-freq{position:static;inset:auto;flex-shrink:0;filter:none;}',
-            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-menu{position:static;inset:auto;width:40px;height:44px;border-left:1px solid var(--tm-border,rgba(127,127,127,.08));border-radius:0;opacity:.82 !important;filter:none;transform:none;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-menu{position:static;inset:auto;width:44px;height:52px;border-left:1px solid var(--tm-border,rgba(127,127,127,.08));border-radius:0;opacity:.82 !important;filter:none;transform:none;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-check{position:static;inset:auto;flex-shrink:0;border-color:var(--tm-control-border,rgba(127,127,127,.35));background:var(--tm-control-bg,rgba(127,127,127,.08));backdrop-filter:none;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-check.checked{background:var(--SmartThemeQuoteColor,#7c6daf);border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-overlay.tm-no-image-mode .tm-card.tm-card-text.batch-sel{background:var(--tm-control-bg,rgba(127,127,127,.08)) !important;box-shadow:inset 3px 0 0 var(--SmartThemeQuoteColor,#7c6daf) !important;}',
             '.tm-overlay.tm-no-image-mode .tm-series-block{margin:0;}',
             '.tm-overlay.tm-no-image-mode .tm-series-head{height:52px;padding-left:5px;}',
+            '.tm-overlay.tm-no-image-mode .tm-series-toggle{width:44px;height:52px;}',
             '.tm-overlay.tm-no-image-mode .tm-series-track{display:grid;grid-auto-flow:row;grid-auto-columns:initial;grid-template-columns:minmax(0,1fr);gap:0;overflow:visible;padding:0 0 0 18px;cursor:default;}',
             '.tm-overlay.tm-no-image-mode .tm-series-block.tm-series-preview-hidden:not(.is-expanded) .tm-series-track{display:none;}',
             '.tm-overlay.tm-no-image-mode .tm-series-block.is-expanded .tm-series-track{grid-template-columns:minmax(0,1fr);padding:0 0 0 18px;}',
@@ -16384,7 +16382,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:c4473183d4229738922a960582e9c6c240aad4f3a6b16ccde75e0cb59074a79f */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:2e6f6ea6fe0f9c7f4dc68c1f86512c9bdb05d70b6c675277cb255b3144beeb13 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -19008,7 +19006,6 @@
     var sortOpen = false;
     var categoryPanelOpen = false;
     var categoryCreateOpen = false;
-    var gridSizeSaveTimer = null;
     var expandedSeriesId = '';
     var seriesScrollPositions = Object.create(null);
     var seriesResizeBound = false;
@@ -19093,11 +19090,6 @@
         else overlay.style.removeProperty('--tm-grid-aspect');
         overlay.classList.toggle('tm-compact-card-info', data.simplifyGridText === true);
         overlay.classList.toggle('tm-no-image-mode', data.noImageMode === true);
-        var button = overlay.querySelector('#tm-grid-aspect');
-        if (button) {
-            button.innerHTML = '<i class="fa-solid fa-crop-simple"></i><span>比例</span><strong>' + esc(option.label) + '</strong>';
-            button.title = '预览图片比例：' + option.label;
-        }
     }
 
     function applyGridCardSize(size) {
@@ -19156,24 +19148,6 @@
             seriesGridResizeObserver = new ResizeObserver(scheduleSeriesResizeCheck);
             seriesGridResizeObserver.observe(area);
         }
-    }
-
-    function adjustGridCardSize(delta) {
-        var d = load();
-        var current = normalizeGridCardSize(d.gridCardSize || 108);
-        var next = normalizeGridCardSize(current + delta);
-        if (next === current) {
-            applyGridCardSize(next);
-            return;
-        }
-        d.gridCardSize = next;
-        applyGridCardSize(next);
-        renderGrid();
-        if (gridSizeSaveTimer) clearTimeout(gridSizeSaveTimer);
-        gridSizeSaveTimer = setTimeout(function () {
-            gridSizeSaveTimer = null;
-            save(load());
-        }, 120);
     }
 
     var MANAGER_APPEARANCE_VARS = [
@@ -20467,12 +20441,6 @@
             '<button class="tm-sort-chip" data-sort="day-night"><i class="fa-solid fa-circle-half-stroke"></i> 日夜美化优先</button>' +
             '<button class="tm-sort-chip" data-sort="import-asc">导入时间正序</button>' +
             '<button class="tm-sort-chip" data-sort="import-desc">导入时间倒序</button>' +
-            '<span class="tm-sort-divider"></span>' +
-            '<span class="tm-grid-size-label">网格</span>' +
-            '<button class="tm-grid-size-btn" id="tm-grid-zoom-out" title="缩小卡片"><i class="fa-solid fa-minus"></i></button>' +
-            '<button class="tm-grid-size-btn" id="tm-grid-zoom-in" title="放大卡片"><i class="fa-solid fa-plus"></i></button>' +
-            '<span class="tm-sort-divider"></span>' +
-            '<button type="button" class="tm-grid-aspect-btn" id="tm-grid-aspect" title="选择预览图片比例"><i class="fa-solid fa-crop-simple"></i><span>比例</span><strong>自动</strong></button>' +
             '</div>' +
             '<div class="tm-category-nav" id="tm-category-nav" style="display:none">' +
             '<div class="tm-catbar" id="tm-catbar"></div>' +
@@ -20655,28 +20623,6 @@
                 renderGrid();
             });
         });
-        ov.querySelector('#tm-grid-zoom-out').addEventListener('click', function () {
-            adjustGridCardSize(-12);
-        });
-        ov.querySelector('#tm-grid-zoom-in').addEventListener('click', function () {
-            adjustGridCardSize(12);
-        });
-        ov.querySelector('#tm-grid-aspect').addEventListener('click', function () {
-            openChoicePicker({
-                title: '预览图片比例',
-                icon: 'fa-crop-simple',
-                hint: '固定比例只改变网格展示，不修改截图或裁切数据。',
-                items: GRID_ASPECT_OPTIONS,
-                selected: load().gridAspectRatio,
-                onSelect: function (value) {
-                    var dd = load();
-                    dd.gridAspectRatio = getGridAspectOption(value).value;
-                    save(dd);
-                    syncGridDisplayPreferences(ov, dd);
-                },
-            });
-        });
-
         // 底栏
         ov.querySelector('#tm-batch-toggle').addEventListener('click', function () {
             if (batchDeleting) return;
@@ -23833,11 +23779,18 @@
             '<div class="tm-field"><label>夜间开始</label><input type="time" id="tm-day-night-night-start" value="' + esc(dayNightPreference.nightStart) + '" /></div>' +
             '</div><div class="tm-hint">使用设备本地时间，支持跨零点时间段。</div></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>管理器明暗跟随日夜切换</span><small>固定外观时，管理器会按上方规则切换浅色与深色</small></label><input type="checkbox" class="tm-chk" id="tm-follow-day-night-appearance" ' + (d.followDayNightAppearance === true ? 'checked' : '') + ' /></div>';
+        var gridAspectOptionsHtml = GRID_ASPECT_OPTIONS.map(function (option) {
+            return '<option value="' + esc(option.value) + '"' + (d.gridAspectRatio === option.value ? ' selected' : '') + '>' + esc(option.label) + '</option>';
+        }).join('');
         var interfaceSettingsHtml =
+            '<div class="tm-field"><label>网格大小：<span id="tm-grid-card-size-value">' + normalizeGridCardSize(d.gridCardSize) + 'px</span></label>' +
+            '<input type="range" class="tm-range" id="tm-grid-card-size" min="84" max="220" step="4" value="' + normalizeGridCardSize(d.gridCardSize) + '" /></div>' +
+            '<div class="tm-field"><label>预览图片比例</label><select id="tm-grid-aspect-setting">' + gridAspectOptionsHtml + '</select>' +
+            '<div class="tm-hint">固定比例只改变网格展示，不修改截图或裁切数据；自动会保留当前美化的预览形状。</div></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>' +
-            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>简洁网格文字</span><small>名称和标签取消底纹并居中；不受界面跟随设置影响</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>简洁网格文字</span><small>预览图与名称分开显示，文字取消底纹并居中；不受界面跟随设置影响</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>无图模式</span><small>以文字条目显示美化；系列仍可展开，条目右侧可进入编辑</small></label><input type="checkbox" class="tm-chk" id="tm-no-image-mode" ' + (d.noImageMode === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>隐藏标题与按钮；点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>隐藏系列预览</span><small>系列收起时只显示标题，展开后显示全部美化</small></label><input type="checkbox" class="tm-chk" id="tm-hide-series-previews" ' + (d.hideSeriesPreviews === true ? 'checked' : '') + ' /></div>' +
@@ -23988,6 +23941,29 @@
         var autoHideHeaderInput = sheet.querySelector('#tm-auto-hide-header');
         var hideSeriesPreviewsInput = sheet.querySelector('#tm-hide-series-previews');
         var previewImageQualityInput = sheet.querySelector('#tm-preview-image-quality');
+        var gridCardSizeInput = sheet.querySelector('#tm-grid-card-size');
+        var gridCardSizeValue = sheet.querySelector('#tm-grid-card-size-value');
+        var gridAspectInput = sheet.querySelector('#tm-grid-aspect-setting');
+        gridCardSizeInput.addEventListener('input', function () {
+            var next = normalizeGridCardSize(this.value);
+            gridCardSizeValue.textContent = next + 'px';
+            applyGridCardSize(next);
+        });
+        gridCardSizeInput.addEventListener('change', function () {
+            var dd = load();
+            dd.gridCardSize = normalizeGridCardSize(this.value);
+            this.value = dd.gridCardSize;
+            gridCardSizeValue.textContent = dd.gridCardSize + 'px';
+            save(dd);
+            renderGrid();
+        });
+        gridAspectInput.addEventListener('change', function () {
+            var dd = load();
+            dd.gridAspectRatio = getGridAspectOption(this.value).value;
+            this.value = dd.gridAspectRatio;
+            save(dd);
+            syncGridDisplayPreferences(document.getElementById('tm-overlay'), dd);
+        });
         previewImageQualityInput.addEventListener('change', function () {
             var dd = load();
             dd.previewImageQuality = this.value === 'quality' ? 'quality' : 'performance';
