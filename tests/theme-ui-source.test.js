@@ -92,8 +92,25 @@ test('theme settings expose common background and collapsed series controls', ()
     assert.match(settings, /左上角切换到头像管理/);
     assert.match(settings, /id="tm-hide-series-previews"/);
     assert.match(settings, /'tm-settings-other', '其他功能'/);
-    assert.match(source, /__day-night__/);
+    assert.match(source, /data-sort="day-night"/);
     assert.match(source, /tm-series-preview-hidden/);
+});
+
+test('category navigation uses an expandable panel without a dedicated day-night filter', () => {
+    const categoryNavigation = source.slice(source.indexOf('function renderCatbar'), source.indexOf('function collectThemeTags'));
+    assert.doesNotMatch(categoryNavigation, /data-c="__day-night__"/);
+    assert.match(source, /id="tm-category-expand"/);
+    assert.match(categoryNavigation, /id="tm-category-panel-new"/);
+    assert.match(categoryNavigation, /id="tm-category-panel-sort"/);
+    assert.match(categoryNavigation, /openCatsSheet\(\)/);
+    assert.match(categoryNavigation, /categoryPanelOpen = false/);
+});
+
+test('day-night priority is a stable sort mode instead of a category shortcut', () => {
+    const sorting = source.slice(source.indexOf('function sortItems'), source.indexOf('function normalizeGridCardSize'));
+    assert.match(sorting, /case 'day-night'/);
+    assert.match(sorting, /Number\(b\.kind === 'pair'\) - Number\(a\.kind === 'pair'\)/);
+    assert.match(source, /data-sort="day-night"/);
 });
 
 test('avatar manager switch owns both runtime startup and manager navigation', () => {

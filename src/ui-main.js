@@ -2615,6 +2615,8 @@
     var searchComposing = false;
     var searchDebounceTimer = null;
     var sortOpen = false;
+    var categoryPanelOpen = false;
+    var categoryCreateOpen = false;
     var gridSizeSaveTimer = null;
     var expandedSeriesId = '';
     var seriesScrollPositions = Object.create(null);
@@ -2643,6 +2645,10 @@
         var sorted = list.slice();
         switch (mode) {
             case 'name': sorted.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); }); break;
+            case 'day-night': sorted.sort(function (a, b) {
+                var pairOrder = Number(b.kind === 'pair') - Number(a.kind === 'pair');
+                return pairOrder || a.name.localeCompare(b.name, 'zh');
+            }); break;
             case 'recent': sorted.sort(function (a, b) { return (getItemMeta(d, b).lastUsed || 0) - (getItemMeta(d, a).lastUsed || 0); }); break;
             case 'freq': sorted.sort(function (a, b) { return (getItemMeta(d, b).useCount || 0) - (getItemMeta(d, a).useCount || 0); }); break;
             case 'starred': sorted.sort(function (a, b) {
@@ -4031,6 +4037,7 @@
         cancelSearchDebounce();
         searchComposing = false;
         batchMode = false; batchSelected.clear(); batchDeleting = false; searchQuery = ''; searchOpen = false; sortOpen = false;
+        categoryPanelOpen = false; categoryCreateOpen = false;
         expandedSeriesId = ''; seriesScrollPositions = Object.create(null); lastSeriesColumnCount = 0;
 
         var ov = document.createElement('div');
@@ -4045,6 +4052,7 @@
             '<button class="tm-sort-chip" data-sort="recent">最近使用</button>' +
             '<button class="tm-sort-chip" data-sort="freq">使用频率</button>' +
             '<button class="tm-sort-chip" data-sort="starred">收藏优先</button>' +
+            '<button class="tm-sort-chip" data-sort="day-night"><i class="fa-solid fa-circle-half-stroke"></i> 日夜美化优先</button>' +
             '<button class="tm-sort-chip" data-sort="import-asc">导入时间正序</button>' +
             '<button class="tm-sort-chip" data-sort="import-desc">导入时间倒序</button>' +
             '<span class="tm-sort-divider"></span>' +
@@ -4052,7 +4060,10 @@
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-out" title="缩小卡片"><i class="fa-solid fa-minus"></i></button>' +
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-in" title="放大卡片"><i class="fa-solid fa-plus"></i></button>' +
             '</div>' +
-            '<div class="tm-catbar" id="tm-catbar" style="display:none"></div>' +
+            '<div class="tm-category-nav" id="tm-category-nav" style="display:none">' +
+            '<div class="tm-catbar" id="tm-catbar"></div>' +
+            '<button type="button" class="tm-category-expand" id="tm-category-expand" aria-expanded="false" aria-controls="tm-category-panel" title="展开全部分类" aria-label="展开全部分类"><i class="fa-solid fa-chevron-down"></i></button>' +
+            '</div><div class="tm-category-panel" id="tm-category-panel" hidden></div>' +
             '<div class="tm-batch-area" id="tm-batch-area"></div>' +
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
         var avatarManagerEnabled = isAvatarManagerEnabled();
@@ -4341,22 +4352,90 @@
     }
 
     function renderCatbar() {
-        var catbar = document.getElementById('tm-catbar'); if (!catbar) return;
+        var nav = document.getElementById('tm-category-nav');
+        var catbar = document.getElementById('tm-catbar');
+        var panel = document.getElementById('tm-category-panel');
+        var expand = document.getElementById('tm-category-expand');
+        if (!nav || !catbar || !panel || !expand) return;
         var d = load();
-        var hasDayNight = buildLibraryView(d).items.some(function (item) { return item.kind === 'pair'; });
-        if (!hasDayNight && curCat === '__day-night__') curCat = '__all__';
-        if (d.categories.length === 0 && !hasDayNight) { catbar.style.display = 'none'; return; }
-        catbar.style.display = '';
+        if (curCat === '__day-night__' || (curCat !== '__all__' && curCat !== '__uncategorized__' && d.categories.indexOf(curCat) === -1)) curCat = '__all__';
+        nav.style.display = '';
         var html = '<button class="tm-catbtn' + (curCat === '__all__' ? ' on' : '') + '" data-c="__all__">全部</button>';
-        if (hasDayNight) html += '<button class="tm-catbtn' + (curCat === '__day-night__' ? ' on' : '') + '" data-c="__day-night__"><i class="fa-solid fa-circle-half-stroke"></i> 日夜美化</button>';
         html += '<button class="tm-catbtn' + (curCat === '__uncategorized__' ? ' on' : '') + '" data-c="__uncategorized__">未分类</button>';
         d.categories.forEach(function (c) {
             html += '<button class="tm-catbtn' + (curCat === c ? ' on' : '') + '" data-c="' + esc(c) + '">' + esc(c) + '</button>';
         });
         catbar.innerHTML = html;
+        function selectCategory(category) {
+            curCat = category;
+            categoryPanelOpen = false;
+            categoryCreateOpen = false;
+            renderCatbar();
+            renderGrid();
+        }
         catbar.querySelectorAll('.tm-catbtn').forEach(function (btn) {
-            btn.addEventListener('click', function () { curCat = btn.dataset.c; renderCatbar(); renderGrid(); });
+            btn.addEventListener('click', function () { selectCategory(btn.dataset.c); });
         });
+        expand.setAttribute('aria-expanded', categoryPanelOpen ? 'true' : 'false');
+        expand.title = categoryPanelOpen ? '收起全部分类' : '展开全部分类';
+        expand.setAttribute('aria-label', expand.title);
+        expand.innerHTML = '<i class="fa-solid fa-chevron-' + (categoryPanelOpen ? 'up' : 'down') + '"></i>';
+        expand.onclick = function () {
+            categoryPanelOpen = !categoryPanelOpen;
+            if (!categoryPanelOpen) categoryCreateOpen = false;
+            renderCatbar();
+        };
+
+        panel.hidden = !categoryPanelOpen;
+        if (!categoryPanelOpen) {
+            panel.innerHTML = '';
+        } else {
+            var panelButtons = '<button class="tm-category-panel-item' + (curCat === '__all__' ? ' on' : '') + '" data-panel-category="__all__">全部</button>' +
+                '<button class="tm-category-panel-item' + (curCat === '__uncategorized__' ? ' on' : '') + '" data-panel-category="__uncategorized__">未分类</button>';
+            d.categories.forEach(function (category) {
+                panelButtons += '<button class="tm-category-panel-item' + (curCat === category ? ' on' : '') + '" data-panel-category="' + esc(category) + '">' + esc(category) + '</button>';
+            });
+            panel.innerHTML = '<div class="tm-category-panel-head"><strong>全部分类</strong><small>选择后自动收起</small></div>' +
+                '<div class="tm-category-panel-grid">' + panelButtons + '</div>' +
+                '<div class="tm-category-panel-actions">' +
+                '<button type="button" class="tm-btn tm-btn-outline" id="tm-category-panel-new"><i class="fa-solid fa-plus"></i> 新建分类</button>' +
+                '<button type="button" class="tm-btn tm-btn-outline" id="tm-category-panel-sort"><i class="fa-solid fa-arrow-down-wide-short"></i> 拖拽排序</button>' +
+                '</div>' +
+                (categoryCreateOpen ? '<div class="tm-category-panel-create"><input type="text" id="tm-category-panel-input" maxlength="40" placeholder="新分类名称…"><button type="button" class="tm-btn tm-btn-safe" id="tm-category-panel-add">添加</button></div>' : '');
+            panel.querySelectorAll('[data-panel-category]').forEach(function (button) {
+                button.addEventListener('click', function () { selectCategory(button.dataset.panelCategory); });
+            });
+            panel.querySelector('#tm-category-panel-new').addEventListener('click', function () {
+                categoryCreateOpen = !categoryCreateOpen;
+                renderCatbar();
+                var input = document.getElementById('tm-category-panel-input');
+                if (input) input.focus();
+            });
+            panel.querySelector('#tm-category-panel-sort').addEventListener('click', function () { openCatsSheet(); });
+            var input = panel.querySelector('#tm-category-panel-input');
+            var add = panel.querySelector('#tm-category-panel-add');
+            if (input && add) {
+                function addCategory() {
+                    var name = input.value.trim();
+                    if (!name) return;
+                    var dd = load();
+                    if (metadataApi.isReservedCategoryName(name)) { toast('该名称为内部保留名称，请使用其他分类名', true); return; }
+                    if (dd.categories.indexOf(name) !== -1) { toast('分类已存在', true); return; }
+                    dd.categories.push(name);
+                    save(dd);
+                    curCat = name;
+                    categoryPanelOpen = false;
+                    categoryCreateOpen = false;
+                    renderCatbar();
+                    renderGrid();
+                    toast('分类「' + name + '」已添加');
+                }
+                add.addEventListener('click', addCategory);
+                input.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') { event.preventDefault(); addCategory(); }
+                });
+            }
+        }
         bindCatbarMouseScroll(catbar);
     }
 
@@ -4613,9 +4692,7 @@
         var unitBySeries = Object.create(null);
         var rawUnits = [];
 
-        var dayNightOnly = cat === '__day-night__';
         sortedItems.forEach(function (item) {
-            if (dayNightOnly && item.kind !== 'pair') return;
             var targetKey = item.kind === 'pair' ? 'pair:' + item.pairId : 'theme:' + item.themeName;
             var seriesId = targetKey ? membership[targetKey] : '';
             var group = seriesId ? groups[seriesId] : null;
@@ -4634,10 +4711,10 @@
 
         var filtered = rawUnits.filter(function (unit) {
             if (unit.type === 'item') {
-                if (!dayNightOnly && !displayCategoryMatches((view.metaByKey[unit.item.key] || {}).category, cat)) return false;
+                if (!displayCategoryMatches((view.metaByKey[unit.item.key] || {}).category, cat)) return false;
                 return itemMatchesSearch(d, unit.item, query);
             }
-            if (!dayNightOnly && !displayCategoryMatches(unit.group.category, cat)) return false;
+            if (!displayCategoryMatches(unit.group.category, cat)) return false;
             if (!query) return true;
             var q = String(query).toLocaleLowerCase();
             return unit.group.name.toLowerCase().indexOf(q) !== -1 || unit.items.some(function (item) {
@@ -4681,7 +4758,7 @@
         return '<section class="tm-series-block' + (expanded ? ' is-expanded' : '') + (previewsHidden ? ' tm-series-preview-hidden' : '') + '" data-series-id="' + esc(group.id) + '">' +
             '<div class="tm-series-head">' +
             '<button type="button" class="tm-series-manage" data-series-id="' + esc(group.id) + '" title="管理系列">' +
-            '<i class="fa-solid fa-layer-group"></i><span>' + esc(group.name) + '</span><small>' + (curCat === '__day-night__' ? unit.items.length : group.members.length) + ' 款</small></button>' +
+            '<i class="fa-solid fa-layer-group"></i><span>' + esc(group.name) + '</span><small>' + group.members.length + ' 款</small></button>' +
             '<button type="button" class="tm-series-toggle" data-series-id="' + esc(group.id) + '" aria-expanded="' + (expanded ? 'true' : 'false') + '" aria-controls="' + esc(controlId) + '" title="' + (expanded ? '收起系列' : '展开全系列') + '">' +
             '<i class="fa-solid fa-chevron-down"></i></button></div>' +
             '<div class="tm-series-track" id="' + esc(controlId) + '">' +

@@ -15040,7 +15040,7 @@
 })(window);
 /* END MODULE 24/29: src/app-shell.js */
 
-/* BEGIN MODULE 25/29: src/styles.js | sha256:aa6670b0c17922214df44a66f8141df34290e0f595db1eceff2b08b21b5619c2 */
+/* BEGIN MODULE 25/29: src/styles.js | sha256:76ca2bbfc063457651d3b27a627888fa8374990aa7b3c296e94319eb17eff8f1 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -15124,9 +15124,23 @@
             '.tm-search-inp:focus{outline:none;border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-search-clear{background:none;border:none;color:inherit;opacity:.4;cursor:pointer;font-size:.9em;padding:4px;line-height:1;}',
             '.tm-search-clear:hover{opacity:.9;}',
-            '.tm-catbar{display:flex;gap:6px;padding:8px 15px;overflow-x:auto;flex-wrap:nowrap;flex-shrink:0;-webkit-overflow-scrolling:touch;scrollbar-width:none;border-bottom:1px solid var(--tm-border,rgba(127,127,127,.08));background:color-mix(in srgb,var(--tm-head-bg,transparent) 72%,transparent);cursor:grab;}',
+            '.tm-category-nav{display:flex;align-items:stretch;min-width:0;flex-shrink:0;border-bottom:1px solid var(--tm-border,rgba(127,127,127,.08));background:color-mix(in srgb,var(--tm-head-bg,transparent) 72%,transparent);}',
+            '.tm-catbar{display:flex;min-width:0;flex:1;gap:6px;padding:8px 8px 8px 15px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none;cursor:grab;}',
             '.tm-catbar.dragging{cursor:grabbing;}',
             '.tm-catbar::-webkit-scrollbar{display:none;}',
+            '.tm-category-expand{width:46px;flex:0 0 46px;border:0;border-left:1px solid var(--tm-border,rgba(127,127,127,.08));background:color-mix(in srgb,var(--tm-head-bg,transparent) 82%,transparent);color:inherit;cursor:pointer;display:grid;place-items:center;}',
+            '.tm-category-expand:hover{color:var(--SmartThemeQuoteColor,#7c6daf);background:var(--tm-control-hover,rgba(127,127,127,.1));}',
+            '.tm-category-panel{flex-shrink:0;max-height:min(48vh,420px);overflow-y:auto;overscroll-behavior:contain;padding:12px 15px 14px;border-bottom:1px solid var(--tm-border,rgba(127,127,127,.1));background:color-mix(in srgb,var(--tm-head-bg,transparent) 88%,var(--tm-bg2,transparent));box-shadow:0 8px 18px rgba(0,0,0,.08);}',
+            '.tm-category-panel[hidden]{display:none!important;}',
+            '.tm-category-panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;}',
+            '.tm-category-panel-head strong{font-size:.9em;}.tm-category-panel-head small{font-size:.7em;opacity:.45;}',
+            '.tm-category-panel-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:7px;}',
+            '.tm-category-panel-item{min-width:0;padding:9px 7px;border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.12)));border-radius:var(--tm-control-radius,9px);background:var(--tm-control-bg,rgba(127,127,127,.05));color:inherit;font:inherit;font-size:.8em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}',
+            '.tm-category-panel-item.on{background:var(--SmartThemeQuoteColor,#7c6daf);border-color:var(--SmartThemeQuoteColor,#7c6daf);color:var(--tm-accent-text,#fff);font-weight:650;}',
+            '.tm-category-panel-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:11px;}',
+            '.tm-category-panel-create{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:8px;}',
+            '.tm-category-panel-create input{min-width:0;background:var(--tm-control-bg,rgba(127,127,127,.08));border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.2)));border-radius:var(--tm-control-radius,8px);color:inherit;padding:8px 10px;font:inherit;font-size:.82em;}',
+            '.tm-category-panel-create input:focus{outline:none;border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-catbtn{padding:5px 14px;border-radius:var(--tm-control-radius,18px);font-size:.78em;cursor:pointer;white-space:nowrap;flex-shrink:0;border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.15)));background:var(--tm-control-bg,rgba(127,127,127,.06));box-shadow:var(--tm-control-shadow,none);transition:all .15s;color:inherit;font-family:inherit;}',
             '.tm-catbtn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-catbtn.on{background:var(--SmartThemeQuoteColor,#7c6daf);color:var(--tm-accent-text,#fff);border-color:var(--SmartThemeQuoteColor,#7c6daf);font-weight:600;}',
@@ -16347,7 +16361,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:68fd94efe847887efc682a3e0af5f2cbbf5578549a6c486fdf1246a90b1fc830 */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:bc587681ac9ab236f8be808dd84f70f6572c4d4af504b00127d045628283bdba */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -18965,6 +18979,8 @@
     var searchComposing = false;
     var searchDebounceTimer = null;
     var sortOpen = false;
+    var categoryPanelOpen = false;
+    var categoryCreateOpen = false;
     var gridSizeSaveTimer = null;
     var expandedSeriesId = '';
     var seriesScrollPositions = Object.create(null);
@@ -18993,6 +19009,10 @@
         var sorted = list.slice();
         switch (mode) {
             case 'name': sorted.sort(function (a, b) { return a.name.localeCompare(b.name, 'zh'); }); break;
+            case 'day-night': sorted.sort(function (a, b) {
+                var pairOrder = Number(b.kind === 'pair') - Number(a.kind === 'pair');
+                return pairOrder || a.name.localeCompare(b.name, 'zh');
+            }); break;
             case 'recent': sorted.sort(function (a, b) { return (getItemMeta(d, b).lastUsed || 0) - (getItemMeta(d, a).lastUsed || 0); }); break;
             case 'freq': sorted.sort(function (a, b) { return (getItemMeta(d, b).useCount || 0) - (getItemMeta(d, a).useCount || 0); }); break;
             case 'starred': sorted.sort(function (a, b) {
@@ -20381,6 +20401,7 @@
         cancelSearchDebounce();
         searchComposing = false;
         batchMode = false; batchSelected.clear(); batchDeleting = false; searchQuery = ''; searchOpen = false; sortOpen = false;
+        categoryPanelOpen = false; categoryCreateOpen = false;
         expandedSeriesId = ''; seriesScrollPositions = Object.create(null); lastSeriesColumnCount = 0;
 
         var ov = document.createElement('div');
@@ -20395,6 +20416,7 @@
             '<button class="tm-sort-chip" data-sort="recent">最近使用</button>' +
             '<button class="tm-sort-chip" data-sort="freq">使用频率</button>' +
             '<button class="tm-sort-chip" data-sort="starred">收藏优先</button>' +
+            '<button class="tm-sort-chip" data-sort="day-night"><i class="fa-solid fa-circle-half-stroke"></i> 日夜美化优先</button>' +
             '<button class="tm-sort-chip" data-sort="import-asc">导入时间正序</button>' +
             '<button class="tm-sort-chip" data-sort="import-desc">导入时间倒序</button>' +
             '<span class="tm-sort-divider"></span>' +
@@ -20402,7 +20424,10 @@
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-out" title="缩小卡片"><i class="fa-solid fa-minus"></i></button>' +
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-in" title="放大卡片"><i class="fa-solid fa-plus"></i></button>' +
             '</div>' +
-            '<div class="tm-catbar" id="tm-catbar" style="display:none"></div>' +
+            '<div class="tm-category-nav" id="tm-category-nav" style="display:none">' +
+            '<div class="tm-catbar" id="tm-catbar"></div>' +
+            '<button type="button" class="tm-category-expand" id="tm-category-expand" aria-expanded="false" aria-controls="tm-category-panel" title="展开全部分类" aria-label="展开全部分类"><i class="fa-solid fa-chevron-down"></i></button>' +
+            '</div><div class="tm-category-panel" id="tm-category-panel" hidden></div>' +
             '<div class="tm-batch-area" id="tm-batch-area"></div>' +
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
         var avatarManagerEnabled = isAvatarManagerEnabled();
@@ -20691,22 +20716,90 @@
     }
 
     function renderCatbar() {
-        var catbar = document.getElementById('tm-catbar'); if (!catbar) return;
+        var nav = document.getElementById('tm-category-nav');
+        var catbar = document.getElementById('tm-catbar');
+        var panel = document.getElementById('tm-category-panel');
+        var expand = document.getElementById('tm-category-expand');
+        if (!nav || !catbar || !panel || !expand) return;
         var d = load();
-        var hasDayNight = buildLibraryView(d).items.some(function (item) { return item.kind === 'pair'; });
-        if (!hasDayNight && curCat === '__day-night__') curCat = '__all__';
-        if (d.categories.length === 0 && !hasDayNight) { catbar.style.display = 'none'; return; }
-        catbar.style.display = '';
+        if (curCat === '__day-night__' || (curCat !== '__all__' && curCat !== '__uncategorized__' && d.categories.indexOf(curCat) === -1)) curCat = '__all__';
+        nav.style.display = '';
         var html = '<button class="tm-catbtn' + (curCat === '__all__' ? ' on' : '') + '" data-c="__all__">全部</button>';
-        if (hasDayNight) html += '<button class="tm-catbtn' + (curCat === '__day-night__' ? ' on' : '') + '" data-c="__day-night__"><i class="fa-solid fa-circle-half-stroke"></i> 日夜美化</button>';
         html += '<button class="tm-catbtn' + (curCat === '__uncategorized__' ? ' on' : '') + '" data-c="__uncategorized__">未分类</button>';
         d.categories.forEach(function (c) {
             html += '<button class="tm-catbtn' + (curCat === c ? ' on' : '') + '" data-c="' + esc(c) + '">' + esc(c) + '</button>';
         });
         catbar.innerHTML = html;
+        function selectCategory(category) {
+            curCat = category;
+            categoryPanelOpen = false;
+            categoryCreateOpen = false;
+            renderCatbar();
+            renderGrid();
+        }
         catbar.querySelectorAll('.tm-catbtn').forEach(function (btn) {
-            btn.addEventListener('click', function () { curCat = btn.dataset.c; renderCatbar(); renderGrid(); });
+            btn.addEventListener('click', function () { selectCategory(btn.dataset.c); });
         });
+        expand.setAttribute('aria-expanded', categoryPanelOpen ? 'true' : 'false');
+        expand.title = categoryPanelOpen ? '收起全部分类' : '展开全部分类';
+        expand.setAttribute('aria-label', expand.title);
+        expand.innerHTML = '<i class="fa-solid fa-chevron-' + (categoryPanelOpen ? 'up' : 'down') + '"></i>';
+        expand.onclick = function () {
+            categoryPanelOpen = !categoryPanelOpen;
+            if (!categoryPanelOpen) categoryCreateOpen = false;
+            renderCatbar();
+        };
+
+        panel.hidden = !categoryPanelOpen;
+        if (!categoryPanelOpen) {
+            panel.innerHTML = '';
+        } else {
+            var panelButtons = '<button class="tm-category-panel-item' + (curCat === '__all__' ? ' on' : '') + '" data-panel-category="__all__">全部</button>' +
+                '<button class="tm-category-panel-item' + (curCat === '__uncategorized__' ? ' on' : '') + '" data-panel-category="__uncategorized__">未分类</button>';
+            d.categories.forEach(function (category) {
+                panelButtons += '<button class="tm-category-panel-item' + (curCat === category ? ' on' : '') + '" data-panel-category="' + esc(category) + '">' + esc(category) + '</button>';
+            });
+            panel.innerHTML = '<div class="tm-category-panel-head"><strong>全部分类</strong><small>选择后自动收起</small></div>' +
+                '<div class="tm-category-panel-grid">' + panelButtons + '</div>' +
+                '<div class="tm-category-panel-actions">' +
+                '<button type="button" class="tm-btn tm-btn-outline" id="tm-category-panel-new"><i class="fa-solid fa-plus"></i> 新建分类</button>' +
+                '<button type="button" class="tm-btn tm-btn-outline" id="tm-category-panel-sort"><i class="fa-solid fa-arrow-down-wide-short"></i> 拖拽排序</button>' +
+                '</div>' +
+                (categoryCreateOpen ? '<div class="tm-category-panel-create"><input type="text" id="tm-category-panel-input" maxlength="40" placeholder="新分类名称…"><button type="button" class="tm-btn tm-btn-safe" id="tm-category-panel-add">添加</button></div>' : '');
+            panel.querySelectorAll('[data-panel-category]').forEach(function (button) {
+                button.addEventListener('click', function () { selectCategory(button.dataset.panelCategory); });
+            });
+            panel.querySelector('#tm-category-panel-new').addEventListener('click', function () {
+                categoryCreateOpen = !categoryCreateOpen;
+                renderCatbar();
+                var input = document.getElementById('tm-category-panel-input');
+                if (input) input.focus();
+            });
+            panel.querySelector('#tm-category-panel-sort').addEventListener('click', function () { openCatsSheet(); });
+            var input = panel.querySelector('#tm-category-panel-input');
+            var add = panel.querySelector('#tm-category-panel-add');
+            if (input && add) {
+                function addCategory() {
+                    var name = input.value.trim();
+                    if (!name) return;
+                    var dd = load();
+                    if (metadataApi.isReservedCategoryName(name)) { toast('该名称为内部保留名称，请使用其他分类名', true); return; }
+                    if (dd.categories.indexOf(name) !== -1) { toast('分类已存在', true); return; }
+                    dd.categories.push(name);
+                    save(dd);
+                    curCat = name;
+                    categoryPanelOpen = false;
+                    categoryCreateOpen = false;
+                    renderCatbar();
+                    renderGrid();
+                    toast('分类「' + name + '」已添加');
+                }
+                add.addEventListener('click', addCategory);
+                input.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') { event.preventDefault(); addCategory(); }
+                });
+            }
+        }
         bindCatbarMouseScroll(catbar);
     }
 
@@ -20963,9 +21056,7 @@
         var unitBySeries = Object.create(null);
         var rawUnits = [];
 
-        var dayNightOnly = cat === '__day-night__';
         sortedItems.forEach(function (item) {
-            if (dayNightOnly && item.kind !== 'pair') return;
             var targetKey = item.kind === 'pair' ? 'pair:' + item.pairId : 'theme:' + item.themeName;
             var seriesId = targetKey ? membership[targetKey] : '';
             var group = seriesId ? groups[seriesId] : null;
@@ -20984,10 +21075,10 @@
 
         var filtered = rawUnits.filter(function (unit) {
             if (unit.type === 'item') {
-                if (!dayNightOnly && !displayCategoryMatches((view.metaByKey[unit.item.key] || {}).category, cat)) return false;
+                if (!displayCategoryMatches((view.metaByKey[unit.item.key] || {}).category, cat)) return false;
                 return itemMatchesSearch(d, unit.item, query);
             }
-            if (!dayNightOnly && !displayCategoryMatches(unit.group.category, cat)) return false;
+            if (!displayCategoryMatches(unit.group.category, cat)) return false;
             if (!query) return true;
             var q = String(query).toLocaleLowerCase();
             return unit.group.name.toLowerCase().indexOf(q) !== -1 || unit.items.some(function (item) {
@@ -21031,7 +21122,7 @@
         return '<section class="tm-series-block' + (expanded ? ' is-expanded' : '') + (previewsHidden ? ' tm-series-preview-hidden' : '') + '" data-series-id="' + esc(group.id) + '">' +
             '<div class="tm-series-head">' +
             '<button type="button" class="tm-series-manage" data-series-id="' + esc(group.id) + '" title="管理系列">' +
-            '<i class="fa-solid fa-layer-group"></i><span>' + esc(group.name) + '</span><small>' + (curCat === '__day-night__' ? unit.items.length : group.members.length) + ' 款</small></button>' +
+            '<i class="fa-solid fa-layer-group"></i><span>' + esc(group.name) + '</span><small>' + group.members.length + ' 款</small></button>' +
             '<button type="button" class="tm-series-toggle" data-series-id="' + esc(group.id) + '" aria-expanded="' + (expanded ? 'true' : 'false') + '" aria-controls="' + esc(controlId) + '" title="' + (expanded ? '收起系列' : '展开全系列') + '">' +
             '<i class="fa-solid fa-chevron-down"></i></button></div>' +
             '<div class="tm-series-track" id="' + esc(controlId) + '">' +
