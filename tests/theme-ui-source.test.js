@@ -167,6 +167,7 @@ test('no-image mode builds text entries without creating or resolving preview im
     assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-grid\{grid-template-columns:minmax\(0,1fr\);gap:0;\}/);
     assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-card-text-icon\{width:18px;[^}]*background:transparent;/);
     assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-card-text \.tm-card-menu\{[^}]*width:44px;height:52px;border-left:/);
+    assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-series-manage\{font-size:inherit;\}/);
     assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-series-manage>span,\.tm-overlay\.tm-no-image-mode \.tm-card-text \.tm-card-name\{font-size:\.86em;font-weight:600;\}/);
 });
 
