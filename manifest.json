@@ -1,7 +1,7 @@
 {
-  "display_name": "美化管理 v4.6.3",
-  "version": "4.6.3",
+  "display_name": "美化管理 v4.7.0",
+  "version": "4.7.0",
   "author": "wenshui",
   "js": "index.js",
-  "description": "v4.6.3: 修复 TT 主题列表识别与头像调整数字输入问题"
+  "description": "v4.7.0: 优化 TT/iOS 兼容性，新增无图浏览、网格设置与头像管理控制"
 }
