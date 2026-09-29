@@ -3985,7 +3985,6 @@
         if (isAvatarManagerEnabled()) pages.push({ id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
             avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
         }, unmount: function () { avatarPageController.unmount(); } });
-        pages.push({ id: 'backgrounds', label: '背景管理', icon: 'fa-image' });
         appShellController = appShellApi.createAppShell({
             root: overlay,
             defaultPage: lastAppPage,
@@ -4006,7 +4005,7 @@
     var popupWaitingForStorage = false;
     function openPopup(requestedPage) {
         if (requestedPage === 'avatars' && !isAvatarManagerEnabled()) requestedPage = 'themes';
-        if (requestedPage === 'themes' || requestedPage === 'avatars' || requestedPage === 'backgrounds') lastAppPage = requestedPage;
+        if (requestedPage === 'themes' || requestedPage === 'avatars') lastAppPage = requestedPage;
         if (avatarRuntime && avatarRuntime.isEditing() && !(requestedPage === 'avatars' && avatarRuntime.isManagerBrowsing && avatarRuntime.isManagerBrowsing())) {
             if (pendingOpenAfterAvatarCancel) return;
             pendingOpenAfterAvatarCancel = true;
@@ -4065,6 +4064,7 @@
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
         var avatarManagerEnabled = isAvatarManagerEnabled();
         if (!avatarManagerEnabled && lastAppPage === 'avatars') lastAppPage = 'themes';
+        if (lastAppPage === 'backgrounds') lastAppPage = 'themes';
         var appPages = [
             { id: 'themes', label: '美化管理', icon: 'fa-palette', html: themePageHtml },
         ];
@@ -4073,12 +4073,6 @@
                 label: '头像管理',
                 icon: 'fa-user',
                 html: modules.avatarPage.buildPageHtml(imageLoaderApi.PLACEHOLDER_SRC),
-            });
-        appPages.push({
-                id: 'backgrounds',
-                label: '背景管理',
-                icon: 'fa-image',
-                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景管理</h2><p>背景管理功能将在后续版本加入</p></div>',
             });
         var shellOptions = {
             defaultPage: lastAppPage,

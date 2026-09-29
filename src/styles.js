@@ -525,7 +525,7 @@
             '.tm-overlay.tm-no-image-mode .tm-card-text-icon{width:18px;height:auto;margin-left:13px;margin-right:7px;display:block;flex-shrink:0;border-radius:0;background:transparent;color:var(--SmartThemeQuoteColor,#7c6daf);font-size:.82em;text-align:center;opacity:.62;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-info{min-width:0;min-height:0;flex:1;padding:8px 0 !important;border-radius:0 !important;background:transparent !important;text-align:left !important;display:block !important;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name,.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-tag{width:100%;text-align:left;}',
-            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name{font-size:.86em;}',
+            '.tm-overlay.tm-no-image-mode .tm-series-manage>span,.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name{font-size:.86em;font-weight:600;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text-actions{min-height:52px;display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-shrink:0;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-on,.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-star,.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-freq{position:static;inset:auto;flex-shrink:0;filter:none;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-menu{position:static;inset:auto;width:44px;height:52px;border-left:1px solid var(--tm-border,rgba(127,127,127,.08));border-radius:0;opacity:.82 !important;filter:none;transform:none;}',

@@ -97,6 +97,15 @@ test('theme settings expose common background and collapsed series controls', ()
     assert.match(source, /tm-series-preview-hidden/);
 });
 
+test('unfinished background manager is absent from the page switcher', () => {
+    const controller = source.slice(source.indexOf('function createAppShellController'), source.indexOf('function openPopup'));
+    const popup = source.slice(source.indexOf('var themePageHtml'), source.indexOf('var shellOptions'));
+    assert.doesNotMatch(controller, /id: 'backgrounds'/);
+    assert.doesNotMatch(popup, /id: 'backgrounds'/);
+    assert.doesNotMatch(source, /requestedPage === 'backgrounds'/);
+    assert.match(popup, /if \(lastAppPage === 'backgrounds'\) lastAppPage = 'themes'/);
+});
+
 test('category navigation uses an expandable panel without a dedicated day-night filter', () => {
     const categoryNavigation = source.slice(source.indexOf('function renderCatbar'), source.indexOf('function collectThemeTags'));
     assert.doesNotMatch(categoryNavigation, /data-c="__day-night__"/);
@@ -158,6 +167,7 @@ test('no-image mode builds text entries without creating or resolving preview im
     assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-grid\{grid-template-columns:minmax\(0,1fr\);gap:0;\}/);
     assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-card-text-icon\{width:18px;[^}]*background:transparent;/);
     assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-card-text \.tm-card-menu\{[^}]*width:44px;height:52px;border-left:/);
+    assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-series-manage>span,\.tm-overlay\.tm-no-image-mode \.tm-card-text \.tm-card-name\{font-size:\.86em;font-weight:600;\}/);
 });
 
 test('no-image series preserve the existing series header and item interactions', () => {

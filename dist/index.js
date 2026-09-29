@@ -15040,7 +15040,7 @@
 })(window);
 /* END MODULE 24/29: src/app-shell.js */
 
-/* BEGIN MODULE 25/29: src/styles.js | sha256:b731da3d50e7f463baad35b717f18bb1a6ed4e7eaf34fe60fd155661a1f30dbd */
+/* BEGIN MODULE 25/29: src/styles.js | sha256:81d3ec013b613ee63376ebb2ed5ffb451eaffc708a03490a6d1925c3debdc1ba */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -15568,7 +15568,7 @@
             '.tm-overlay.tm-no-image-mode .tm-card-text-icon{width:18px;height:auto;margin-left:13px;margin-right:7px;display:block;flex-shrink:0;border-radius:0;background:transparent;color:var(--SmartThemeQuoteColor,#7c6daf);font-size:.82em;text-align:center;opacity:.62;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-info{min-width:0;min-height:0;flex:1;padding:8px 0 !important;border-radius:0 !important;background:transparent !important;text-align:left !important;display:block !important;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name,.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-tag{width:100%;text-align:left;}',
-            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name{font-size:.86em;}',
+            '.tm-overlay.tm-no-image-mode .tm-series-manage>span,.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name{font-size:.86em;font-weight:600;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text-actions{min-height:52px;display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-shrink:0;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-on,.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-star,.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-freq{position:static;inset:auto;flex-shrink:0;filter:none;}',
             '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-menu{position:static;inset:auto;width:44px;height:52px;border-left:1px solid var(--tm-border,rgba(127,127,127,.08));border-radius:0;opacity:.82 !important;filter:none;transform:none;}',
@@ -16382,7 +16382,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:2e6f6ea6fe0f9c7f4dc68c1f86512c9bdb05d70b6c675277cb255b3144beeb13 */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:890e64980b9d55663e91cc39e02152863fc839201ea61c2376b4e9833fef3a03 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -20370,7 +20370,6 @@
         if (isAvatarManagerEnabled()) pages.push({ id: 'avatars', label: '头像管理', icon: 'fa-user', mount: function () {
             avatarPageController.mount().then(renderAvatarBottomStatus).catch(function (error) { toast(error.message || '头像管理页加载失败', true); });
         }, unmount: function () { avatarPageController.unmount(); } });
-        pages.push({ id: 'backgrounds', label: '背景管理', icon: 'fa-image' });
         appShellController = appShellApi.createAppShell({
             root: overlay,
             defaultPage: lastAppPage,
@@ -20391,7 +20390,7 @@
     var popupWaitingForStorage = false;
     function openPopup(requestedPage) {
         if (requestedPage === 'avatars' && !isAvatarManagerEnabled()) requestedPage = 'themes';
-        if (requestedPage === 'themes' || requestedPage === 'avatars' || requestedPage === 'backgrounds') lastAppPage = requestedPage;
+        if (requestedPage === 'themes' || requestedPage === 'avatars') lastAppPage = requestedPage;
         if (avatarRuntime && avatarRuntime.isEditing() && !(requestedPage === 'avatars' && avatarRuntime.isManagerBrowsing && avatarRuntime.isManagerBrowsing())) {
             if (pendingOpenAfterAvatarCancel) return;
             pendingOpenAfterAvatarCancel = true;
@@ -20450,6 +20449,7 @@
             '<div class="tm-grid-area" id="tm-grid-area"><div class="tm-loading"><i class="fa-solid fa-spinner"></i><span>正在读取主题列表…</span></div></div>';
         var avatarManagerEnabled = isAvatarManagerEnabled();
         if (!avatarManagerEnabled && lastAppPage === 'avatars') lastAppPage = 'themes';
+        if (lastAppPage === 'backgrounds') lastAppPage = 'themes';
         var appPages = [
             { id: 'themes', label: '美化管理', icon: 'fa-palette', html: themePageHtml },
         ];
@@ -20458,12 +20458,6 @@
                 label: '头像管理',
                 icon: 'fa-user',
                 html: modules.avatarPage.buildPageHtml(imageLoaderApi.PLACEHOLDER_SRC),
-            });
-        appPages.push({
-                id: 'backgrounds',
-                label: '背景管理',
-                icon: 'fa-image',
-                html: '<div class="tm-app-placeholder"><i class="fa-solid fa-image" aria-hidden="true"></i><h2>背景管理</h2><p>背景管理功能将在后续版本加入</p></div>',
             });
         var shellOptions = {
             defaultPage: lastAppPage,
