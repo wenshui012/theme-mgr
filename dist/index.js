@@ -11600,7 +11600,7 @@
 })(window);
 /* END MODULE 21/29: src/avatar-recovery.js */
 
-/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:1426e47844be8dd9e0388f6ee5ae30a61925e2c38db2abe5efd9f010119add66 */
+/* BEGIN MODULE 22/29: src/avatar-runtime.js | sha256:f17bc90714bfe7dab5220867c3ddd492823b1c1a7363bd0536c88ab30de0070c */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
     var MIN_SCALE = 0.5;
@@ -11624,6 +11624,7 @@
     var THEME_USER_CANDIDATE_PREFIX = USER_TARGET_KEY + ':theme-avatar:';
     var THEME_CHARACTER_CANDIDATE_PREFIX = 'theme-avatar-candidate:';
     var CHAT_BINDING_PREFIX = 'chat-integrity:';
+    var NATIVE_THEME_SCOPE_SEPARATOR = '\u001e';
     var MESSAGE_BUTTON_CLASS = 'tm-avatar-message-edit';
     var DEFAULT_EDITOR_PREFERENCES = {
         scaleStepPercent: 1,
@@ -11707,6 +11708,22 @@
     function chatBindingKey(chatKey) {
         chatKey = clean(chatKey);
         return chatKey ? CHAT_BINDING_PREFIX + encodeURIComponent(chatKey) : '';
+    }
+    function nativeViewStorageTargetKey(target, requestedThemeKey) {
+        var targetKey = clean(target && target.key);
+        requestedThemeKey = clean(requestedThemeKey);
+        if (!targetKey || !target || target.kind !== 'character' || !requestedThemeKey) return targetKey;
+        return targetKey + NATIVE_THEME_SCOPE_SEPARATOR + encodeURIComponent(requestedThemeKey);
+    }
+    function nativeViewThemeScopeSuffix(requestedThemeKey) {
+        requestedThemeKey = clean(requestedThemeKey);
+        return requestedThemeKey ? NATIVE_THEME_SCOPE_SEPARATOR + encodeURIComponent(requestedThemeKey) : '';
+    }
+    function nativeViewBaseTargetKey(storageTargetKey, requestedThemeKey) {
+        storageTargetKey = clean(storageTargetKey);
+        var suffix = nativeViewThemeScopeSuffix(requestedThemeKey);
+        if (!suffix || storageTargetKey.indexOf('character:') !== 0 || !storageTargetKey.endsWith(suffix)) return '';
+        return storageTargetKey.slice(0, -suffix.length);
     }
     function hostOriginalSourceFromThumbnail(source, baseHref) {
         source = clean(source);
@@ -12472,6 +12489,109 @@
                 return null;
             });
         }
+        function getNativeViewForTarget(target, requestedThemeKey) {
+            var scopedTargetKey = nativeViewStorageTargetKey(target, requestedThemeKey);
+            return store.getNativeView(scopedTargetKey).then(function (record) {
+                if (record || scopedTargetKey === target.key) return record;
+                return store.getNativeView(target.key);
+            });
+        }
+        function putNativeViewForTarget(target, requestedThemeKey, sourceKey, view) {
+            var scopedTargetKey = nativeViewStorageTargetKey(target, requestedThemeKey);
+            return store.putNativeView({
+                targetKey: scopedTargetKey,
+                sourceKey: sourceKey,
+                view: normalizeView(view),
+            }).then(function (saved) {
+                if (scopedTargetKey === target.key) return saved;
+                return store.deleteNativeView(target.key).then(function () { return saved; });
+            });
+        }
+        function deleteNativeViewForTarget(target, requestedThemeKey) {
+            var scopedTargetKey = nativeViewStorageTargetKey(target, requestedThemeKey);
+            return store.deleteNativeView(scopedTargetKey).then(function (removed) {
+                if (scopedTargetKey === target.key) return removed;
+                return store.deleteNativeView(target.key).then(function (legacyRemoved) {
+                    return removed === true || legacyRemoved === true;
+                });
+            });
+        }
+        function sameNativeView(left, right) {
+            return Boolean(left && right && clean(left.sourceKey) === clean(right.sourceKey) &&
+                JSON.stringify(normalizeView(left.view)) === JSON.stringify(normalizeView(right.view)));
+        }
+        function renameThemeNativeViews(oldThemeName, newThemeName) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
+            var oldThemeKey = themeKey(oldThemeName);
+            var newThemeKey = themeKey(newThemeName);
+            if (!oldThemeKey || !newThemeKey) {
+                return Promise.reject(Object.assign(new Error('美化名称无效'), { code: 'AVATAR_NATIVE_THEME_INVALID' }));
+            }
+            if (oldThemeKey === newThemeKey) return Promise.resolve({ moved: 0 });
+            if (editor) return cancelEdit('theme-native-view-renamed').then(function () {
+                return renameThemeNativeViews(oldThemeName, newThemeName);
+            });
+            return Promise.resolve(store.ready).then(function () { return store.listNativeViews(); }).then(function (records) {
+                records = records || [];
+                var byTarget = new Map(records.map(function (record) { return [record.targetKey, record]; }));
+                var moves = records.map(function (record) {
+                    var baseTargetKey = nativeViewBaseTargetKey(record && record.targetKey, oldThemeKey);
+                    if (!baseTargetKey) return null;
+                    var nextTargetKey = nativeViewStorageTargetKey({ kind: 'character', key: baseTargetKey }, newThemeKey);
+                    var existing = byTarget.get(nextTargetKey);
+                    if (existing && !sameNativeView(existing, record)) {
+                        throw Object.assign(new Error('目标美化已存在不同的角色原头像调整'), {
+                            code: 'AVATAR_NATIVE_THEME_CONFLICT',
+                            targetKey: baseTargetKey,
+                        });
+                    }
+                    return { record: record, nextTargetKey: nextTargetKey, write: !existing };
+                }).filter(Boolean);
+                return moves.reduce(function (promise, move) {
+                    if (!move.write) return promise;
+                    return promise.then(function () {
+                        return store.putNativeView({
+                            targetKey: move.nextTargetKey,
+                            sourceKey: move.record.sourceKey,
+                            view: move.record.view,
+                        });
+                    });
+                }, Promise.resolve()).then(function () {
+                    return moves.reduce(function (promise, move) {
+                        return promise.then(function () { return store.deleteNativeView(move.record.targetKey); });
+                    }, Promise.resolve());
+                }).then(function () {
+                    sequence += 1;
+                    if (started) scheduleReconcile(0);
+                    return { moved: moves.length };
+                });
+            });
+        }
+        function removeThemeNativeViews(themeNames) {
+            var mutationError = requireMutable();
+            if (mutationError) return Promise.reject(mutationError);
+            themeNames = Array.isArray(themeNames) ? themeNames : [themeNames];
+            var themeKeys = themeNames.map(themeKey).filter(Boolean);
+            if (!themeKeys.length) return Promise.resolve({ removed: 0 });
+            if (editor) return cancelEdit('theme-native-view-removed').then(function () {
+                return removeThemeNativeViews(themeNames);
+            });
+            return Promise.resolve(store.ready).then(function () { return store.listNativeViews(); }).then(function (records) {
+                var removals = (records || []).filter(function (record) {
+                    return themeKeys.some(function (requestedThemeKey) {
+                        return Boolean(nativeViewBaseTargetKey(record && record.targetKey, requestedThemeKey));
+                    });
+                });
+                return removals.reduce(function (promise, record) {
+                    return promise.then(function () { return store.deleteNativeView(record.targetKey); });
+                }, Promise.resolve()).then(function () {
+                    sequence += 1;
+                    if (started) scheduleReconcile(0);
+                    return { removed: removals.length };
+                });
+            });
+        }
         function promoteLegacyBinding(target, legacy) {
             if (!legacy || isDedicatedThemeBinding(legacy)) return Promise.resolve(null);
             var promoted = Object.assign({}, legacy, { themeKey: DEFAULT_BINDING_KEY });
@@ -12581,7 +12701,7 @@
                             return { target: target, binding: binding, asset: asset, native: false };
                         });
                     }
-                    return store.getNativeView(target.key).then(function (record) {
+                    return getNativeViewForTarget(target, requestedThemeKey).then(function (record) {
                         if (!record) {
                             return getHostSourceIntent(target.key).then(function (intent) {
                                 return resolveHostSourcePlan(target, intent).then(function (plan) {
@@ -12593,7 +12713,7 @@
                         var sourceKey = nativeSourceKey(target, representative);
                         if (sourceKey && canonicalNativeSourceKey(target, record.sourceKey) !== sourceKey) {
                             return putHostSourceIntent(target.key).then(function () {
-                                return store.deleteNativeView(target.key);
+                                return store.deleteNativeView(record.targetKey);
                             }).then(function () { return null; });
                         }
                         var nativeReadWarningKey = target.key + ':' + sourceKey;
@@ -13239,12 +13359,13 @@
             var kind = input.target && input.target.kind || (input.kind === 'user' ? 'user' : 'character');
             var cap = capability(kind, input.target, input.representative && input.representative.message);
             if (!cap.available) return Promise.reject(Object.assign(new Error(cap.reason), { code: 'TARGET_UNAVAILABLE' }));
-            return Promise.all([getBindingForTarget(cap.target), store.getNativeView(cap.target.key), embeddedNativeAsset(cap.representative, cap.target)]).then(function (parts) {
+            var requestedThemeKey = cap.target.kind === 'character' ? currentThemeKey() : '';
+            return Promise.all([getBindingForTarget(cap.target), getNativeViewForTarget(cap.target, requestedThemeKey), embeddedNativeAsset(cap.representative, cap.target)]).then(function (parts) {
                 var sourceKey = nativeSourceKey(cap.target, cap.representative);
                 var nativeView = parts[1] && canonicalNativeSourceKey(cap.target, parts[1].sourceKey) === sourceKey ? parts[1] : null;
                 editor = {
                     mode: 'native',
-                    themeKey: null,
+                    themeKey: requestedThemeKey || null,
                     target: cap.target,
                     avatarId: null,
                     asset: parts[2],
@@ -13425,27 +13546,26 @@
             if (effectiveBindingMode === 'theme' && !editor.themeKey) {
                 return Promise.reject(Object.assign(new Error('无法识别当前美化'), { code: 'THEME_UNAVAILABLE' }));
             }
-            var editorContextChanged = editor.mode === 'library' && (
+            var nativeThemeChanged = editor.mode === 'native' && editor.target.kind === 'character' && editor.themeKey !== currentThemeKey();
+            var originalCharacterThemeChanged = editor.mode === 'library' && editor.target.kind === 'character' && effectiveBindingMode === 'original' && editor.themeKey !== currentThemeKey();
+            var editorContextChanged = nativeThemeChanged || originalCharacterThemeChanged || editor.mode === 'library' && (
                 (effectiveBindingMode === 'chat' && editor.chatKey !== currentChatBindingKey()) ||
                 (effectiveBindingMode === 'theme' && editor.themeKey !== currentThemeKey())
             );
             if (editorContextChanged) {
-                var changedScope = effectiveBindingMode;
+                var changedScope = nativeThemeChanged || originalCharacterThemeChanged ? 'theme' : effectiveBindingMode;
                 return cancelEdit('superseded').then(function () {
                     throw Object.assign(new Error(changedScope === 'chat' ? '当前聊天已切换，头像修改未保存' : '当前美化已切换，头像修改未保存'), { code: 'superseded' });
                 });
             }
             editorClosing = true;
             if (editor.mode === 'native') {
-                var nativeRecord = {
-                    targetKey: editor.target.key,
-                    sourceKey: editor.nativeSourceKey,
-                    view: normalizeView(editor.view),
-                };
+                var nativeTarget = editor.target;
+                var nativeThemeKey = editor.themeKey;
                 var nativeDiagnostics = clone(editor.diagnostics);
-                return store.putNativeView(nativeRecord).then(function (saved) {
-                    promotedBindings.delete(nativeRecord.targetKey);
-                    return deleteTargetBindings(nativeRecord.targetKey).then(function () { return saved; });
+                return putNativeViewForTarget(nativeTarget, nativeThemeKey, editor.nativeSourceKey, editor.view).then(function (saved) {
+                    promotedBindings.delete(nativeTarget.key);
+                    return deleteTargetBindings(nativeTarget.key).then(function () { return saved; });
                 }).then(function (saved) {
                     finishEditorUi();
                     editor = null;
@@ -13462,17 +13582,16 @@
                 var originalView = normalizeView(originalEditor.view);
                 var originalViewChanged = Boolean(originalView.x || originalView.y || originalView.scale !== 1 || originalView.rotate || originalView.flipX || originalView.flipY);
                 var originalNativeRecord = {
-                    targetKey: originalEditor.target.key,
                     sourceKey: nativeSourceKey(originalEditor.target, originalEditor.representative),
                     view: originalView,
                 };
                 return writeHostOriginal(originalEditor.target.kind, originalEditor.target, originalEditor.asset, originalContext, originalView).then(function (result) {
                     var bakedUserView = originalEditor.target.kind === 'user' && result && result.bakedView === true;
                     var saveDisplayView = bakedUserView
-                        ? store.deleteNativeView(originalEditor.target.key)
+                        ? deleteNativeViewForTarget(originalEditor.target, originalEditor.themeKey)
                         : originalViewChanged
-                        ? store.putNativeView(originalNativeRecord)
-                        : store.deleteNativeView(originalEditor.target.key);
+                        ? putNativeViewForTarget(originalEditor.target, originalEditor.themeKey, originalNativeRecord.sourceKey, originalNativeRecord.view)
+                        : deleteNativeViewForTarget(originalEditor.target, originalEditor.themeKey);
                     return Promise.resolve(saveDisplayView).then(function (nativeView) {
                         return { result: result, nativeView: originalViewChanged ? nativeView : null };
                     });
@@ -14063,7 +14182,7 @@
             if (!cap.target) return Promise.reject(Object.assign(new Error(cap.reason || '目标不可用'), { code: 'TARGET_UNAVAILABLE' }));
             if (editor) return cancelEdit('native-view-cleared').then(function () { return clearNativeView(kind); });
             return putHostSourceIntent(cap.target.key).then(function () {
-                return store.deleteNativeView(cap.target.key);
+                return deleteNativeViewForTarget(cap.target, cap.target.kind === 'character' ? currentThemeKey() : '');
             }).then(reconcile);
         }
         function deleteAsset(id) {
@@ -14148,6 +14267,8 @@
             removeThemeUserBinding: removeThemeUserBinding,
             clearThemeUserBinding: clearThemeUserBinding,
             clearAllUserOverrides: clearAllUserOverrides,
+            renameThemeNativeViews: renameThemeNativeViews,
+            removeThemeNativeViews: removeThemeNativeViews,
             deleteAsset: deleteAsset,
             notifyAssetChanged: notifyAssetChanged,
             getState: getState,
@@ -14169,6 +14290,8 @@
         themeAvatarCandidateTargetKey: themeAvatarCandidateTargetKey,
         themeKey: themeKey,
         chatBindingKey: chatBindingKey,
+        nativeViewStorageTargetKey: nativeViewStorageTargetKey,
+        nativeViewBaseTargetKey: nativeViewBaseTargetKey,
         hostOriginalSourceFromThumbnail: hostOriginalSourceFromThumbnail,
         nativeImageMime: nativeImageMime,
         getContextInfo: getContextInfo,
@@ -16224,7 +16347,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:f3d608b1834d66302c4bd02478c93962d86903c75cc0780c3d90dcca46fb687a */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:68fd94efe847887efc682a3e0af5f2cbbf5578549a6c486fdf1246a90b1fc830 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -17831,6 +17954,23 @@
         if (cleanupRemovedThemeData(dd, [themeName])) save(dd);
     }
 
+    function renameAvatarNativeTheme(oldName, newName) {
+        if (!avatarRuntime || typeof avatarRuntime.renameThemeNativeViews !== 'function') return Promise.resolve({ moved: 0 });
+        return avatarRuntime.renameThemeNativeViews(oldName, newName).catch(function (error) {
+            console.warn('[美化管理] 角色原头像调整随美化改名迁移失败:', error);
+            toast('美化已改名，但角色原头像调整迁移失败，请暂时不要继续改名', true);
+            return { moved: 0, error: error };
+        });
+    }
+
+    function removeAvatarNativeThemes(themeNames) {
+        if (!avatarRuntime || typeof avatarRuntime.removeThemeNativeViews !== 'function') return Promise.resolve({ removed: 0 });
+        return avatarRuntime.removeThemeNativeViews(themeNames).catch(function (error) {
+            console.warn('[美化管理] 已删除美化的角色原头像调整清理失败:', error);
+            return { removed: 0, error: error };
+        });
+    }
+
     function syncCurrentThemeRenameState(oldName, newName, wasCurrent) {
         renameThemeOption(oldName, newName);
         if (!wasCurrent) return Promise.resolve();
@@ -17886,7 +18026,8 @@
                 themeRuntime.replaceNativeTheme(oldName, result.theme, result.nativeThemeRef);
                 migrateThemeMetaName(oldName, newName);
 
-                return syncCurrentThemeRenameState(oldName, newName, wasCurrent)
+                return renameAvatarNativeTheme(oldName, newName)
+                    .then(function () { return syncCurrentThemeRenameState(oldName, newName, wasCurrent); })
                     .then(function () { return result.themes; });
             })
             .then(function (themes) {
@@ -17932,10 +18073,12 @@
                 themeRuntime.forget(themeName);
                 themeRuntime.evictNativeTheme(themeName, result.nativeThemeRef);
                 removeThemeMetaName(themeName);
-                removeThemeOption(themeName);
-                setThemeList(result.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; }), true);
-                fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); });
-                if (cb) cb(true);
+                return removeAvatarNativeThemes([themeName]).then(function () {
+                    removeThemeOption(themeName);
+                    setThemeList(result.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; }), true);
+                    fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); });
+                    if (cb) cb(true);
+                });
             })
             .catch(function (err) {
                 console.warn('[美化管理] 删除美化失败:', err);
@@ -17962,14 +18105,16 @@
                 });
                 if (metaChanged) save(dd);
 
-                setThemeList(result.themes
-                    .filter(function (theme) { return theme && theme.name; })
-                    .map(function (theme) { return theme.name; }), true);
-                renderCatbar();
-                renderGrid();
-                renderBottomStatus();
-                updateBtn();
-                if (cb) cb(true, { removed: removed, failed: failed, result: result });
+                return removeAvatarNativeThemes(removedNames).then(function () {
+                    setThemeList(result.themes
+                        .filter(function (theme) { return theme && theme.name; })
+                        .map(function (theme) { return theme.name; }), true);
+                    renderCatbar();
+                    renderGrid();
+                    renderBottomStatus();
+                    updateBtn();
+                    if (cb) cb(true, { removed: removed, failed: failed, result: result });
+                });
             })
             .catch(function (err) {
                 console.warn('[美化管理] 批量删除美化失败:', err);

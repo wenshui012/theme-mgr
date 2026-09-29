@@ -1604,6 +1604,23 @@
         if (cleanupRemovedThemeData(dd, [themeName])) save(dd);
     }
 
+    function renameAvatarNativeTheme(oldName, newName) {
+        if (!avatarRuntime || typeof avatarRuntime.renameThemeNativeViews !== 'function') return Promise.resolve({ moved: 0 });
+        return avatarRuntime.renameThemeNativeViews(oldName, newName).catch(function (error) {
+            console.warn('[美化管理] 角色原头像调整随美化改名迁移失败:', error);
+            toast('美化已改名，但角色原头像调整迁移失败，请暂时不要继续改名', true);
+            return { moved: 0, error: error };
+        });
+    }
+
+    function removeAvatarNativeThemes(themeNames) {
+        if (!avatarRuntime || typeof avatarRuntime.removeThemeNativeViews !== 'function') return Promise.resolve({ removed: 0 });
+        return avatarRuntime.removeThemeNativeViews(themeNames).catch(function (error) {
+            console.warn('[美化管理] 已删除美化的角色原头像调整清理失败:', error);
+            return { removed: 0, error: error };
+        });
+    }
+
     function syncCurrentThemeRenameState(oldName, newName, wasCurrent) {
         renameThemeOption(oldName, newName);
         if (!wasCurrent) return Promise.resolve();
@@ -1659,7 +1676,8 @@
                 themeRuntime.replaceNativeTheme(oldName, result.theme, result.nativeThemeRef);
                 migrateThemeMetaName(oldName, newName);
 
-                return syncCurrentThemeRenameState(oldName, newName, wasCurrent)
+                return renameAvatarNativeTheme(oldName, newName)
+                    .then(function () { return syncCurrentThemeRenameState(oldName, newName, wasCurrent); })
                     .then(function () { return result.themes; });
             })
             .then(function (themes) {
@@ -1705,10 +1723,12 @@
                 themeRuntime.forget(themeName);
                 themeRuntime.evictNativeTheme(themeName, result.nativeThemeRef);
                 removeThemeMetaName(themeName);
-                removeThemeOption(themeName);
-                setThemeList(result.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; }), true);
-                fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); });
-                if (cb) cb(true);
+                return removeAvatarNativeThemes([themeName]).then(function () {
+                    removeThemeOption(themeName);
+                    setThemeList(result.themes.filter(function (theme) { return theme && theme.name; }).map(function (theme) { return theme.name; }), true);
+                    fetchThemeList(function () { renderCatbar(); renderGrid(); renderBottomStatus(); updateBtn(); });
+                    if (cb) cb(true);
+                });
             })
             .catch(function (err) {
                 console.warn('[美化管理] 删除美化失败:', err);
@@ -1735,14 +1755,16 @@
                 });
                 if (metaChanged) save(dd);
 
-                setThemeList(result.themes
-                    .filter(function (theme) { return theme && theme.name; })
-                    .map(function (theme) { return theme.name; }), true);
-                renderCatbar();
-                renderGrid();
-                renderBottomStatus();
-                updateBtn();
-                if (cb) cb(true, { removed: removed, failed: failed, result: result });
+                return removeAvatarNativeThemes(removedNames).then(function () {
+                    setThemeList(result.themes
+                        .filter(function (theme) { return theme && theme.name; })
+                        .map(function (theme) { return theme.name; }), true);
+                    renderCatbar();
+                    renderGrid();
+                    renderBottomStatus();
+                    updateBtn();
+                    if (cb) cb(true, { removed: removed, failed: failed, result: result });
+                });
             })
             .catch(function (err) {
                 console.warn('[美化管理] 批量删除美化失败:', err);

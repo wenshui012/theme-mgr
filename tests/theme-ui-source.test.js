@@ -62,6 +62,15 @@ test('day night editor keeps pair rename and pair management separate from ordin
     assert.match(editor, /deleteThemeEverywhere\(deletingName/);
 });
 
+test('theme rename and delete carry scoped native character adjustments through their lifecycle', () => {
+    const lifecycle = source.slice(source.indexOf('function renameAvatarNativeTheme'), source.indexOf('function downloadJsonBlob'));
+    assert.match(lifecycle, /avatarRuntime\.renameThemeNativeViews\(oldName, newName\)/);
+    assert.match(lifecycle, /renameAvatarNativeTheme\(oldName, newName\)/);
+    assert.match(lifecycle, /avatarRuntime\.removeThemeNativeViews\(themeNames\)/);
+    assert.match(lifecycle, /removeAvatarNativeThemes\(\[themeName\]\)/);
+    assert.match(lifecycle, /removeAvatarNativeThemes\(removedNames\)/);
+});
+
 test('day night switching exposes three persistent modes and editor toggles select manual mode', () => {
     const settings = source.slice(source.indexOf('function openSettingsSheet'), source.indexOf('// ── 分类管理'));
     const editor = source.slice(source.indexOf('function openEditSheet'), source.indexOf('function mergeImportedAnnotations'));

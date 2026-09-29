@@ -1036,7 +1036,7 @@ test('52 saving native character adjustment clears replacement binding and uses 
     await f.runtime.beginNativeEdit();
     f.runtime.setScale(1.35);
     const result = await f.runtime.saveEdit();
-    const stored = await f.store.getNativeView('character:char.png');
+    const stored = await f.store.getNativeView(modules.avatarRuntime.nativeViewStorageTargetKey({ kind: 'character', key: 'character:char.png' }, 'theme-name:A'));
     assert.equal(result.nativeView.view.scale, 1.35);
     assert.equal(stored.sourceKey, 'char.png');
     assert.equal(await f.store.getBinding(modules.avatarRuntime.DEFAULT_BINDING_KEY, 'character:char.png'), null);
@@ -1044,7 +1044,7 @@ test('52 saving native character adjustment clears replacement binding and uses 
     assert.ok(f.chars.every((entry) => /object-view-box:inset\(12\.963% 12\.963% 12\.963% 12\.963%\)!important/.test(entry.image.getAttribute('style'))));
     assert.equal(f.chars[0].image.getAttribute('srcset'), null);
 });
-test('53 persisted native character adjustment reapplies after reload and across theme changes', async () => {
+test('53 legacy native character adjustment reapplies after reload and across theme changes', async () => {
     const f = runtimeFixture({ seed: { nativeViews: [
         { targetKey: 'character:char.png', sourceKey: 'char.png', view: { x: .15, y: -.1, scale: 1.2 } },
     ] } });
@@ -1058,6 +1058,135 @@ test('53 persisted native character adjustment reapplies after reload and across
     assert.equal(f.chars[0].image.getAttribute('src'), first);
     assert.match(f.chars[0].image.getAttribute('style'), /object-view-box:inset\(16\.6667% 20\.8333% 0% -4\.1667%\)!important/);
     assert.equal(f.user.image.getAttribute('src'), 'raw-user.png');
+});
+test('native character adjustments are isolated by the current theme after the next save', async () => {
+    const target = { kind: 'character', key: 'character:char.png' };
+    const themeAKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:A');
+    const themeBKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:B');
+    const f = runtimeFixture();
+    await f.runtime.start();
+    let state = await f.runtime.beginNativeEdit('character');
+    assert.equal(state.view.scale, 1);
+    f.runtime.setScale(1.25);
+    await f.runtime.saveEdit();
+    assert.equal((await f.store.getNativeView(themeAKey)).view.scale, 1.25);
+    assert.equal(await f.store.getNativeView(target.key), null);
+
+    f.setTheme('B');
+    await f.runtime.reconcile();
+    state = await f.runtime.beginNativeEdit('character');
+    assert.equal(state.view.scale, 1);
+    f.runtime.setScale(1.6);
+    await f.runtime.saveEdit();
+    assert.equal((await f.store.getNativeView(themeBKey)).view.scale, 1.6);
+
+    f.setTheme('A');
+    await f.runtime.reconcile();
+    state = await f.runtime.beginNativeEdit('character');
+    assert.equal(state.view.scale, 1.25);
+    await f.runtime.cancelEdit();
+    f.setTheme('B');
+    await f.runtime.reconcile();
+    state = await f.runtime.beginNativeEdit('character');
+    assert.equal(state.view.scale, 1.6);
+});
+test('saving a legacy character adjustment adopts it into the current theme', async () => {
+    const target = { kind: 'character', key: 'character:char.png' };
+    const themeAKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:A');
+    const f = runtimeFixture({ seed: { nativeViews: [
+        { targetKey: target.key, sourceKey: 'char.png', view: { scale: 1.2 } },
+    ] } });
+    await f.runtime.start();
+    const state = await f.runtime.beginNativeEdit('character');
+    assert.equal(state.view.scale, 1.2);
+    f.runtime.setScale(1.3);
+    await f.runtime.saveEdit();
+    assert.equal(await f.store.getNativeView(target.key), null);
+    assert.equal((await f.store.getNativeView(themeAKey)).view.scale, 1.3);
+    f.setTheme('B');
+    await f.runtime.reconcile();
+    assert.equal((await f.runtime.beginNativeEdit('character')).view.scale, 1);
+});
+test('clearing a native character adjustment affects only the current theme', async () => {
+    const target = { kind: 'character', key: 'character:char.png' };
+    const themeAKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:A');
+    const themeBKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:B');
+    const f = runtimeFixture({ seed: { nativeViews: [
+        { targetKey: target.key, sourceKey: 'char.png', view: { scale: 1.1 } },
+        { targetKey: themeAKey, sourceKey: 'char.png', view: { scale: 1.2 } },
+        { targetKey: themeBKey, sourceKey: 'char.png', view: { scale: 1.4 } },
+    ] } });
+    await f.runtime.start();
+    await f.runtime.clearNativeView('character');
+    assert.equal(await f.store.getNativeView(target.key), null);
+    assert.equal(await f.store.getNativeView(themeAKey), null);
+    assert.equal((await f.store.getNativeView(themeBKey)).view.scale, 1.4);
+    f.setTheme('B');
+    await f.runtime.reconcile();
+    assert.equal((await f.runtime.beginNativeEdit('character')).view.scale, 1.4);
+});
+test('native character save fails closed after the current theme changes', async () => {
+    const target = { kind: 'character', key: 'character:char.png' };
+    const themeAKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:A');
+    const f = runtimeFixture();
+    await f.runtime.beginNativeEdit('character');
+    f.runtime.setScale(1.5);
+    f.setTheme('B');
+    await assert.rejects(f.runtime.saveEdit(), error => error.code === 'superseded');
+    assert.equal(await f.store.getNativeView(themeAKey), null);
+    assert.equal(f.runtime.getState().state, 'idle');
+});
+test('renaming a theme moves only its scoped native character adjustments', async () => {
+    const target = { kind: 'character', key: 'character:char.png' };
+    const secondTarget = { kind: 'character', key: 'character:other.png' };
+    const themeAKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:A');
+    const secondThemeAKey = modules.avatarRuntime.nativeViewStorageTargetKey(secondTarget, 'theme-name:A');
+    const themeBKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:B');
+    const renamedKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:Renamed');
+    const secondRenamedKey = modules.avatarRuntime.nativeViewStorageTargetKey(secondTarget, 'theme-name:Renamed');
+    const f = runtimeFixture({ seed: { nativeViews: [
+        { targetKey: themeAKey, sourceKey: 'char.png', view: { scale: 1.2 } },
+        { targetKey: secondThemeAKey, sourceKey: 'other.png', view: { scale: 1.3 } },
+        { targetKey: themeBKey, sourceKey: 'char.png', view: { scale: 1.4 } },
+        { targetKey: target.key, sourceKey: 'char.png', view: { scale: 1.1 } },
+    ] } });
+    const result = await f.runtime.renameThemeNativeViews('A', 'Renamed');
+    assert.equal(result.moved, 2);
+    assert.equal(await f.store.getNativeView(themeAKey), null);
+    assert.equal(await f.store.getNativeView(secondThemeAKey), null);
+    assert.equal((await f.store.getNativeView(renamedKey)).view.scale, 1.2);
+    assert.equal((await f.store.getNativeView(secondRenamedKey)).view.scale, 1.3);
+    assert.equal((await f.store.getNativeView(themeBKey)).view.scale, 1.4);
+    assert.equal((await f.store.getNativeView(target.key)).view.scale, 1.1);
+});
+test('renaming native character adjustments rejects a conflicting destination without writes', async () => {
+    const target = { kind: 'character', key: 'character:char.png' };
+    const themeAKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:A');
+    const renamedKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:Renamed');
+    const f = runtimeFixture({ seed: { nativeViews: [
+        { targetKey: themeAKey, sourceKey: 'char.png', view: { scale: 1.2 } },
+        { targetKey: renamedKey, sourceKey: 'char.png', view: { scale: 1.8 } },
+    ] } });
+    await assert.rejects(f.runtime.renameThemeNativeViews('A', 'Renamed'), error => error.code === 'AVATAR_NATIVE_THEME_CONFLICT');
+    assert.equal((await f.store.getNativeView(themeAKey)).view.scale, 1.2);
+    assert.equal((await f.store.getNativeView(renamedKey)).view.scale, 1.8);
+});
+test('removing themes clears only their scoped native character adjustments', async () => {
+    const target = { kind: 'character', key: 'character:char.png' };
+    const themeAKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:A');
+    const themeBKey = modules.avatarRuntime.nativeViewStorageTargetKey(target, 'theme-name:B');
+    const f = runtimeFixture({ seed: { nativeViews: [
+        { targetKey: themeAKey, sourceKey: 'char.png', view: { scale: 1.2 } },
+        { targetKey: themeBKey, sourceKey: 'char.png', view: { scale: 1.4 } },
+        { targetKey: target.key, sourceKey: 'char.png', view: { scale: 1.1 } },
+        { targetKey: 'user:global', sourceKey: 'user.png', view: { scale: 1.6 } },
+    ] } });
+    const result = await f.runtime.removeThemeNativeViews(['A']);
+    assert.equal(result.removed, 1);
+    assert.equal(await f.store.getNativeView(themeAKey), null);
+    assert.equal((await f.store.getNativeView(themeBKey)).view.scale, 1.4);
+    assert.equal((await f.store.getNativeView(target.key)).view.scale, 1.1);
+    assert.equal((await f.store.getNativeView('user:global')).view.scale, 1.6);
 });
 test('theme changes release the previous native avatar shape before sampling the new theme', async () => {
     const f = runtimeFixture({ seed: { nativeViews: [
