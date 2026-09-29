@@ -138,6 +138,29 @@ test('compact grid text is a general display preference', () => {
     assert.doesNotMatch(styles, /\.tm-follow\.tm-compact-card-info/);
 });
 
+test('no-image mode builds text entries without creating or resolving preview images', () => {
+    const builder = source.slice(source.indexOf('function buildGridCardHtml'), source.indexOf('function buildSeriesLayoutUnits'));
+    const textBranch = builder.slice(builder.indexOf('if (d.noImageMode === true)'), builder.indexOf('var displayTheme'));
+    assert.match(source, /noImageMode: false/);
+    assert.match(source, /id="tm-no-image-mode"/);
+    assert.match(textBranch, /tm-card tm-card-text/);
+    assert.match(textBranch, /tm-card-text-icon/);
+    assert.match(textBranch, /menuBtn/);
+    assert.doesNotMatch(textBranch, /resolvePreviewPresentation/);
+    assert.doesNotMatch(textBranch, /<img/);
+    assert.match(source, /if \(d\.noImageMode === true\) \{\s*if \(gridImageLoader\) gridImageLoader\.disconnect\(\);\s*\} else \{\s*resetGridImageLoader/);
+    assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-grid\{grid-template-columns:minmax\(0,1fr\);gap:0;\}/);
+});
+
+test('no-image series preserve the existing series header and item interactions', () => {
+    const series = source.slice(source.indexOf('function buildSeriesBlockHtml'), source.indexOf('function captureSeriesScrollPositions'));
+    assert.match(series, /d\.noImageMode === true \|\| \(d\.hideSeriesPreviews === true && !batchMode\)/);
+    assert.match(series, /class="tm-series-manage"[\s\S]*fa-layer-group/);
+    assert.match(series, /class="tm-series-toggle"[\s\S]*fa-chevron-down/);
+    assert.doesNotMatch(series, /fa-ellipsis/);
+    assert.match(styles, /\.tm-overlay\.tm-no-image-mode \.tm-series-block\.is-expanded \.tm-series-track\{grid-template-columns:minmax\(0,1fr\)/);
+});
+
 test('avatar manager switch owns both runtime startup and manager navigation', () => {
     assert.match(source, /avatarManagerEnabled: true/);
     assert.match(source, /if \(!isAvatarManagerEnabled\(\) \|\| !avatarCoordinator\.isRuntimeReady\(\)\) return false/);

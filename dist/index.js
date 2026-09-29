@@ -15040,7 +15040,7 @@
 })(window);
 /* END MODULE 24/29: src/app-shell.js */
 
-/* BEGIN MODULE 25/29: src/styles.js | sha256:21ec19b3e9889ff8e7dbe1d08d8c192f786109a2832fd6d9488eb6d75998511b */
+/* BEGIN MODULE 25/29: src/styles.js | sha256:b7157a5841f8f59cfc105667fdb06ac4ff30b4fe10a749ffaa6b41860e5ac153 */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -15564,6 +15564,25 @@
             '.tm-follow .tm-catbtn,.tm-follow .tm-sort-chip,.tm-follow .tm-grid-size-btn,.tm-follow .tm-grid-aspect-btn,.tm-follow .tm-batch-btn,.tm-follow .tm-bottom-btn,.tm-follow .tm-search-inp,.tm-follow .tm-field input[type=text],.tm-follow .tm-field select,.tm-follow .tm-field textarea{border:var(--tm-control-border-style,1px solid transparent) !important;}',
             '.tm-follow .tm-catbtn.on,.tm-follow .tm-sort-chip.on,.tm-follow .tm-bottom-btn.on{background:var(--SmartThemeQuoteColor,#7c6daf) !important;border-color:var(--SmartThemeQuoteColor,#7c6daf) !important;color:var(--tm-accent-text,#fff) !important;}',
             '.tm-follow .tm-catbtn:hover,.tm-follow .tm-sort-chip:hover,.tm-follow .tm-grid-size-btn:hover,.tm-follow .tm-grid-aspect-btn:hover,.tm-follow .tm-batch-btn:hover,.tm-follow .tm-bottom-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf) !important;}',
+            '.tm-overlay.tm-no-image-mode .tm-grid{grid-template-columns:minmax(0,1fr);gap:0;}',
+            '.tm-overlay.tm-no-image-mode .tm-card.tm-card-text{min-width:0;min-height:52px;display:flex !important;flex-direction:row !important;align-items:center;gap:9px;padding:0 5px;border:0 !important;border-bottom:1px solid var(--tm-border,rgba(127,127,127,.1)) !important;border-radius:0 !important;background:transparent !important;box-shadow:none !important;backdrop-filter:none !important;overflow:visible;transform:none !important;}',
+            '.tm-overlay.tm-no-image-mode .tm-card.tm-card-text:hover{background:var(--tm-control-bg,rgba(127,127,127,.06)) !important;}',
+            '.tm-overlay.tm-no-image-mode .tm-card.tm-card-text.on{background:var(--tm-control-bg,rgba(127,127,127,.08)) !important;box-shadow:inset 3px 0 0 var(--SmartThemeQuoteColor,#7c6daf) !important;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text-icon{width:34px;height:34px;display:grid;place-items:center;flex-shrink:0;border-radius:9px;background:var(--tm-control-bg,rgba(127,127,127,.08));color:var(--SmartThemeQuoteColor,#7c6daf);font-size:.82em;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-info{min-width:0;min-height:0;flex:1;padding:8px 0 !important;border-radius:0 !important;background:transparent !important;text-align:left !important;display:block !important;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name,.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-tag{width:100%;text-align:left;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-name{font-size:.86em;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text-actions{min-height:44px;display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-shrink:0;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-on,.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-star,.tm-overlay.tm-no-image-mode .tm-card-text .tm-badge-freq{position:static;inset:auto;flex-shrink:0;filter:none;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-menu{position:static;inset:auto;width:40px;height:44px;border-left:1px solid var(--tm-border,rgba(127,127,127,.08));border-radius:0;opacity:.82 !important;filter:none;transform:none;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-check{position:static;inset:auto;flex-shrink:0;border-color:var(--tm-control-border,rgba(127,127,127,.35));background:var(--tm-control-bg,rgba(127,127,127,.08));backdrop-filter:none;}',
+            '.tm-overlay.tm-no-image-mode .tm-card-text .tm-card-check.checked{background:var(--SmartThemeQuoteColor,#7c6daf);border-color:var(--SmartThemeQuoteColor,#7c6daf);}',
+            '.tm-overlay.tm-no-image-mode .tm-card.tm-card-text.batch-sel{background:var(--tm-control-bg,rgba(127,127,127,.08)) !important;box-shadow:inset 3px 0 0 var(--SmartThemeQuoteColor,#7c6daf) !important;}',
+            '.tm-overlay.tm-no-image-mode .tm-series-block{margin:0;}',
+            '.tm-overlay.tm-no-image-mode .tm-series-head{height:52px;padding-left:5px;}',
+            '.tm-overlay.tm-no-image-mode .tm-series-track{display:grid;grid-auto-flow:row;grid-auto-columns:initial;grid-template-columns:minmax(0,1fr);gap:0;overflow:visible;padding:0 0 0 18px;cursor:default;}',
+            '.tm-overlay.tm-no-image-mode .tm-series-block.tm-series-preview-hidden:not(.is-expanded) .tm-series-track{display:none;}',
+            '.tm-overlay.tm-no-image-mode .tm-series-block.is-expanded .tm-series-track{grid-template-columns:minmax(0,1fr);padding:0 0 0 18px;}',
             '.tm-lightbox{position:absolute;inset:0;z-index:3;background:rgba(0,0,0,.92);pointer-events:auto;display:flex;align-items:center;justify-content:center;animation:tm-popin .18s ease;}',
             '.tm-lb-img{max-width:92vw;max-height:88vh;object-fit:contain;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.6);user-select:none;}',
             '.tm-lb-close{position:absolute;top:18px;right:20px;background:rgba(255,255,255,.12);border:none;color:#fff;font-size:1.3em;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s;z-index:2147483647;}',
@@ -16365,7 +16384,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:72f375df1b0013ed6ebed90dd728fbbdb47a679ca713632d815ba64e39378613 */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:c4473183d4229738922a960582e9c6c240aad4f3a6b16ccde75e0cb59074a79f */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16967,6 +16986,7 @@
         if (typeof d.showThemeAvatarFrame !== 'boolean') d.showThemeAvatarFrame = false;
         if (typeof d.followThemePreviewShape !== 'boolean') d.followThemePreviewShape = false;
         if (typeof d.simplifyGridText !== 'boolean') d.simplifyGridText = false;
+        if (typeof d.noImageMode !== 'boolean') d.noImageMode = false;
         if (typeof d.autoHideHeader !== 'boolean') d.autoHideHeader = false;
         if (typeof d.hideSeriesPreviews !== 'boolean') d.hideSeriesPreviews = false;
         if (typeof d.avatarManagerEnabled !== 'boolean') d.avatarManagerEnabled = true;
@@ -17044,6 +17064,7 @@
             showThemeAvatarFrame: false,
             followThemePreviewShape: false,
             simplifyGridText: false,
+            noImageMode: false,
             autoHideHeader: false,
             hideSeriesPreviews: false,
             avatarManagerEnabled: true,
@@ -19071,6 +19092,7 @@
         if (option.ratio) overlay.style.setProperty('--tm-grid-aspect', option.ratio);
         else overlay.style.removeProperty('--tm-grid-aspect');
         overlay.classList.toggle('tm-compact-card-info', data.simplifyGridText === true);
+        overlay.classList.toggle('tm-no-image-mode', data.noImageMode === true);
         var button = overlay.querySelector('#tm-grid-aspect');
         if (button) {
             button.innerHTML = '<i class="fa-solid fa-crop-simple"></i><span>比例</span><strong>' + esc(option.label) + '</strong>';
@@ -21054,8 +21076,6 @@
     function buildGridCardHtml(item, d, curTheme, view) {
         view = view || buildLibraryView(d);
         var meta = view.metaByKey[item.key] || getItemMeta(d, item);
-        var displayTheme = getItemDisplayTheme(d, item);
-        var variantMeta = d.themeMeta[displayTheme] || {};
         var isActive = isItemActive(item, curTheme);
         var selected = batchSelected.has(item.key);
         var checkBox = batchMode
@@ -21066,6 +21086,26 @@
         var freqBadge = (d.showFreq !== false && (meta.useCount || 0) > 5 && !batchMode)
             ? '<div class="tm-badge-freq">' + meta.useCount + '次</div>'
             : '';
+        var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-key="' + esc(item.key) + '" title="编辑美化" aria-label="编辑「' + esc(item.name) + '」"><i class="fa-solid fa-ellipsis"></i></button>';
+        var conflictNames = getAmbiguousThemeNames(item);
+        var inventoryConflict = conflictNames.length > 0;
+        var tagText = inventoryConflict
+            ? '酒馆库存重复 ' + (themeNameConflictCounts[conflictNames[0]] || 2) + ' 份 · 禁止编辑删除'
+            : ((meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || ''));
+        var cardStateClasses = (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (inventoryConflict ? ' inventory-conflict' : '');
+        var conflictTitle = inventoryConflict ? ' title="酒馆主题库存中这个名称出现多份；可切换，但无法安全编辑或删除"' : '';
+
+        if (d.noImageMode === true) {
+            return '<div class="tm-card tm-card-text' + cardStateClasses + '" data-key="' + esc(item.key) + '"' + conflictTitle + '>' +
+                checkBox +
+                '<div class="tm-card-text-icon" aria-hidden="true"><i class="fa-solid fa-palette"></i></div>' +
+                '<div class="tm-card-info"><div class="tm-card-name">' + esc(item.name) + '</div>' +
+                (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
+                '</div><div class="tm-card-text-actions">' + badge + starBadge + freqBadge + menuBtn + '</div></div>';
+        }
+
+        var displayTheme = getItemDisplayTheme(d, item);
+        var variantMeta = d.themeMeta[displayTheme] || {};
         var previewPresentation = imageToolsApi.resolvePreviewPresentation(variantMeta);
         var previewImage = previewPresentation.hasImage;
         var previewView = previewPresentation.view;
@@ -21077,15 +21117,8 @@
                 '<img src="' + esc(imageLoaderApi.PLACEHOLDER_SRC) + '" data-theme-key="' + esc(item.key) + '" data-image-state="idle" alt="' + esc(item.name) + '" decoding="async" />' +
                 '</div>'
             : '<div class="tm-card-noimg"><i class="fa-solid fa-palette"></i><span>' + esc(item.name.slice(0, 6)) + '</span></div>';
-        var menuBtn = batchMode ? '' : '<button class="tm-card-menu" data-key="' + esc(item.key) + '" title="编辑美化" aria-label="编辑「' + esc(item.name) + '」"><i class="fa-solid fa-ellipsis"></i></button>';
-        var conflictNames = getAmbiguousThemeNames(item);
-        var inventoryConflict = conflictNames.length > 0;
-        var tagText = inventoryConflict
-            ? '酒馆库存重复 ' + (themeNameConflictCounts[conflictNames[0]] || 2) + ' 份 · 禁止编辑删除'
-            : ((meta.tags && meta.tags.length > 0) ? meta.tags.join(' · ') : (meta.author || ''));
 
-        return '<div class="tm-card' + (isActive ? ' on' : '') + (selected ? ' batch-sel' : '') + (previewImage ? '' : ' no-img') + (inventoryConflict ? ' inventory-conflict' : '') + '" data-key="' + esc(item.key) + '"' +
-            (inventoryConflict ? ' title="酒馆主题库存中这个名称出现多份；可切换，但无法安全编辑或删除"' : '') + '>' +
+        return '<div class="tm-card' + cardStateClasses + (previewImage ? '' : ' no-img') + '" data-key="' + esc(item.key) + '"' + conflictTitle + '>' +
             '<div class="tm-card-img">' + checkBox + imgContent + badge + starBadge + freqBadge + menuBtn + '</div>' +
             '<div class="tm-card-info"><div class="tm-card-name">' + esc(item.name) + '</div>' +
             (tagText ? '<div class="tm-card-tag">' + esc(tagText) + '</div>' : '') +
@@ -21160,7 +21193,7 @@
     function buildSeriesBlockHtml(unit, d, curTheme, view) {
         var group = unit.group;
         var expanded = expandedSeriesId === group.id;
-        var previewsHidden = d.hideSeriesPreviews === true && !batchMode;
+        var previewsHidden = d.noImageMode === true || (d.hideSeriesPreviews === true && !batchMode);
         var controlId = 'tm-series-members-' + group.id;
         return '<section class="tm-series-block' + (expanded ? ' is-expanded' : '') + (previewsHidden ? ' tm-series-preview-hidden' : '') + '" data-series-id="' + esc(group.id) + '">' +
             '<div class="tm-series-head">' +
@@ -21456,8 +21489,12 @@
                 badge = document.createElement('div');
                 badge.className = 'tm-badge-on';
                 badge.innerHTML = '<i class="fa-solid fa-check"></i>';
-                var image = card.querySelector('.tm-card-img');
-                if (image) image.appendChild(badge);
+                var badgeHost = card.querySelector('.tm-card-img') || card.querySelector('.tm-card-text-actions');
+                if (badgeHost) {
+                    var menu = badgeHost.querySelector('.tm-card-menu');
+                    if (menu) badgeHost.insertBefore(badge, menu);
+                    else badgeHost.appendChild(badge);
+                }
             } else if (!active && badge) badge.remove();
         }
         var nextKey = item ? item.key : '';
@@ -21567,7 +21604,7 @@
         var sortedItems = sortItems(view.items, d.sortMode || 'name', d, view);
         var layout = buildSeriesLayoutUnits(d, sortedItems, curCat, searchQuery, view);
         var metrics = getGridLayoutMetrics(area, d.gridCardSize);
-        var units = alignSeriesUnitsForGrid(layout.units, metrics.columns);
+        var units = d.noImageMode === true ? layout.units : alignSeriesUnitsForGrid(layout.units, metrics.columns);
         var list = layout.displayedItems;
         var inventoryWarning = themeNameConflicts.size > 0
             ? '<div class="tm-inventory-warning"><i class="fa-solid fa-triangle-exclamation"></i><span>酒馆主题库存中，以下每个名称都各出现多份：' +
@@ -21619,7 +21656,11 @@
             area.dataset.tmRenderedCards = '0';
         } else {
             area.innerHTML = inventoryWarning + '<div class="tm-grid"></div>';
-            resetGridImageLoader(area, generation);
+            if (d.noImageMode === true) {
+                if (gridImageLoader) gridImageLoader.disconnect();
+            } else {
+                resetGridImageLoader(area, generation);
+            }
             renderedCardsByKey = Object.create(null);
             renderedActiveItemKey = (view.itemByThemeName[curTheme] || {}).key || '';
             area.dataset.tmRenderGeneration = String(generation);
@@ -23797,6 +23838,7 @@
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>简洁网格文字</span><small>名称和标签取消底纹并居中；不受界面跟随设置影响</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>无图模式</span><small>以文字条目显示美化；系列仍可展开，条目右侧可进入编辑</small></label><input type="checkbox" class="tm-chk" id="tm-no-image-mode" ' + (d.noImageMode === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>隐藏标题与按钮；点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>隐藏系列预览</span><small>系列收起时只显示标题，展开后显示全部美化</small></label><input type="checkbox" class="tm-chk" id="tm-hide-series-previews" ' + (d.hideSeriesPreviews === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>';
@@ -23942,6 +23984,7 @@
         var showThemeAvatarFrameInput = sheet.querySelector('#tm-show-theme-avatar-frame');
         var followThemePreviewShapeInput = sheet.querySelector('#tm-follow-preview-shape');
         var simplifyGridTextInput = sheet.querySelector('#tm-simplify-grid-text');
+        var noImageModeInput = sheet.querySelector('#tm-no-image-mode');
         var autoHideHeaderInput = sheet.querySelector('#tm-auto-hide-header');
         var hideSeriesPreviewsInput = sheet.querySelector('#tm-hide-series-previews');
         var previewImageQualityInput = sheet.querySelector('#tm-preview-image-quality');
@@ -23998,6 +24041,13 @@
             dd.autoHideHeader = this.checked;
             save(dd);
             syncManagerAppearance();
+        });
+        noImageModeInput.addEventListener('change', function () {
+            var dd = load();
+            dd.noImageMode = this.checked;
+            save(dd);
+            syncGridDisplayPreferences(document.getElementById('tm-overlay'), dd);
+            renderGrid();
         });
         hideSeriesPreviewsInput.addEventListener('change', function () {
             var dd = load();
