@@ -592,6 +592,7 @@
             else d.nextThemeImportOrder = Math.max(d.nextThemeImportOrder, value + 1);
         });
         d.previewImageQuality = d.previewImageQuality === 'quality' ? 'quality' : 'performance';
+        if (['auto', '4-3', '1-1', '3-4', '2-3'].indexOf(d.gridAspectRatio) === -1) d.gridAspectRatio = 'auto';
         if (typeof d.commonBackgroundName !== 'string') d.commonBackgroundName = '';
         if (typeof d.followThemeAppearance !== 'boolean') d.followThemeAppearance = false;
         if (typeof d.followDayNightAppearance !== 'boolean') d.followDayNightAppearance = false;
@@ -668,6 +669,7 @@
             themeImportOrder: Object.create(null),
             nextThemeImportOrder: 1,
             previewImageQuality: 'performance',
+            gridAspectRatio: 'auto',
             commonBackgroundName: '',
             followThemeAppearance: false,
             followDayNightAppearance: false,
@@ -2681,6 +2683,33 @@
         return Math.max(84, Math.min(220, n));
     }
 
+    var GRID_ASPECT_OPTIONS = [
+        { value: 'auto', label: '自动', hint: '默认 4:3；跟随美化形状时使用当前美化比例', icon: 'fa-wand-magic-sparkles', ratio: '' },
+        { value: '4-3', label: '横向 4:3', hint: '适合大多数横向预览图', icon: 'fa-image', ratio: '4 / 3' },
+        { value: '1-1', label: '方形 1:1', hint: '卡片图片宽高相同', icon: 'fa-square', ratio: '1 / 1' },
+        { value: '3-4', label: '竖向 3:4', hint: '适合较长的界面截图', icon: 'fa-mobile-screen', ratio: '3 / 4' },
+        { value: '2-3', label: '长图 2:3', hint: '显示更多纵向截图内容', icon: 'fa-mobile-screen-button', ratio: '2 / 3' },
+    ];
+
+    function getGridAspectOption(value) {
+        return GRID_ASPECT_OPTIONS.find(function (option) { return option.value === value; }) || GRID_ASPECT_OPTIONS[0];
+    }
+
+    function syncGridDisplayPreferences(overlay, data) {
+        if (!overlay) return;
+        data = data || load();
+        var option = getGridAspectOption(data.gridAspectRatio);
+        overlay.classList.toggle('tm-grid-aspect-fixed', option.value !== 'auto');
+        if (option.ratio) overlay.style.setProperty('--tm-grid-aspect', option.ratio);
+        else overlay.style.removeProperty('--tm-grid-aspect');
+        overlay.classList.toggle('tm-compact-card-info', data.simplifyGridText === true);
+        var button = overlay.querySelector('#tm-grid-aspect');
+        if (button) {
+            button.innerHTML = '<i class="fa-solid fa-crop-simple"></i><span>比例</span><strong>' + esc(option.label) + '</strong>';
+            button.title = '预览图片比例：' + option.label;
+        }
+    }
+
     function applyGridCardSize(size) {
         var area = document.getElementById('tm-grid-area');
         if (area) {
@@ -3849,7 +3878,7 @@
         if (!following) {
             var effectiveDarkMode = followingDayNight ? getPreferredPairVariant() === 'night' : darkMode;
             clearManagerAppearanceVars(ov);
-            ov.classList.remove('tm-compact-card-info');
+            syncGridDisplayPreferences(ov, d);
             ov.classList.toggle('tm-dark', effectiveDarkMode);
             ov.classList.toggle('tm-light', !effectiveDarkMode);
             ov.dataset.tmAppearanceMode = effectiveDarkMode ? 'dark' : 'light';
@@ -3876,14 +3905,7 @@
         ov.style.setProperty('--SmartThemeQuoteColor', palette.accent);
         applyCurrentBackgroundAppearance(ov, palette);
         applyCurrentThemeSurface(ov, palette, d);
-        ov.classList.toggle(
-            'tm-compact-card-info',
-            d.simplifyGridText === true &&
-            (
-                d.showThemeAvatarFrame === true ||
-                d.followThemePreviewShape === true
-            )
-        );
+        syncGridDisplayPreferences(ov, d);
         updateAppearanceToggleButton(ov, true, palette.mode, false);
     }
 
@@ -4059,6 +4081,8 @@
             '<span class="tm-grid-size-label">网格</span>' +
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-out" title="缩小卡片"><i class="fa-solid fa-minus"></i></button>' +
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-in" title="放大卡片"><i class="fa-solid fa-plus"></i></button>' +
+            '<span class="tm-sort-divider"></span>' +
+            '<button type="button" class="tm-grid-aspect-btn" id="tm-grid-aspect" title="选择预览图片比例"><i class="fa-solid fa-crop-simple"></i><span>比例</span><strong>自动</strong></button>' +
             '</div>' +
             '<div class="tm-category-nav" id="tm-category-nav" style="display:none">' +
             '<div class="tm-catbar" id="tm-catbar"></div>' +
@@ -4246,6 +4270,21 @@
         });
         ov.querySelector('#tm-grid-zoom-in').addEventListener('click', function () {
             adjustGridCardSize(12);
+        });
+        ov.querySelector('#tm-grid-aspect').addEventListener('click', function () {
+            openChoicePicker({
+                title: '预览图片比例',
+                icon: 'fa-crop-simple',
+                hint: '固定比例只改变网格展示，不修改截图或裁切数据。',
+                items: GRID_ASPECT_OPTIONS,
+                selected: load().gridAspectRatio,
+                onSelect: function (value) {
+                    var dd = load();
+                    dd.gridAspectRatio = getGridAspectOption(value).value;
+                    save(dd);
+                    syncGridDisplayPreferences(ov, dd);
+                },
+            });
         });
 
         // 底栏
@@ -7389,7 +7428,7 @@
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>' +
-            '<div class="tm-row-inline tm-follow-detail tm-grid-text-detail"><label class="tm-setting-copy"><span>简洁网格文字</span><small>头像框或预览形状任一开启时，名称和标签取消底纹并居中</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>简洁网格文字</span><small>名称和标签取消底纹并居中；不受界面跟随设置影响</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>隐藏标题与按钮；点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>隐藏系列预览</span><small>系列收起时只显示标题，展开后显示全部美化</small></label><input type="checkbox" class="tm-chk" id="tm-hide-series-previews" ' + (d.hideSeriesPreviews === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>';
@@ -7555,14 +7594,6 @@
                 var row = input.closest('.tm-follow-detail');
                 if (row) row.classList.toggle('is-disabled', !enabled);
             });
-            var gridTextEnabled = enabled &&
-                (
-                    showThemeAvatarFrameInput.checked ||
-                    followThemePreviewShapeInput.checked
-                );
-            simplifyGridTextInput.disabled = !gridTextEnabled;
-            var gridTextRow = simplifyGridTextInput.closest('.tm-follow-detail');
-            if (gridTextRow) gridTextRow.classList.toggle('is-disabled', !gridTextEnabled);
         }
         syncFollowDetailState();
 

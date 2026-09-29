@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'ui-main.js'), 'utf8');
+const styles = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.js'), 'utf8');
 
 test('theme card ellipsis opens the editor directly while preserving click isolation', () => {
     const delegated = source.slice(source.indexOf('function bindGridDelegatedEvents'), source.indexOf('function renderGrid'));
@@ -111,6 +112,30 @@ test('day-night priority is a stable sort mode instead of a category shortcut', 
     assert.match(sorting, /case 'day-night'/);
     assert.match(sorting, /Number\(b\.kind === 'pair'\) - Number\(a\.kind === 'pair'\)/);
     assert.match(source, /data-sort="day-night"/);
+});
+
+test('grid aspect presets persist independently while auto preserves theme shape behavior', () => {
+    assert.match(source, /gridAspectRatio: 'auto'/);
+    assert.match(source, /value: '4-3'/);
+    assert.match(source, /value: '1-1'/);
+    assert.match(source, /value: '3-4'/);
+    assert.match(source, /value: '2-3'/);
+    assert.match(source, /id="tm-grid-aspect"/);
+    assert.match(source, /overlay\.classList\.toggle\('tm-grid-aspect-fixed', option\.value !== 'auto'\)/);
+    assert.match(styles, /\.tm-card-img\{[^}]*aspect-ratio:var\(--tm-grid-aspect,4 \/ 3\)/);
+    assert.match(styles, /\.tm-overlay\.tm-grid-aspect-fixed \.tm-card-img\{aspect-ratio:var\(--tm-grid-aspect,4 \/ 3\) !important;/);
+    assert.match(styles, /\.tm-follow\.tm-follow-preview-shape \.tm-card-img[^}]*aspect-ratio:var\(--tm-preview-aspect,4 \/ 3\) !important/);
+});
+
+test('compact grid text is a general display preference', () => {
+    const settings = source.slice(source.indexOf('function openSettingsSheet'), source.indexOf('// ── 分类管理'));
+    const followState = settings.slice(settings.indexOf('function syncFollowDetailState'), settings.indexOf('syncFollowDetailState();'));
+    assert.match(settings, /class="tm-row-inline"><label class="tm-setting-copy"><span>简洁网格文字<\/span>/);
+    assert.doesNotMatch(settings, /tm-follow-detail tm-grid-text-detail/);
+    assert.doesNotMatch(followState, /simplifyGridTextInput\.disabled/);
+    assert.match(source, /overlay\.classList\.toggle\('tm-compact-card-info', data\.simplifyGridText === true\)/);
+    assert.match(styles, /\.tm-compact-card-info \.tm-card-info/);
+    assert.doesNotMatch(styles, /\.tm-follow\.tm-compact-card-info/);
 });
 
 test('avatar manager switch owns both runtime startup and manager navigation', () => {

@@ -15040,7 +15040,7 @@
 })(window);
 /* END MODULE 24/29: src/app-shell.js */
 
-/* BEGIN MODULE 25/29: src/styles.js | sha256:76ca2bbfc063457651d3b27a627888fa8374990aa7b3c296e94319eb17eff8f1 */
+/* BEGIN MODULE 25/29: src/styles.js | sha256:21ec19b3e9889ff8e7dbe1d08d8c192f786109a2832fd6d9488eb6d75998511b */
 (function (global) {
     var ns = global.ThemeMgrModules = global.ThemeMgrModules || {};
 
@@ -15154,6 +15154,9 @@
             '.tm-grid-size-label{font-size:.72em;opacity:.4;flex-shrink:0;white-space:nowrap;}',
             '.tm-grid-size-btn{width:26px;height:26px;border-radius:var(--tm-control-radius,50%);border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));background:var(--tm-control-bg,rgba(127,127,127,.06));color:inherit;box-shadow:var(--tm-control-shadow,none);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.72em;transition:.15s;flex-shrink:0;}',
             '.tm-grid-size-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.12);}',
+            '.tm-grid-aspect-btn{height:28px;display:flex;align-items:center;gap:5px;padding:0 9px;border-radius:var(--tm-control-radius,14px);border:var(--tm-control-border-style,1px solid var(--tm-control-border,rgba(127,127,127,.16)));background:var(--tm-control-bg,rgba(127,127,127,.06));color:inherit;box-shadow:var(--tm-control-shadow,none);font:inherit;font-size:.72em;white-space:nowrap;cursor:pointer;transition:.15s;flex-shrink:0;}',
+            '.tm-grid-aspect-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf);color:var(--SmartThemeQuoteColor,#7c6daf);background:rgba(127,127,127,.12);}',
+            '.tm-grid-aspect-btn strong{font-weight:650;color:var(--SmartThemeQuoteColor,#7c6daf);}',
             '.tm-grid-area{flex:1;overflow-y:auto;padding:12px 12px 8px;}',
             '.tm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--tm-grid-card-min,108px),1fr));gap:9px;}',
             '.tm-series-block{grid-column:1/-1;min-width:0;position:relative;margin:2px 0 3px;padding:0;background:transparent;box-shadow:none;overflow:visible;}',
@@ -15179,7 +15182,7 @@
             '.tm-card{border-radius:var(--tm-card-radius,10px);overflow:hidden;position:relative;z-index:0;isolation:isolate;cursor:pointer;transition:all .18s;border:var(--tm-card-border-style,2px solid var(--tm-card-border,transparent));background:var(--tm-card-bg,rgba(127,127,127,.06));box-shadow:var(--tm-card-shadow,none);backdrop-filter:var(--tm-card-blur,none);display:flex;flex-direction:column;}',
             '.tm-card:hover{transform:translateY(-2px);box-shadow:var(--tm-card-hover-shadow,0 6px 20px var(--tm-shadow,rgba(0,0,0,.25)));}',
             '.tm-card.on{border-color:var(--SmartThemeQuoteColor,#7c6daf);box-shadow:0 0 0 1px var(--SmartThemeQuoteColor,#7c6daf),0 4px 16px rgba(0,0,0,.2);}',
-            '.tm-card-img{width:100%;aspect-ratio:4/3;position:relative;background:var(--tm-control-bg,rgba(127,127,127,.1));display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;}',
+            '.tm-card-img{width:100%;aspect-ratio:var(--tm-grid-aspect,4 / 3);position:relative;background:var(--tm-control-bg,rgba(127,127,127,.1));display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;}',
             '.tm-card-img::after{content:"";position:absolute;inset:0;z-index:2;pointer-events:none;background-image:var(--tm-theme-card-frame-image,none);background-size:var(--tm-theme-card-frame-size,contain);background-position:var(--tm-theme-card-frame-position,center);background-repeat:var(--tm-theme-card-frame-repeat,no-repeat);mix-blend-mode:var(--tm-theme-card-frame-blend,normal);filter:var(--tm-theme-card-frame-filter,none);opacity:0;transition:opacity .2s;}',
             '.tm-card-preview-slot{position:absolute;inset:0;overflow:hidden;z-index:0;pointer-events:none;}',
             '.tm-card-preview-slot>img{position:absolute !important;inset:0 !important;width:100% !important;height:100% !important;min-width:0 !important;min-height:0 !important;max-width:none !important;max-height:none !important;margin:0 !important;padding:0 !important;display:block !important;box-sizing:border-box !important;object-fit:cover !important;object-position:var(--tm-image-focus-x,50%) var(--tm-image-focus-y,50%) !important;transform:scale(var(--tm-image-zoom,1)) !important;transform-origin:var(--tm-image-focus-x,50%) var(--tm-image-focus-y,50%) !important;opacity:0 !important;transition:opacity .16s ease !important;}',
@@ -15541,9 +15544,10 @@
             '.tm-follow.tm-follow-grid .tm-card{border:0 solid transparent !important;border-radius:0 !important;overflow:visible !important;background:transparent !important;box-shadow:none !important;backdrop-filter:none !important;}',
             '.tm-follow.tm-follow-grid .tm-card:hover{box-shadow:none !important;}',
             '.tm-follow.tm-follow-preview-shape .tm-card-img,.tm-follow.tm-follow-card-frame .tm-card-img{aspect-ratio:var(--tm-preview-aspect,4 / 3) !important;border-radius:var(--tm-preview-radius,0) !important;border:var(--tm-preview-border-style,1px solid transparent) !important;box-shadow:var(--tm-preview-shadow,none) !important;clip-path:var(--tm-preview-clip-path,none) !important;-webkit-mask-image:var(--tm-preview-mask-image,none) !important;mask-image:var(--tm-preview-mask-image,none) !important;-webkit-mask-size:var(--tm-preview-mask-size,cover) !important;mask-size:var(--tm-preview-mask-size,cover) !important;-webkit-mask-position:var(--tm-preview-mask-position,center) !important;mask-position:var(--tm-preview-mask-position,center) !important;-webkit-mask-repeat:var(--tm-preview-mask-repeat,no-repeat) !important;mask-repeat:var(--tm-preview-mask-repeat,no-repeat) !important;}',
+            '.tm-overlay.tm-grid-aspect-fixed .tm-card-img{aspect-ratio:var(--tm-grid-aspect,4 / 3) !important;}',
             '.tm-follow.tm-follow-grid .tm-card-info{border-radius:var(--tm-card-radius,0) !important;background:var(--tm-card-bg,rgba(127,127,127,.08)) !important;}',
-            '.tm-follow.tm-compact-card-info .tm-card-info{background:transparent !important;border-radius:0 !important;text-align:center !important;padding:6px 2px !important;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;}',
-            '.tm-follow.tm-compact-card-info .tm-card-name,.tm-follow.tm-compact-card-info .tm-card-tag{width:100%;text-align:center;}',
+            '.tm-compact-card-info .tm-card-info{background:transparent !important;border-radius:0 !important;text-align:center !important;padding:6px 2px !important;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;}',
+            '.tm-compact-card-info .tm-card-name,.tm-compact-card-info .tm-card-tag{width:100%;text-align:center;}',
             '.tm-follow.tm-follow-grid .tm-card.on .tm-card-img,.tm-follow.tm-follow-grid .tm-card.batch-sel .tm-card-img{outline:2px solid var(--SmartThemeQuoteColor,#7c6daf) !important;outline-offset:1px;}',
             '.tm-follow.tm-follow-card-frame .tm-card-img{background:transparent !important;}',
             '.tm-follow.tm-follow-card-frame.tm-card-frame-blended .tm-card-img{background:var(--tm-card-bg,rgba(127,127,127,.08)) !important;}',
@@ -15556,10 +15560,10 @@
             '.tm-follow.tm-follow-card-frame .tm-card.no-img .tm-card-img::before{opacity:0 !important;}',
             '.tm-follow .tm-head,.tm-follow .tm-bottombar{backdrop-filter:var(--tm-panel-blur,none) !important;box-shadow:var(--tm-panel-shadow,none) !important;}',
             '.tm-follow .tm-sheet{background:var(--tm-bg2,var(--SmartThemeBackgroundColor,#1a1a1e)) !important;border-radius:var(--tm-panel-radius,18px) var(--tm-panel-radius,18px) 0 0 !important;box-shadow:var(--tm-panel-shadow,none) !important;backdrop-filter:var(--tm-panel-blur,none) !important;}',
-            '.tm-follow .tm-icon-btn,.tm-follow .tm-catbtn,.tm-follow .tm-sort-chip,.tm-follow .tm-grid-size-btn,.tm-follow .tm-batch-btn,.tm-follow .tm-bottom-btn,.tm-follow .tm-card-menu,.tm-follow .tm-search-inp,.tm-follow .tm-field input[type=text],.tm-follow .tm-field select,.tm-follow .tm-field textarea{border-radius:var(--tm-control-radius,8px) !important;box-shadow:var(--tm-control-shadow,none) !important;}',
-            '.tm-follow .tm-catbtn,.tm-follow .tm-sort-chip,.tm-follow .tm-grid-size-btn,.tm-follow .tm-batch-btn,.tm-follow .tm-bottom-btn,.tm-follow .tm-search-inp,.tm-follow .tm-field input[type=text],.tm-follow .tm-field select,.tm-follow .tm-field textarea{border:var(--tm-control-border-style,1px solid transparent) !important;}',
+            '.tm-follow .tm-icon-btn,.tm-follow .tm-catbtn,.tm-follow .tm-sort-chip,.tm-follow .tm-grid-size-btn,.tm-follow .tm-grid-aspect-btn,.tm-follow .tm-batch-btn,.tm-follow .tm-bottom-btn,.tm-follow .tm-card-menu,.tm-follow .tm-search-inp,.tm-follow .tm-field input[type=text],.tm-follow .tm-field select,.tm-follow .tm-field textarea{border-radius:var(--tm-control-radius,8px) !important;box-shadow:var(--tm-control-shadow,none) !important;}',
+            '.tm-follow .tm-catbtn,.tm-follow .tm-sort-chip,.tm-follow .tm-grid-size-btn,.tm-follow .tm-grid-aspect-btn,.tm-follow .tm-batch-btn,.tm-follow .tm-bottom-btn,.tm-follow .tm-search-inp,.tm-follow .tm-field input[type=text],.tm-follow .tm-field select,.tm-follow .tm-field textarea{border:var(--tm-control-border-style,1px solid transparent) !important;}',
             '.tm-follow .tm-catbtn.on,.tm-follow .tm-sort-chip.on,.tm-follow .tm-bottom-btn.on{background:var(--SmartThemeQuoteColor,#7c6daf) !important;border-color:var(--SmartThemeQuoteColor,#7c6daf) !important;color:var(--tm-accent-text,#fff) !important;}',
-            '.tm-follow .tm-catbtn:hover,.tm-follow .tm-sort-chip:hover,.tm-follow .tm-grid-size-btn:hover,.tm-follow .tm-batch-btn:hover,.tm-follow .tm-bottom-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf) !important;}',
+            '.tm-follow .tm-catbtn:hover,.tm-follow .tm-sort-chip:hover,.tm-follow .tm-grid-size-btn:hover,.tm-follow .tm-grid-aspect-btn:hover,.tm-follow .tm-batch-btn:hover,.tm-follow .tm-bottom-btn:hover{border-color:var(--SmartThemeQuoteColor,#7c6daf) !important;}',
             '.tm-lightbox{position:absolute;inset:0;z-index:3;background:rgba(0,0,0,.92);pointer-events:auto;display:flex;align-items:center;justify-content:center;animation:tm-popin .18s ease;}',
             '.tm-lb-img{max-width:92vw;max-height:88vh;object-fit:contain;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.6);user-select:none;}',
             '.tm-lb-close{position:absolute;top:18px;right:20px;background:rgba(255,255,255,.12);border:none;color:#fff;font-size:1.3em;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s;z-index:2147483647;}',
@@ -16361,7 +16365,7 @@
 })(window);
 /* END MODULE 28/29: src/ui-events.js */
 
-/* BEGIN MODULE 29/29: src/ui-main.js | sha256:bc587681ac9ab236f8be808dd84f70f6572c4d4af504b00127d045628283bdba */
+/* BEGIN MODULE 29/29: src/ui-main.js | sha256:72f375df1b0013ed6ebed90dd728fbbdb47a679ca713632d815ba64e39378613 */
 // ST美化管理主界面与控制器 v4.0
 // 基于穿搭管理 v14.5b 架构，对接 ST 真实主题 API
 // 功能：读取ST主题列表、一键切换、预览截图、分类标签、收藏、排序、批量操作
@@ -16956,6 +16960,7 @@
             else d.nextThemeImportOrder = Math.max(d.nextThemeImportOrder, value + 1);
         });
         d.previewImageQuality = d.previewImageQuality === 'quality' ? 'quality' : 'performance';
+        if (['auto', '4-3', '1-1', '3-4', '2-3'].indexOf(d.gridAspectRatio) === -1) d.gridAspectRatio = 'auto';
         if (typeof d.commonBackgroundName !== 'string') d.commonBackgroundName = '';
         if (typeof d.followThemeAppearance !== 'boolean') d.followThemeAppearance = false;
         if (typeof d.followDayNightAppearance !== 'boolean') d.followDayNightAppearance = false;
@@ -17032,6 +17037,7 @@
             themeImportOrder: Object.create(null),
             nextThemeImportOrder: 1,
             previewImageQuality: 'performance',
+            gridAspectRatio: 'auto',
             commonBackgroundName: '',
             followThemeAppearance: false,
             followDayNightAppearance: false,
@@ -19045,6 +19051,33 @@
         return Math.max(84, Math.min(220, n));
     }
 
+    var GRID_ASPECT_OPTIONS = [
+        { value: 'auto', label: '自动', hint: '默认 4:3；跟随美化形状时使用当前美化比例', icon: 'fa-wand-magic-sparkles', ratio: '' },
+        { value: '4-3', label: '横向 4:3', hint: '适合大多数横向预览图', icon: 'fa-image', ratio: '4 / 3' },
+        { value: '1-1', label: '方形 1:1', hint: '卡片图片宽高相同', icon: 'fa-square', ratio: '1 / 1' },
+        { value: '3-4', label: '竖向 3:4', hint: '适合较长的界面截图', icon: 'fa-mobile-screen', ratio: '3 / 4' },
+        { value: '2-3', label: '长图 2:3', hint: '显示更多纵向截图内容', icon: 'fa-mobile-screen-button', ratio: '2 / 3' },
+    ];
+
+    function getGridAspectOption(value) {
+        return GRID_ASPECT_OPTIONS.find(function (option) { return option.value === value; }) || GRID_ASPECT_OPTIONS[0];
+    }
+
+    function syncGridDisplayPreferences(overlay, data) {
+        if (!overlay) return;
+        data = data || load();
+        var option = getGridAspectOption(data.gridAspectRatio);
+        overlay.classList.toggle('tm-grid-aspect-fixed', option.value !== 'auto');
+        if (option.ratio) overlay.style.setProperty('--tm-grid-aspect', option.ratio);
+        else overlay.style.removeProperty('--tm-grid-aspect');
+        overlay.classList.toggle('tm-compact-card-info', data.simplifyGridText === true);
+        var button = overlay.querySelector('#tm-grid-aspect');
+        if (button) {
+            button.innerHTML = '<i class="fa-solid fa-crop-simple"></i><span>比例</span><strong>' + esc(option.label) + '</strong>';
+            button.title = '预览图片比例：' + option.label;
+        }
+    }
+
     function applyGridCardSize(size) {
         var area = document.getElementById('tm-grid-area');
         if (area) {
@@ -20213,7 +20246,7 @@
         if (!following) {
             var effectiveDarkMode = followingDayNight ? getPreferredPairVariant() === 'night' : darkMode;
             clearManagerAppearanceVars(ov);
-            ov.classList.remove('tm-compact-card-info');
+            syncGridDisplayPreferences(ov, d);
             ov.classList.toggle('tm-dark', effectiveDarkMode);
             ov.classList.toggle('tm-light', !effectiveDarkMode);
             ov.dataset.tmAppearanceMode = effectiveDarkMode ? 'dark' : 'light';
@@ -20240,14 +20273,7 @@
         ov.style.setProperty('--SmartThemeQuoteColor', palette.accent);
         applyCurrentBackgroundAppearance(ov, palette);
         applyCurrentThemeSurface(ov, palette, d);
-        ov.classList.toggle(
-            'tm-compact-card-info',
-            d.simplifyGridText === true &&
-            (
-                d.showThemeAvatarFrame === true ||
-                d.followThemePreviewShape === true
-            )
-        );
+        syncGridDisplayPreferences(ov, d);
         updateAppearanceToggleButton(ov, true, palette.mode, false);
     }
 
@@ -20423,6 +20449,8 @@
             '<span class="tm-grid-size-label">网格</span>' +
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-out" title="缩小卡片"><i class="fa-solid fa-minus"></i></button>' +
             '<button class="tm-grid-size-btn" id="tm-grid-zoom-in" title="放大卡片"><i class="fa-solid fa-plus"></i></button>' +
+            '<span class="tm-sort-divider"></span>' +
+            '<button type="button" class="tm-grid-aspect-btn" id="tm-grid-aspect" title="选择预览图片比例"><i class="fa-solid fa-crop-simple"></i><span>比例</span><strong>自动</strong></button>' +
             '</div>' +
             '<div class="tm-category-nav" id="tm-category-nav" style="display:none">' +
             '<div class="tm-catbar" id="tm-catbar"></div>' +
@@ -20610,6 +20638,21 @@
         });
         ov.querySelector('#tm-grid-zoom-in').addEventListener('click', function () {
             adjustGridCardSize(12);
+        });
+        ov.querySelector('#tm-grid-aspect').addEventListener('click', function () {
+            openChoicePicker({
+                title: '预览图片比例',
+                icon: 'fa-crop-simple',
+                hint: '固定比例只改变网格展示，不修改截图或裁切数据。',
+                items: GRID_ASPECT_OPTIONS,
+                selected: load().gridAspectRatio,
+                onSelect: function (value) {
+                    var dd = load();
+                    dd.gridAspectRatio = getGridAspectOption(value).value;
+                    save(dd);
+                    syncGridDisplayPreferences(ov, dd);
+                },
+            });
         });
 
         // 底栏
@@ -23753,7 +23796,7 @@
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>界面跟随当前美化</span><small>同步背景、顶底栏装饰、字体与配色，并保护文字对比度</small></label><input type="checkbox" class="tm-chk" id="tm-follow-appearance" ' + (d.followThemeAppearance === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>显示头像框</span><small>把当前美化的头像框用于网格预览；没有头像框时保持原样</small></label><input type="checkbox" class="tm-chk" id="tm-show-theme-avatar-frame" ' + (d.showThemeAvatarFrame === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline tm-follow-detail"><label class="tm-setting-copy"><span>更改预览图片形状</span><small>同步当前美化头像的圆角、裁切与遮罩形状</small></label><input type="checkbox" class="tm-chk" id="tm-follow-preview-shape" ' + (d.followThemePreviewShape === true ? 'checked' : '') + ' /></div>' +
-            '<div class="tm-row-inline tm-follow-detail tm-grid-text-detail"><label class="tm-setting-copy"><span>简洁网格文字</span><small>头像框或预览形状任一开启时，名称和标签取消底纹并居中</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
+            '<div class="tm-row-inline"><label class="tm-setting-copy"><span>简洁网格文字</span><small>名称和标签取消底纹并居中；不受界面跟随设置影响</small></label><input type="checkbox" class="tm-chk" id="tm-simplify-grid-text" ' + (d.simplifyGridText === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>自动隐藏顶栏内容</span><small>隐藏标题与按钮；点击顶栏显示，点击其他区域再次隐藏</small></label><input type="checkbox" class="tm-chk" id="tm-auto-hide-header" ' + (d.autoHideHeader === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label class="tm-setting-copy"><span>隐藏系列预览</span><small>系列收起时只显示标题，展开后显示全部美化</small></label><input type="checkbox" class="tm-chk" id="tm-hide-series-previews" ' + (d.hideSeriesPreviews === true ? 'checked' : '') + ' /></div>' +
             '<div class="tm-row-inline"><label>显示使用次数</label><input type="checkbox" class="tm-chk" id="tm-show-freq" ' + (d.showFreq !== false ? 'checked' : '') + ' /></div>';
@@ -23919,14 +23962,6 @@
                 var row = input.closest('.tm-follow-detail');
                 if (row) row.classList.toggle('is-disabled', !enabled);
             });
-            var gridTextEnabled = enabled &&
-                (
-                    showThemeAvatarFrameInput.checked ||
-                    followThemePreviewShapeInput.checked
-                );
-            simplifyGridTextInput.disabled = !gridTextEnabled;
-            var gridTextRow = simplifyGridTextInput.closest('.tm-follow-detail');
-            if (gridTextRow) gridTextRow.classList.toggle('is-disabled', !gridTextEnabled);
         }
         syncFollowDetailState();
 
